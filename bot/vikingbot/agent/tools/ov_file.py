@@ -144,7 +144,7 @@ class VikingSearchTool(OVFileTool):
         self,
         tool_context: "ToolContext",
         query: str,
-        target_uri: Optional[str] = None,
+        target_uri: Optional[str] = "",
         **kwargs: Any,
     ) -> str:
         try:

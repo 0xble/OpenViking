@@ -42,15 +42,16 @@ class OpenVikingCompactHook(Hook):
     def _get_channel_allow_from(self, session_key: SessionKey) -> list[str]:
         """根据 session_id 获取对应频道的 allow_from 配置"""
         config = load_config()
+        allow_from = [config.ov_server.admin_user_id]
         if not session_key or not config.channels:
-            return []
+            return allow_from
 
         # 查找对应类型的 channel config
         for channel_config in config.channels:
             if hasattr(channel_config, "type") and channel_config.type == session_key.channel_id:
                 if hasattr(channel_config, "allow_from"):
-                    return channel_config.allow_from
-        return []
+                    allow_from.extend(channel_config.allow_from)
+        return allow_from
 
     async def execute(self, context: HookContext, **kwargs) -> Any:
         vikingbot_session: Session = kwargs.get("session", {})

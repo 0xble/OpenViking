@@ -439,11 +439,12 @@ async def main_test():
     # res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
-    res = await client.commit(
-        session_id="99999",
-        messages=[{"role": "user", "content": "你好"}],
-        user_id="1010101010",
-    )
+    res = await client.grep("viking://user/default/memories", "running", True)
+    # res = await client.commit(
+    #     session_id="99999",
+    #     messages=[{"role": "user", "content": "你好"}],
+    #     user_id="1010101010",
+    # )
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
     #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
     print(res)
@@ -465,5 +466,5 @@ async def account_test():
 
 
 if __name__ == "__main__":
-    # asyncio.run(main_test())
-    asyncio.run(account_test())
+    asyncio.run(main_test())
+    # asyncio.run(account_test())

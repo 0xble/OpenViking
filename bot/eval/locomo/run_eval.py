@@ -111,8 +111,8 @@ def main():
     parser.add_argument(
         "input",
         nargs="?",
-        default="./locomo10.json",
-        help="Path to locomo10.json file, default: ./locomo10.json",
+        default="./test_data/locomo10.json",
+        help="Path to locomo10.json file, default: ./test_data/locomo10.json",
     )
     parser.add_argument(
         "--output",
