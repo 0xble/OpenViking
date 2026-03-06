@@ -3,6 +3,8 @@
 from abc import ABC
 from pathlib import Path
 from typing import Any, Optional
+
+import httpx
 from loguru import logger
 
 from vikingbot.agent.tools.base import Tool, ToolContext
@@ -214,8 +216,10 @@ class VikingAddResourceTool(OVFileTool):
                 return f"Successfully added resource: {root_uri}"
             else:
                 return "Failed to add resource"
+        except httpx.ReadTimeout:
+            return f"Successfully added resource task, task is running."
         except Exception as e:
-            logger.exception(f"Error adding resource: {e}")
+            logger.warning(f"Error adding resource: {e}")
             return f"Error adding resource to Viking: {str(e)}"
 
 
