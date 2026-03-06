@@ -521,21 +521,43 @@ def run_task(
         # Parse JSON response
         try:
             raw_output = proc.stdout.strip()
+            print(f"    [output] vikingbot output: {raw_output}", file=sys.stderr)
             if not raw_output:
                 raise Exception("vikingbot returned empty output")
-            # Locate JSON object start
-            json_start = raw_output.find("{")
-            if json_start == -1:
-                raise Exception("No JSON object found in response")
-            json_content = raw_output[json_start:]
-            bot_result = json.loads(json_content, strict=False)
+
+            # First try standard JSON parse
+            try:
+                bot_result = json.loads(raw_output, strict=False)
+            except json.JSONDecodeError:
+                # Fallback: regex extraction for unescaped quotes in text field
+                # Extract text content
+                text_pattern = re.compile(r'"text"\s*:\s*"((?:\\.|[^"\\])*)"', re.DOTALL)
+                text_match = text_pattern.search(raw_output)
+                # Extract token usage
+                token_pattern = re.compile(r'"token_usage"\s*:\s*({[^}]*})', re.DOTALL)
+                token_match = token_pattern.search(raw_output)
+
+                if not text_match:
+                    raise Exception("Failed to extract text from invalid JSON response")
+
+                text = text_match.group(1).replace('\\"', '"')
+                token_usage = {}
+                if token_match:
+                    try:
+                        token_usage = json.loads(token_match.group(1), strict=False)
+                    except:
+                        pass
+
+                bot_result = {"text": text, "token_usage": token_usage}
+
             response = bot_result["text"]
+            token_usage = bot_result.get("token_usage", {})
             usage = {
-                "input_tokens": bot_result["token_usage"]["prompt_tokens"],
-                "output_tokens": bot_result["token_usage"]["completion_tokens"],
-                "total_tokens": bot_result["token_usage"]["total_tokens"],
+                "input_tokens": token_usage.get("prompt_tokens", 0),
+                "output_tokens": token_usage.get("completion_tokens", 0),
+                "total_tokens": token_usage.get("total_tokens", 0),
             }
-        except json.JSONDecodeError as e:
+        except Exception as e:
             raise Exception(
                 f"Failed to parse vikingbot response: {str(e)}\nRaw output: {proc.stdout}"
             )
