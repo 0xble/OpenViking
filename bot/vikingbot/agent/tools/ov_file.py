@@ -173,44 +173,40 @@ class VikingAddResourceTool(OVFileTool):
 
     @property
     def description(self) -> str:
-        return "Add a local file as a resource to OpenViking."
+        return "Add a local file or url as a resource to OpenViking."
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "local_path": {"type": "string", "description": "Path to the local file to add"},
+                "path": {"type": "string", "description": "Path to the local file to add"},
                 "description": {"type": "string", "description": "Description of the resource"},
-                "target_path": {
-                    "type": "string",
-                    "description": "Target path in Viking (e.g., /bot_test/dutao/docs/)",
-                    "default": "",
-                },
                 "wait": {
                     "type": "boolean",
                     "description": "Whether to wait for processing to complete",
                     "default": False,
                 },
             },
-            "required": ["local_path", "description"],
+            "required": ["path", "description"],
         }
 
     async def execute(
         self,
         tool_context: "ToolContext",
-        local_path: str,
+        path: str,
         description: str,
         target_path: str = "",
         wait: bool = False,
         **kwargs: Any,
     ) -> str:
         try:
-            path = Path(local_path).expanduser().resolve()
-            if not path.exists():
-                return f"Error: File not found: {local_path}"
-            if not path.is_file():
-                return f"Error: Not a file: {local_path}"
+            if path and not path.startswith("http"):
+                path = Path(path).expanduser().resolve()
+                if not path.exists():
+                    return f"Error: File not found: {path}"
+                if not path.is_file():
+                    return f"Error: Not a file: {path}"
 
             client = await self._get_client(tool_context)
             result = await client.add_resource(

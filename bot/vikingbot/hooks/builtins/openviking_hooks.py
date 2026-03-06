@@ -39,31 +39,33 @@ class OpenVikingCompactHook(Hook):
             return []
         return [msg for msg in messages if msg.get("sender_id") in allow_from]
 
-    def _get_channel_allow_from(self, session_key: SessionKey) -> list[str]:
+    def _get_channel_allow_from(self, session_key: SessionKey):
         """根据 session_id 获取对应频道的 allow_from 配置"""
         config = load_config()
         allow_from = [config.ov_server.admin_user_id]
         if not session_key or not config.channels:
-            return allow_from
-
+            return False, allow_from
         # 查找对应类型的 channel config
         for channel_config in config.channels:
             if hasattr(channel_config, "type") and channel_config.type == session_key.channel_id:
+                if channel_config.agent_memory_mode == "shared":
+                    return True, []
                 if hasattr(channel_config, "allow_from"):
                     allow_from.extend(channel_config.allow_from)
-        return allow_from
+        return False, allow_from
 
     async def execute(self, context: HookContext, **kwargs) -> Any:
         vikingbot_session: Session = kwargs.get("session", {})
         session_id = context.session_key.safe_name()
 
         try:
-            allow_from = self._get_channel_allow_from(session_id)
-            filtered_messages = self._filter_messages_by_sender(vikingbot_session.messages, allow_from)
-
-            if not filtered_messages:
-                logger.info(f"No messages to commit openviking for session {session_id} (allow_from filter applied)")
-                return {"success": True, "message": "No messages matched allow_from filter"}
+            is_shared, allow_from = self._get_channel_allow_from(session_id)
+            filtered_messages = vikingbot_session.messages
+            if not is_shared:
+                filtered_messages = self._filter_messages_by_sender(vikingbot_session.messages, allow_from)
+                if not filtered_messages:
+                    logger.info(f"No messages to commit openviking for session {session_id} (allow_from filter applied)")
+                    return {"success": True, "message": "No messages matched allow_from filter"}
 
             client = await self._get_client(context.workspace_id)
             result = await client.commit(session_id, filtered_messages, load_config().ov_server.admin_user_id)

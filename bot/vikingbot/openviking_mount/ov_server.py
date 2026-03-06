@@ -103,7 +103,7 @@ class VikingClient:
         self, local_path: str, desc: str, target_path: Optional[str] = None, wait: bool = False
     ) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
-        result = await self.client.add_resource(path=local_path, reason=desc, wait=wait)
+        result = await self.client.add_resource(path=local_path, target=viking_resource_prefix, reason=desc, wait=wait)
         return result
 
     async def list_resources(
@@ -438,8 +438,8 @@ async def main_test():
     # res = await client.search_memory("你好", "user_1")
     # res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
-    # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
-    res = await client.grep("viking://user/default/memories", "running", True)
+    res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
+    # res = await client.grep("viking://user/default/memories", "running", True)
     # res = await client.commit(
     #     session_id="99999",
     #     messages=[{"role": "user", "content": "你好"}],

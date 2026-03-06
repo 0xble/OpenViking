@@ -45,6 +45,7 @@ class BaseChannelConfig(BaseModel):
 
     type: Any = ChannelType.TELEGRAM  # Default for backwards compatibility
     enabled: bool = True
+    agent_memory_mode: str = "shared"
 
     def channel_id(self) -> str:
         return "default"
@@ -439,6 +440,7 @@ class OpenVikingConfig(BaseModel):
     account_id: str = "default"
     admin_user_id: str = "default"
     agent_id: str = ""
+    allow_add_resource: bool = True
 
 
 class WebToolsConfig(BaseModel):
