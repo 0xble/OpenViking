@@ -487,23 +487,7 @@ class FeishuChannel(BaseChannel):
             # Process images and get cleaned content
             cleaned_content, images = await self._extract_and_upload_images(msg.content)
 
-            # Process @mentions: convert @ou_xxxx to Feishu mention format
-            # Pattern: @ou_xxxxxxx (user open_id)
-            import re
-
-            mention_pattern = r"@(ou_[a-zA-Z0-9_-]+)"
-
-            def replace_mention(match):
-                open_id = match.group(1)
-                return f'<at user_id="{open_id}">@{open_id}</at>'
-
-            # Replace all mentions
-            content_with_mentions = re.sub(mention_pattern, replace_mention, cleaned_content)
-
-            # Also support @all mention
-            content_with_mentions = content_with_mentions.replace(
-                "@all", '<at user_id="all">所有人</at>'
-            )
+            content_with_mentions = cleaned_content
 
             # Check if we need to reply to a specific message
             # Get reply message ID from metadata (original incoming message ID)
