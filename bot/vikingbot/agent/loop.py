@@ -371,24 +371,31 @@ class AgentLoop:
         # 监控处理时长，每5秒按顺序发不同表情提示
         async def check_long_running():
             nonlocal long_running_notified
-            # 飞书表情列表，按顺序发送不重复
-            EMOJIS = ["HOURGLASS", "COFFEE", "COOKING", "BENTO", "RUN", "WRENCH", "THUMBSUP"]
+            # 飞书官方支持的表情列表，按顺序发送不重复
+            EMOJIS = ["StatusInFlight", "OneSecond", "Typing", "OnIt", "Coffee", "OnIt", "EatingFood"]
             emoji_index = 0
 
             while not long_running_notified and emoji_index < len(EMOJIS):
                 await asyncio.sleep(5)
                 if long_running_notified:
                     break
-                if msg.session_key.channel_id == "feishu" and msg.metadata:
+                if msg.session_key.type == "feishu" and msg.metadata:
                     message_id = msg.metadata.get("message_id")
                     if message_id:
                         try:
-                            # 遍历找到飞书渠道实例添加反应
-                            for channel in self.config.channels:
-                                if channel.name == "feishu" and hasattr(channel, "_add_reaction"):
-                                    await channel._add_reaction(message_id, EMOJIS[emoji_index])
-                                    emoji_index += 1
-                                    break
+                            # 发送添加表情事件到消息总线
+                            await self.bus.publish_outbound(
+                                OutboundMessage(
+                                    session_key=msg.session_key,
+                                    content="",
+                                    metadata={
+                                        "action": "add_reaction",
+                                        "emoji": EMOJIS[emoji_index],
+                                        "message_id": message_id,
+                                    },
+                                )
+                            )
+                            emoji_index += 1
                         except Exception as e:
                             logger.debug(f"Failed to add long running reaction: {e}")
 

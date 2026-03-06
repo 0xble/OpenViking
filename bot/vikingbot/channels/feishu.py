@@ -471,6 +471,14 @@ class FeishuChannel(BaseChannel):
             logger.warning("Feishu client not initialized")
             return
 
+        # 处理添加表情的自定义动作
+        if msg.metadata and msg.metadata.get("action") == "add_reaction":
+            message_id = msg.metadata.get("message_id")
+            emoji = msg.metadata.get("emoji")
+            if message_id and emoji:
+                await self._add_reaction(message_id, emoji)
+                return
+
         # Only send normal response messages, skip thinking/tool_call/etc.
         if not msg.is_normal_message:
             return
