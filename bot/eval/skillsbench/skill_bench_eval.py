@@ -287,24 +287,24 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
 
             def rewrite_test_text(text: str) -> str:
                 abs_token_map = {
-                    "/root": f"{work_dir_str}",
-                    "/app": f"{work_dir_str}",
-                    "/workspace": f"{work_dir_str}/workspace",
-                    "/output": f"{work_dir_str}/output",
-                    "/data": f"{work_dir_str}/data",
-                    "/logs": f"{work_dir_str}/logs",
+                    "/root": "",
+                    "/app": "",
+                    "/workspace": "./workspace",
+                    "/output": "./output",
+                    "/data": "./data",
+                    "/logs": "./logs",
                     "/tests": f"{tests_dir_relative}",
                 }
                 for src, dst in abs_token_map.items():
                     text = replace_abs_token(text, src, dst)
 
                 abs_prefix_map = {
-                    "/root/": f"{work_dir_str}/",
-                    "/app/": f"{work_dir_str}/",
-                    "/workspace/": f"{work_dir_str}/workspace/",
-                    "/output/": f"{work_dir_str}/output/",
-                    "/data/": f"{work_dir_str}/data/",
-                    "/logs/": f"{work_dir_str}/logs/",
+                    "/root/": "",
+                    "/app/": "",
+                    "/workspace/": "./workspace/",
+                    "/output/": "./output/",
+                    "/data/": "./data/",
+                    "/logs/": "./logs/",
                     "/tests/": f"{tests_dir_relative}/",
                 }
                 for src, dst in abs_prefix_map.items():
@@ -376,7 +376,7 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
                 test_cmd,
                 capture_output=True,
                 text=True,
-                cwd=str(storage_workspace),
+                cwd=str(work_dir),
                 env=env,
                 timeout=300,
             )
@@ -428,26 +428,53 @@ def run_task(
     task_dir: Path,
     output_base: Path,
     ov_config_path: Path,
+    verify_only: bool = False,
 ) -> dict:
     """Run a single task. Returns result dict."""
     task_name = task_dir.name
     print(f"\n=== Task: {task_name} ===", file=sys.stderr)
 
     task_output_dir = output_base / task_name
-    if task_output_dir.exists():
+    if not verify_only and task_output_dir.exists():
         shutil.rmtree(task_output_dir)
     task_output_dir.mkdir(parents=True, exist_ok=True)
 
-    result = {
-        "task": task_name,
-        "status": "pending",
-        "response": None,
-        "usage": {},
-        "error": None,
-        "verification": None,
-        "start_time": time.time(),
-        "end_time": None,
-    }
+    response = ""
+    usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+    # Load existing result if in verify-only mode
+    task_output_dir = output_base / task_name
+    existing_result_path = task_output_dir / "result.json"
+    if verify_only and existing_result_path.exists():
+        try:
+            with open(existing_result_path, "r", encoding="utf-8") as f:
+                result = json.load(f)
+            # Keep original values, only update verification
+            result["verification"] = None
+            result["end_time"] = time.time()
+        except:
+            # Fallback to new result if existing is invalid
+            result = {
+                "task": task_name,
+                "status": "pending",
+                "response": None,
+                "usage": {},
+                "error": None,
+                "verification": None,
+                "start_time": time.time(),
+                "end_time": None,
+            }
+    else:
+        result = {
+            "task": task_name,
+            "status": "pending",
+            "response": None,
+            "usage": {},
+            "error": None,
+            "verification": None,
+            "start_time": time.time(),
+            "end_time": None,
+        }
 
     instruction_file = task_dir / "instruction.md"
     if not instruction_file.exists():
@@ -470,9 +497,10 @@ def run_task(
         # Copy skills to target directory
         target_session_dir = storage_workspace / "bot" / session_name
         target_skills_dir = target_session_dir / "skills"
-        if target_session_dir.exists():
-            safe_rmtree(target_session_dir)
-        target_session_dir.mkdir(parents=True, exist_ok=True)
+        if not verify_only:
+            if target_session_dir.exists():
+                safe_rmtree(target_session_dir)
+            target_session_dir.mkdir(parents=True, exist_ok=True)
         work_dir = target_session_dir
         if task_skills_dir.exists():
             shutil.copytree(task_skills_dir, target_skills_dir, dirs_exist_ok=True)
@@ -502,89 +530,100 @@ def run_task(
             f.write(instruction)
         print(f"    [updated] original instruction.md modified", file=sys.stderr)
 
-        # Run vikingbot command
-        print(f"    [running] vikingbot chat...", file=sys.stderr)
-        cmd = [
-            "vikingbot",
-            "chat",
-            "-m",
-            instruction,
-            "-e",
-            "-s",
-            session_name,
-            "-c",
-            str(ov_config_path),
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=2400)
-        if proc.returncode != 0:
-            raise Exception(f"vikingbot failed: {proc.stderr}")
-        # Parse JSON response
-        try:
-            raw_output = proc.stdout.strip()
-            print(f"    [output] vikingbot output: {raw_output}", file=sys.stderr)
-            if not raw_output:
-                raise Exception("vikingbot returned empty output")
-
-            # First try standard JSON parse
+        if not verify_only:
+            # Run vikingbot command
+            print(f"    [running] vikingbot chat...", file=sys.stderr)
+            cmd = [
+                "vikingbot",
+                "chat",
+                "-m",
+                instruction,
+                "-e",
+                "-s",
+                session_name,
+                "-c",
+                str(ov_config_path),
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=2400)
+            if proc.returncode != 0:
+                raise Exception(f"vikingbot failed: {proc.stderr}")
+            # Parse JSON response
             try:
-                bot_result = json.loads(raw_output, strict=False)
-            except json.JSONDecodeError:
-                # Fallback: regex extraction for unescaped quotes in text field
-                # Extract text content
-                text_pattern = re.compile(r'"text"\s*:\s*"((?:\\.|[^"\\])*)"', re.DOTALL)
-                text_match = text_pattern.search(raw_output)
-                # Extract token usage
-                token_pattern = re.compile(r'"token_usage"\s*:\s*({[^}]*})', re.DOTALL)
-                token_match = token_pattern.search(raw_output)
+                raw_output = proc.stdout.strip()
+                print(f"    [output] vikingbot output: {raw_output}", file=sys.stderr)
+                if not raw_output:
+                    raise Exception("vikingbot returned empty output")
 
-                if not text_match:
-                    raise Exception("Failed to extract text from invalid JSON response")
+                # First try standard JSON parse
+                try:
+                    bot_result = json.loads(raw_output, strict=False)
+                except json.JSONDecodeError:
+                    # Fallback: regex extraction for unescaped quotes in text field
+                    # Extract text content
+                    text_pattern = re.compile(r'"text"\s*:\s*"((?:\\.|[^"\\])*)"', re.DOTALL)
+                    text_match = text_pattern.search(raw_output)
+                    # Extract token usage
+                    token_pattern = re.compile(r'"token_usage"\s*:\s*({[^}]*})', re.DOTALL)
+                    token_match = token_pattern.search(raw_output)
 
-                text = text_match.group(1).replace('\\"', '"')
-                token_usage = {}
-                if token_match:
-                    try:
-                        token_usage = json.loads(token_match.group(1), strict=False)
-                    except:
-                        pass
+                    if not text_match:
+                        raise Exception("Failed to extract text from invalid JSON response")
 
-                bot_result = {"text": text, "token_usage": token_usage}
+                    text = text_match.group(1).replace('\\"', '"')
+                    token_usage = {}
+                    if token_match:
+                        try:
+                            token_usage = json.loads(token_match.group(1), strict=False)
+                        except:
+                            pass
 
-            response = bot_result["text"]
-            token_usage = bot_result.get("token_usage", {})
-            usage = {
-                "input_tokens": token_usage.get("prompt_tokens", 0),
-                "output_tokens": token_usage.get("completion_tokens", 0),
-                "total_tokens": token_usage.get("total_tokens", 0),
-            }
-        except Exception as e:
-            raise Exception(
-                f"Failed to parse vikingbot response: {str(e)}\nRaw output: {proc.stdout}"
+                    bot_result = {"text": text, "token_usage": token_usage}
+
+                response = bot_result["text"]
+                token_usage = bot_result.get("token_usage", {})
+                usage = {
+                    "input_tokens": token_usage.get("prompt_tokens", 0),
+                    "output_tokens": token_usage.get("completion_tokens", 0),
+                    "total_tokens": token_usage.get("total_tokens", 0),
+                }
+            except Exception as e:
+                raise Exception(
+                    f"Failed to parse vikingbot response: {str(e)}\nRaw output: {proc.stdout}"
+                )
+
+            result["status"] = "completed"
+            result["response"] = response
+            result["usage"] = usage
+
+        if not verify_only:
+            with open(task_output_dir / "response.txt", "w", encoding="utf-8") as f:
+                f.write(response)
+            print(
+                f"    [saved] response.txt -> {task_output_dir.name}/response.txt", file=sys.stderr
             )
 
-        result["status"] = "completed"
-        result["response"] = response
-        result["usage"] = usage
-
-        with open(task_output_dir / "response.txt", "w", encoding="utf-8") as f:
-            f.write(response)
-        print(f"    [saved] response.txt -> {task_output_dir.name}/response.txt", file=sys.stderr)
-
-        preview = response.replace("\n", " | ")[:100]
-        print(f"    [response] {preview}{'...' if len(response) > 100 else ''}", file=sys.stderr)
-        print(
-            f"    [tokens] in={usage.get('input_tokens', 0)} out={usage.get('output_tokens', 0)}",
-            file=sys.stderr,
-        )
+            preview = response.replace("\n", " | ")[:100]
+            print(
+                f"    [response] {preview}{'...' if len(response) > 100 else ''}", file=sys.stderr
+            )
+            print(
+                f"    [tokens] in={usage.get('input_tokens', 0)} out={usage.get('output_tokens', 0)}",
+                file=sys.stderr,
+            )
+        else:
+            # Verify only mode, set default values
+            result["status"] = "completed"
+            result["response"] = ""
+            result["usage"] = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
         if work_dir:
             verification_result = run_verification(task_dir, work_dir, storage_workspace)
             result["verification"] = verification_result
 
-            with open(task_output_dir / "verification.json", "w", encoding="utf-8") as f:
-                json.dump(verification_result, f, indent=2, ensure_ascii=False)
+            with open(task_output_dir / "verification.txt", "w", encoding="utf-8") as f:
+                f.write(verification_result.get("test_output", ""))
             print(
-                f"    [saved] verification.json -> {task_output_dir.name}/verification.json",
+                f"    [saved] verification.txt -> {task_output_dir.name}/verification.txt",
                 file=sys.stderr,
             )
 
@@ -642,20 +681,23 @@ def run_run(args: argparse.Namespace) -> None:
     output_base.mkdir(parents=True, exist_ok=True)
     WORK_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Skip tasks already present in summary
+    # Skip tasks already present in result.csv
     completed_tasks = set()
-    summary_file = output_base / "summary.json"
-    if summary_file.exists():
+    csv_file = output_base / "result.csv"
+    if csv_file.exists():
         try:
-            with open(summary_file, "r", encoding="utf-8") as f:
-                existing_summary = json.load(f)
-            completed_tasks = set(existing_summary.get("tasks", []))
+            with open(csv_file, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if "taskname" in row:
+                        completed_tasks.add(row["taskname"])
         except Exception as e:
-            print(f"    [warn] failed to read existing summary: {e}", file=sys.stderr)
+            print(f"    [warn] failed to read existing result.csv: {e}", file=sys.stderr)
 
-    # Filter out already completed tasks
+    # Filter out already completed tasks (skip in verify-only mode)
     original_task_count = len(tasks)
-    tasks = [t for t in tasks if t.name not in completed_tasks]
+    if not args.verify_only:
+        tasks = [t for t in tasks if t.name not in completed_tasks]
     skipped_count = original_task_count - len(tasks)
 
     if skipped_count > 0:
@@ -675,6 +717,7 @@ def run_run(args: argparse.Namespace) -> None:
             task_dir=task_dir,
             output_base=output_base,
             ov_config_path=Path(args.ov_config_path),
+            verify_only=args.verify_only,
         )
 
         # Accumulate usage
@@ -686,112 +729,111 @@ def run_run(args: argparse.Namespace) -> None:
         for k in total_usage:
             total_usage[k] += current_usage[k]
 
-        # Update summary after each task
-        # Load existing summary or initialize new
-        existing_summary = {
-            "total_tasks": 0,
-            "completed": 0,
-            "passed": 0,
-            "errors": 0,
-            "total_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
-            "tasks": [],
-            "pass_rate": 0.0,
-            "score": 0.0,
-        }
-        if summary_file.exists():
-            try:
-                with open(summary_file, "r", encoding="utf-8") as f:
-                    existing_summary = json.load(f)
-            except Exception as e:
-                print(
-                    f"    [warn] failed to read existing summary: {e}, creating new",
-                    file=sys.stderr,
-                )
-
-        # Calculate current task metrics
-        current_completed = 1 if result["status"] == "completed" else 0
-        current_passed = 1 if (result.get("verification") or {}).get("passed", False) else 0
-        current_error = 1 if result["status"] == "error" else 0
-        current_score = (result.get("verification") or {}).get("test_score") or 0
-
-        # Merge and save updated summary
-        updated_summary = {
-            "total_tasks": existing_summary["total_tasks"] + 1,
-            "completed": existing_summary["completed"] + current_completed,
-            "passed": existing_summary["passed"] + current_passed,
-            "errors": existing_summary["errors"] + current_error,
-            "total_usage": {
-                "input_tokens": existing_summary["total_usage"]["input_tokens"]
-                + current_usage["input_tokens"],
-                "output_tokens": existing_summary["total_usage"]["output_tokens"]
-                + current_usage["output_tokens"],
-                "total_tokens": existing_summary["total_usage"]["total_tokens"]
-                + current_usage["total_tokens"],
-            },
-            "tasks": existing_summary["tasks"] + [task_dir.name],
-        }
-        updated_summary["pass_rate"] = (
-            updated_summary["passed"] / updated_summary["total_tasks"]
-            if updated_summary["total_tasks"]
-            else 0.0
-        )
-        updated_summary["score"] = round(existing_summary["score"] + current_score, 2)
-
-        with open(summary_file, "w", encoding="utf-8") as f:
-            json.dump(updated_summary, f, indent=2, ensure_ascii=False)
-
         # Update result.csv
-        csv_file = output_base / "result.csv"
-        csv_exists = csv_file.exists()
-        with open(csv_file, "a", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            if not csv_exists:
-                # Write header
-                writer.writerow(
-                    [
-                        "taskname",
-                        "status",
-                        "input_tokens",
-                        "output_tokens",
-                        "total_tokens",
-                        "error",
-                        "verified",
-                        "passed",
-                        "test_score",
-                        "cost_time",
-                    ]
-                )
-            # Write current task row
-            verification = result.get("verification") or {}
-            writer.writerow(
-                [
-                    task_dir.name,
-                    result["status"],
-                    current_usage["input_tokens"],
-                    current_usage["output_tokens"],
-                    current_usage["total_tokens"],
-                    result.get("error", ""),
-                    str(verification.get("verified", False)),
-                    str(verification.get("passed", False)),
-                    current_score,
-                    round(result["end_time"] - result["start_time"], 2),
-                ]
-            )
+        verification = result.get("verification") or {}
+        current_score = (result.get("verification") or {}).get("test_score") or 0
+        current_row = [
+            task_dir.name,
+            result["status"],
+            current_usage["input_tokens"],
+            current_usage["output_tokens"],
+            current_usage["total_tokens"],
+            result.get("error", ""),
+            str(verification.get("verified", False)),
+            str(verification.get("passed", False)),
+            current_score,
+            round(result["end_time"] - result["start_time"], 2),
+        ]
 
-    # Print final summary
+        if not args.verify_only:
+            # Normal mode: append new row
+            csv_exists = csv_file.exists()
+            with open(csv_file, "a", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                if not csv_exists:
+                    # Write header
+                    writer.writerow(
+                        [
+                            "taskname",
+                            "status",
+                            "input_tokens",
+                            "output_tokens",
+                            "total_tokens",
+                            "error",
+                            "verified",
+                            "passed",
+                            "test_score",
+                            "cost_time",
+                        ]
+                    )
+                writer.writerow(current_row)
+        else:
+            # Verify only mode: update existing row
+            if csv_file.exists():
+                rows = []
+                with open(csv_file, "r", encoding="utf-8", newline="") as f:
+                    reader = csv.reader(f)
+                    header = next(reader)
+                    rows.append(header)
+                    for row in reader:
+                        if row and row[0] == task_dir.name:
+                            # Update only verification related columns (indices 6,7,8)
+                            row[6] = str(verification.get("verified", False))
+                            row[7] = str(verification.get("passed", False))
+                            row[8] = str(current_score)
+                        rows.append(row)
+                # Write back all rows
+                with open(csv_file, "w", encoding="utf-8", newline="") as f:
+                    writer = csv.writer(f)
+                    writer.writerows(rows)
+
+    # Generate final summary from result.csv
+    summary_file = output_base / "summary.json"
     final_summary = {
         "total_tasks": 0,
         "completed": 0,
         "passed": 0,
         "errors": 0,
         "total_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+        "tasks": [],
+        "pass_rate": 0.0,
+        "score": 0.0,
     }
-    if summary_file.exists():
+    all_scores = []
+    if csv_file.exists():
         try:
-            with open(summary_file, "r", encoding="utf-8") as f:
-                final_summary = json.load(f)
+            with open(csv_file, "r", encoding="utf-8", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    final_summary["total_tasks"] += 1
+                    final_summary["tasks"].append(row["taskname"])
+                    if row["status"] == "completed":
+                        final_summary["completed"] += 1
+                    if row["status"] == "error":
+                        final_summary["errors"] += 1
+                    # Accumulate tokens
+                    final_summary["total_usage"]["input_tokens"] += int(row.get("input_tokens", 0))
+                    final_summary["total_usage"]["output_tokens"] += int(
+                        row.get("output_tokens", 0)
+                    )
+                    final_summary["total_usage"]["total_tokens"] += int(row.get("total_tokens", 0))
+                    # Count passed and collect scores
+                    if row.get("passed") == "True":
+                        final_summary["passed"] += 1
+                    if row.get("test_score"):
+                        all_scores.append(float(row["test_score"]))
+            # Calculate pass rate and total score
+            if final_summary["total_tasks"] > 0:
+                final_summary["pass_rate"] = round(
+                    final_summary["passed"] / final_summary["total_tasks"], 2
+                )
+            if all_scores:
+                final_summary["score"] = round(sum(all_scores), 2)
+            # Save summary to file
+            with open(summary_file, "w", encoding="utf-8") as f:
+                json.dump(final_summary, f, indent=2, ensure_ascii=False)
         except Exception as e:
-            print(f"    [warn] failed to read final summary: {e}", file=sys.stderr)
+            print(f"    [warn] failed to generate summary from result.csv: {e}", file=sys.stderr)
 
     print(f"\n=== Summary ===", file=sys.stderr)
     print(
@@ -845,6 +887,12 @@ def main():
         type=int,
         default=None,
         help="Run tasks ending at this index (inclusive, 1-based, same order as list)",
+    )
+    run_parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        default=False,
+        help="Only run verification step for already executed tasks",
     )
     run_parser.add_argument(
         "--ov-config-path",
