@@ -679,7 +679,7 @@ func grepFile(fs *mountablefs.MountableFS, path string, re *regexp.Regexp, nodeL
 	}
 
 	var matches []GrepMatch
-	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner := newGrepScanner(data)
 	lineNum := 1
 
 	for scanner.Scan() {
@@ -702,6 +702,16 @@ func grepFile(fs *mountablefs.MountableFS, path string, re *regexp.Regexp, nodeL
 	}
 
 	return matches, nil
+}
+
+func newGrepScanner(data []byte) *bufio.Scanner {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	maxTokenSize := len(data) + 1
+	if maxTokenSize < bufio.MaxScanTokenSize {
+		maxTokenSize = bufio.MaxScanTokenSize
+	}
+	scanner.Buffer(make([]byte, 0, min(64*1024, maxTokenSize)), maxTokenSize)
+	return scanner
 }
 
 func grepDirectory(fs *mountablefs.MountableFS, dirPath string, re *regexp.Regexp, nodeLimit int) ([]GrepMatch, error) {

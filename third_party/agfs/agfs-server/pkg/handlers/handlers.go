@@ -1218,7 +1218,7 @@ func (h *Handler) grepFileStream(path string, re *regexp.Regexp, nodeLimit int, 
 		return 0, err
 	}
 
-	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner := newGrepScanner(data)
 	lineNum := 1
 	count := 0
 
@@ -1300,7 +1300,7 @@ func (h *Handler) grepFile(path string, re *regexp.Regexp, nodeLimit int) ([]Gre
 	}
 
 	var matches []GrepMatch
-	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner := newGrepScanner(data)
 	lineNum := 1
 
 	for scanner.Scan() {
@@ -1323,6 +1323,16 @@ func (h *Handler) grepFile(path string, re *regexp.Regexp, nodeLimit int) ([]Gre
 	}
 
 	return matches, nil
+}
+
+func newGrepScanner(data []byte) *bufio.Scanner {
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	maxTokenSize := len(data) + 1
+	if maxTokenSize < bufio.MaxScanTokenSize {
+		maxTokenSize = bufio.MaxScanTokenSize
+	}
+	scanner.Buffer(make([]byte, 0, min(64*1024, maxTokenSize)), maxTokenSize)
+	return scanner
 }
 
 // grepDirectory recursively searches for pattern in a directory

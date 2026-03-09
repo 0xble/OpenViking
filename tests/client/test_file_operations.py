@@ -96,6 +96,19 @@ class TestGrep:
         matches = result.get("matches", [])
         assert len(matches) == 0
 
+    async def test_grep_large_line(self, client: AsyncOpenViking, temp_dir: Path):
+        """Test grep can search lines larger than the default scanner limit"""
+        file_path = temp_dir / "large-line.txt"
+        file_path.write_text(f"{'x' * 80_000} longline-needle", encoding="utf-8")
+
+        result = await client.add_resource(path=str(file_path), reason="Test grep large line")
+        uri = result["root_uri"]
+
+        grep_result = await client.grep(uri, pattern="longline-needle")
+
+        assert grep_result["count"] > 0
+        assert any("longline-needle" in match["content"] for match in grep_result["matches"])
+
 
 class TestGlob:
     """Test glob file pattern matching"""
