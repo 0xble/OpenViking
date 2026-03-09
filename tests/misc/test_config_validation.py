@@ -206,6 +206,26 @@ def test_vlm_validation():
         print(f"   Fail (provider='volcengine' should have priority, got '{config_b.provider}')")
 
 
+def test_embedding_validation_allows_env_api_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "env-openai-key")
+
+    config = EmbeddingConfig(
+        dense=EmbeddingModelConfig(provider="openai", model="text-embedding-3-small")
+    )
+
+    assert config.dense is not None
+    assert config.dense.provider == "openai"
+
+
+def test_vlm_validation_allows_env_api_key(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "env-openai-key")
+
+    config = VLMConfig(model="gpt-4o-mini", provider="openai")
+
+    assert config.provider == "openai"
+    assert config._get_effective_api_key() == "env-openai-key"
+
+
 if __name__ == "__main__":
     print("\nStarting config validator tests...\n")
 

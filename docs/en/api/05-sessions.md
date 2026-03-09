@@ -11,7 +11,7 @@ Create a new session.
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
+| --------- | ---- | -------- | ------- | ----------- |
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
 
 **Python SDK (Embedded / HTTP)**
@@ -37,7 +37,7 @@ curl -X POST http://localhost:1933/api/v1/sessions \
 **CLI**
 
 ```bash
-openviking session new
+ov session new
 ```
 
 **Response**
@@ -81,7 +81,7 @@ curl -X GET http://localhost:1933/api/v1/sessions \
 **CLI**
 
 ```bash
-openviking session list
+ov session list
 ```
 
 **Response**
@@ -132,7 +132,7 @@ curl -X GET http://localhost:1933/api/v1/sessions/a1b2c3d4 \
 **CLI**
 
 ```bash
-openviking session get a1b2c3d4
+ov session get a1b2c3d4
 ```
 
 **Response**
@@ -181,7 +181,155 @@ curl -X DELETE http://localhost:1933/api/v1/sessions/a1b2c3d4 \
 **CLI**
 
 ```bash
-openviking session delete a1b2c3d4
+ov session delete a1b2c3d4
+```
+
+---
+
+### import_session()
+
+Import one raw external session log into a native OpenViking session.
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+| --------- | ---- | -------- | ------- | ----------- |
+| adapter | str | Yes | - | Source adapter: `claude`, `codex`, or `openclaw` |
+| path | str | Yes | - | Raw session log path |
+| session_id | str | No | None | Optional explicit session ID override |
+| build_index | bool | No | True | Build searchable session summary index |
+| preserve_original | bool | No | True | Preserve the canonical raw original log |
+| overwrite | bool | No | False | Replace an existing imported session with the same ID |
+| wait | bool | No | False | Wait for indexing work to finish |
+| timeout | float | No | None | Optional wait timeout in seconds |
+
+**HTTP API**
+
+```text
+POST /api/v1/sessions/import
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/sessions/import \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "adapter": "codex",
+    "path": "/Users/example/.codex/instances/default/sessions/2026/03/09/example.jsonl",
+    "wait": true,
+    "timeout": 60
+  }'
+```
+
+**CLI**
+
+```bash
+ov session import --adapter codex --path /Users/example/session.jsonl --wait --timeout 60
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "status": "imported",
+    "adapter": "codex",
+    "session_id": "codex-1234",
+    "session_uri": "viking://session/default/codex-1234",
+    "message_count": 8,
+    "original_uri": "viking://session/default/codex-1234/originals/source.jsonl",
+    "indexed": true
+  },
+  "time": 0.1
+}
+```
+
+---
+
+### sync_sessions()
+
+Sync all configured external session sources into native OpenViking sessions.
+
+The default source list comes from `ov.conf` under `sources.sessions`.
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+| --------- | ---- | -------- | ------- | ----------- |
+| sources | List[SessionSource] | No | None | Optional inline source override list |
+| build_index | bool | No | True | Build searchable session summary index |
+| preserve_original | bool | No | True | Preserve canonical raw originals |
+| overwrite | bool | No | False | Replace existing sessions with matching IDs |
+| wait | bool | No | False | Wait for indexing work to finish |
+| timeout | float | No | None | Optional wait timeout in seconds |
+
+**HTTP API**
+
+```text
+POST /api/v1/sessions/sync
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/sessions/sync \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "wait": true,
+    "timeout": 300
+  }'
+```
+
+**CLI**
+
+```bash
+ov session sync --wait --timeout 300
+```
+
+**Config Example**
+
+```json
+{
+  "sources": {
+    "sessions": [
+      {
+        "name": "codex",
+        "adapter": "codex",
+        "path": "~/.codex/instances",
+        "glob": "**/sessions/**/*.jsonl"
+      },
+      {
+        "name": "openclaw",
+        "adapter": "openclaw",
+        "path": "~/.openclaw/agents/main/sessions",
+        "glob": "*.jsonl"
+      },
+      {
+        "name": "claude",
+        "adapter": "claude",
+        "path": "~/.claude/projects",
+        "glob": "**/*.jsonl"
+      }
+    ]
+  }
+}
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "status": "ok",
+    "source_count": 3,
+    "file_count": 42,
+    "imported": 12,
+    "skipped": 30,
+    "failed": 0
+  },
+  "time": 0.1
+}
 ```
 
 **Response**
@@ -211,6 +359,7 @@ Add a message to the session.
 | content | str | Conditional | - | Message text content (HTTP API simple mode, mutually exclusive with parts) |
 
 > **Note**: HTTP API supports two modes:
+>
 > 1. **Simple mode**: Use `content` string (backward compatible)
 > 2. **Parts mode**: Use `parts` array (full Part support)
 >
@@ -310,7 +459,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
 **CLI**
 
 ```bash
-openviking session add-message a1b2c3d4 --role user --content "How do I authenticate users?"
+ov session add-message a1b2c3d4 --role user --content "How do I authenticate users?"
 ```
 
 **Response**
@@ -365,7 +514,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
 **CLI**
 
 ```bash
-openviking session commit a1b2c3d4
+ov session commit a1b2c3d4
 ```
 
 **Response**

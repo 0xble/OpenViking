@@ -15,6 +15,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
 from openviking.service.task_tracker import get_task_tracker
+from openviking_cli.utils.config import SessionSourceConfig
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -73,6 +74,49 @@ class AddMessageRequest(BaseModel):
         return self
 
 
+class ImportSessionRequest(BaseModel):
+    """Request model for importing one raw external session log."""
+
+    adapter: Literal["claude", "codex", "openclaw"]
+    path: str
+    session_id: Optional[str] = None
+    build_index: bool = True
+    preserve_original: bool = True
+    overwrite: bool = False
+    wait: bool = False
+    timeout: Optional[float] = None
+
+
+class SessionSourceRequest(BaseModel):
+    """Request model for a configured session sync source override."""
+
+    name: str = ""
+    adapter: Literal["claude", "codex", "openclaw"]
+    path: str
+    glob: Optional[str] = None
+    enabled: bool = True
+
+    def to_config(self) -> SessionSourceConfig:
+        return SessionSourceConfig(
+            name=self.name,
+            adapter=self.adapter,
+            path=self.path,
+            glob=self.glob,
+            enabled=self.enabled,
+        )
+
+
+class SyncSessionsRequest(BaseModel):
+    """Request model for syncing configured raw external session sources."""
+
+    sources: Optional[List[SessionSourceRequest]] = None
+    build_index: bool = True
+    preserve_original: bool = True
+    overwrite: bool = False
+    wait: bool = False
+    timeout: Optional[float] = None
+
+
 def _to_jsonable(value: Any) -> Any:
     """Convert internal objects (e.g. Context) into JSON-serializable values."""
     to_dict = getattr(value, "to_dict", None)
@@ -101,6 +145,51 @@ async def create_session(
             "user": session.user.to_dict(),
         },
     )
+
+
+@router.post("/import")
+async def import_session(
+    request: ImportSessionRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Import one raw external session log into a native OpenViking session."""
+    service = get_service()
+    await service.initialize_user_directories(_ctx)
+    await service.initialize_agent_directories(_ctx)
+    result = await service.sessions.import_session_log(
+        adapter=request.adapter,
+        path=request.path,
+        ctx=_ctx,
+        session_id=request.session_id,
+        build_index=request.build_index,
+        preserve_original=request.preserve_original,
+        overwrite=request.overwrite,
+    )
+    if request.wait and request.build_index and result.get("status") == "imported":
+        result["queue_status"] = await service.resources.wait_processed(timeout=request.timeout)
+    return Response(status="ok", result=result)
+
+
+@router.post("/sync")
+async def sync_sessions(
+    request: SyncSessionsRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Sync configured external session sources into native OpenViking sessions."""
+    service = get_service()
+    await service.initialize_user_directories(_ctx)
+    await service.initialize_agent_directories(_ctx)
+    sources = [source.to_config() for source in request.sources] if request.sources else None
+    result = await service.sessions.sync_session_sources(
+        ctx=_ctx,
+        sources=sources,
+        build_index=request.build_index,
+        preserve_original=request.preserve_original,
+        overwrite=request.overwrite,
+    )
+    if request.wait and request.build_index and result.get("imported", 0) > 0:
+        result["queue_status"] = await service.resources.wait_processed(timeout=request.timeout)
+    return Response(status="ok", result=result)
 
 
 @router.get("")

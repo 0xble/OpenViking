@@ -31,11 +31,18 @@ class SyncHTTPClient:
         self,
         url: Optional[str] = None,
         api_key: Optional[str] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         timeout: float = 60.0,
     ):
         self._async_client = AsyncHTTPClient(
-            url=url, api_key=api_key, agent_id=agent_id, timeout=timeout
+            url=url,
+            api_key=api_key,
+            account_id=account_id,
+            user_id=user_id,
+            agent_id=agent_id,
+            timeout=timeout,
         )
         self._initialized = False
 
@@ -108,6 +115,50 @@ class SyncHTTPClient:
     def commit_session(self, session_id: str) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         return run_async(self._async_client.commit_session(session_id))
+
+    def import_session(
+        self,
+        adapter: str,
+        path: str,
+        session_id: Optional[str] = None,
+        build_index: bool = True,
+        preserve_original: bool = True,
+        overwrite: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Import one raw external session log."""
+        return run_async(
+            self._async_client.import_session(
+                adapter=adapter,
+                path=path,
+                session_id=session_id,
+                build_index=build_index,
+                preserve_original=preserve_original,
+                overwrite=overwrite,
+                wait=wait,
+                timeout=timeout,
+            )
+        )
+
+    def sync_sessions(
+        self,
+        build_index: bool = True,
+        preserve_original: bool = True,
+        overwrite: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Sync configured external session sources."""
+        return run_async(
+            self._async_client.sync_sessions(
+                build_index=build_index,
+                preserve_original=preserve_original,
+                overwrite=overwrite,
+                wait=wait,
+                timeout=timeout,
+            )
+        )
 
     # ============= Resource =============
 

@@ -322,6 +322,50 @@ class LocalClient(BaseClient):
             "message_count": len(session.messages),
         }
 
+    async def import_session(
+        self,
+        adapter: str,
+        path: str,
+        session_id: Optional[str] = None,
+        build_index: bool = True,
+        preserve_original: bool = True,
+        overwrite: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Import one raw external session log."""
+        result = await self._service.sessions.import_session_log(
+            adapter=adapter,
+            path=path,
+            ctx=self._ctx,
+            session_id=session_id,
+            build_index=build_index,
+            preserve_original=preserve_original,
+            overwrite=overwrite,
+        )
+        if wait and build_index and result.get("status") == "imported":
+            result["queue_status"] = await self._service.resources.wait_processed(timeout=timeout)
+        return result
+
+    async def sync_sessions(
+        self,
+        build_index: bool = True,
+        preserve_original: bool = True,
+        overwrite: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Sync configured external session sources."""
+        result = await self._service.sessions.sync_session_sources(
+            ctx=self._ctx,
+            build_index=build_index,
+            preserve_original=preserve_original,
+            overwrite=overwrite,
+        )
+        if wait and build_index and result.get("imported", 0) > 0:
+            result["queue_status"] = await self._service.resources.wait_processed(timeout=timeout)
+        return result
+
     # ============= Pack =============
 
     async def export_ovpack(self, uri: str, to: str) -> str:

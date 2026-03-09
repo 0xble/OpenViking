@@ -10,6 +10,8 @@ pub struct Config {
     #[serde(default = "default_url")]
     pub url: String,
     pub api_key: Option<String>,
+    pub account_id: Option<String>,
+    pub user_id: Option<String>,
     pub agent_id: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout: f64,
@@ -40,6 +42,8 @@ impl Default for Config {
         Self {
             url: "http://localhost:1933".to_string(),
             api_key: None,
+            account_id: None,
+            user_id: None,
             agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),

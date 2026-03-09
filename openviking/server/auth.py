@@ -28,11 +28,12 @@ async def resolve_identity(
     api_key_manager = getattr(request.app.state, "api_key_manager", None)
 
     if api_key_manager is None:
+        default_identity = getattr(request.app.state, "default_identity", None)
         return ResolvedIdentity(
             role=Role.ROOT,
-            account_id=x_openviking_account or "default",
-            user_id=x_openviking_user or "default",
-            agent_id=x_openviking_agent or "default",
+            account_id=x_openviking_account or getattr(default_identity, "account_id", None) or "default",
+            user_id=x_openviking_user or getattr(default_identity, "user_id", None) or "default",
+            agent_id=x_openviking_agent or getattr(default_identity, "agent_id", None) or "default",
         )
 
     # Extract API key from request

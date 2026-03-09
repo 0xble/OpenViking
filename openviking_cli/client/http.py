@@ -133,6 +133,8 @@ class AsyncHTTPClient(BaseClient):
         self,
         url: Optional[str] = None,
         api_key: Optional[str] = None,
+        account_id: Optional[str] = None,
+        user_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         timeout: float = 60.0,
     ):
@@ -153,6 +155,8 @@ class AsyncHTTPClient(BaseClient):
 
                 url = cfg.get("url")
                 api_key = api_key or cfg.get("api_key")
+                account_id = account_id or cfg.get("account_id")
+                user_id = user_id or cfg.get("user_id")
                 agent_id = agent_id or cfg.get("agent_id")
                 if timeout == 60.0:  # only override default with config value
                     timeout = cfg.get("timeout", 60.0)
@@ -163,6 +167,8 @@ class AsyncHTTPClient(BaseClient):
             )
         self._url = url.rstrip("/")
         self._api_key = api_key
+        self._account_id = account_id
+        self._user_id = user_id
         self._agent_id = agent_id
         self._user = UserIdentifier.the_default_user()
         self._timeout = timeout
@@ -176,6 +182,10 @@ class AsyncHTTPClient(BaseClient):
         headers = {}
         if self._api_key:
             headers["X-API-Key"] = self._api_key
+        if self._account_id:
+            headers["X-OpenViking-Account"] = self._account_id
+        if self._user_id:
+            headers["X-OpenViking-User"] = self._user_id
         if self._agent_id:
             headers["X-OpenViking-Agent"] = self._agent_id
         self._http = httpx.AsyncClient(
@@ -691,6 +701,54 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/messages",
             json=payload,
+        )
+        return self._handle_response(response)
+
+    async def import_session(
+        self,
+        adapter: str,
+        path: str,
+        session_id: Optional[str] = None,
+        build_index: bool = True,
+        preserve_original: bool = True,
+        overwrite: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Import one raw external session log."""
+        response = await self._http.post(
+            "/api/v1/sessions/import",
+            json={
+                "adapter": adapter,
+                "path": path,
+                "session_id": session_id,
+                "build_index": build_index,
+                "preserve_original": preserve_original,
+                "overwrite": overwrite,
+                "wait": wait,
+                "timeout": timeout,
+            },
+        )
+        return self._handle_response(response)
+
+    async def sync_sessions(
+        self,
+        build_index: bool = True,
+        preserve_original: bool = True,
+        overwrite: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Sync configured external session sources."""
+        response = await self._http.post(
+            "/api/v1/sessions/sync",
+            json={
+                "build_index": build_index,
+                "preserve_original": preserve_original,
+                "overwrite": overwrite,
+                "wait": wait,
+                "timeout": timeout,
+            },
         )
         return self._handle_response(response)
 

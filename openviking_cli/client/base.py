@@ -229,6 +229,33 @@ class BaseClient(ABC):
         """
         ...
 
+    @abstractmethod
+    async def import_session(
+        self,
+        adapter: str,
+        path: str,
+        session_id: Optional[str] = None,
+        build_index: bool = True,
+        preserve_original: bool = True,
+        overwrite: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Import one raw external session log."""
+        ...
+
+    @abstractmethod
+    async def sync_sessions(
+        self,
+        build_index: bool = True,
+        preserve_original: bool = True,
+        overwrite: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Sync configured external session sources."""
+        ...
+
     # ============= Pack =============
 
     @abstractmethod

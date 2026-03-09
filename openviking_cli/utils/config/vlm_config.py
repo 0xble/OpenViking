@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
+import os
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -79,6 +80,33 @@ class VLMConfig(BaseModel):
                     return True
         return False
 
+    def _get_env_api_key(self) -> str | None:
+        provider = (self.provider or "").lower()
+        env_keys: list[str] = []
+
+        if provider == "openai":
+            env_keys = ["OPENAI_API_KEY"]
+        elif provider == "anthropic":
+            env_keys = ["ANTHROPIC_API_KEY"]
+        elif provider == "volcengine":
+            env_keys = ["VOLCENGINE_API_KEY", "ARK_API_KEY"]
+        elif provider == "litellm":
+            model_name = (self.model or "").lower()
+            if any(token in model_name for token in ("claude", "anthropic")):
+                env_keys = ["ANTHROPIC_API_KEY"]
+            elif any(token in model_name for token in ("gpt", "o1", "o3", "o4")):
+                env_keys = ["OPENAI_API_KEY"]
+            elif any(token in model_name for token in ("gemini", "google")):
+                env_keys = ["GEMINI_API_KEY"]
+            elif any(token in model_name for token in ("deepseek",)):
+                env_keys = ["DEEPSEEK_API_KEY"]
+
+        for key in env_keys:
+            value = os.environ.get(key)
+            if value:
+                return value
+        return None
+
     def _get_effective_api_key(self) -> str | None:
         """Get effective API key."""
         if self.api_key:
@@ -86,7 +114,7 @@ class VLMConfig(BaseModel):
         config, _ = self._match_provider()
         if config and config.get("api_key"):
             return config["api_key"]
-        return None
+        return self._get_env_api_key()
 
     def _match_provider(self, model: str | None = None) -> tuple[Dict[str, Any] | None, str | None]:
         """Match provider config.

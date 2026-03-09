@@ -40,6 +40,7 @@ from .parser_config import (
 )
 from .rerank_config import RerankConfig
 from .storage_config import StorageConfig
+from .sources_config import SessionSourceConfig, SourcesConfig
 from .vectordb_config import VectorDBBackendConfig
 from .vlm_config import VLMConfig
 
@@ -56,6 +57,8 @@ __all__ = [
     "OpenVikingConfigSingleton",
     "RerankConfig",
     "StorageConfig",
+    "SourcesConfig",
+    "SessionSourceConfig",
     "VectorDBBackendConfig",
     "VLMConfig",
     "ParserConfig",

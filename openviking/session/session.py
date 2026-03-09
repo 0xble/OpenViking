@@ -10,11 +10,13 @@ import re
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
 from openviking.message import Message, Part
 from openviking.server.identity import RequestContext, Role
+from openviking.utils.embedding_utils import vectorize_directory_meta
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
@@ -149,6 +151,79 @@ class Session:
             return
         await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
         await self._viking_fs.write_file(f"{self._session_uri}/messages.jsonl", "", ctx=self.ctx)
+
+    async def import_messages(
+        self,
+        messages: List[Message],
+        metadata: Dict[str, Any],
+        original_path: Optional[str] = None,
+        preserve_original: bool = True,
+        build_index: bool = True,
+    ) -> Dict[str, Any]:
+        """Materialize a normalized external session as a native OpenViking session."""
+        await self.ensure_exists()
+
+        self._messages = list(messages)
+        self._usage_records = []
+        self._compression = SessionCompression()
+        self._stats = SessionStats(
+            total_turns=len([message for message in self._messages if message.role == "user"]),
+            total_tokens=sum(len(message.content) // 4 for message in self._messages),
+        )
+        self._loaded = True
+
+        abstract = self._generate_import_abstract(metadata)
+        overview = self._generate_import_overview(metadata, preserve_original=preserve_original)
+
+        await self._write_to_agfs_async(self._messages, abstract=abstract, overview=overview)
+
+        import_metadata = {
+            "adapter": metadata.get("adapter"),
+            "source_session_id": metadata.get("source_session_id"),
+            "source_path": original_path or metadata.get("source_path"),
+            "message_count": len(self._messages),
+            "imported_at": get_current_timestamp(),
+            "original_preserved": preserve_original,
+            "session_meta": metadata.get("session_meta") or {},
+            "instruction_messages": metadata.get("instruction_messages") or [],
+            "tool_event_count": metadata.get("tool_event_count", 0),
+            "progress_event_count": metadata.get("progress_event_count", 0),
+            "event_count": metadata.get("event_count", 0),
+        }
+        await self._viking_fs.write_file(
+            f"{self._session_uri}/.source.json",
+            json.dumps(import_metadata, ensure_ascii=False, indent=2),
+            ctx=self.ctx,
+        )
+
+        original_uri = ""
+        if preserve_original and original_path:
+            original_text = Path(original_path).expanduser().read_text(encoding="utf-8")
+            original_uri = f"{self._session_uri}/originals/source.jsonl"
+            await self._viking_fs.write_file(
+                original_uri,
+                original_text,
+                ctx=self.ctx,
+            )
+
+        if build_index:
+            # Session summaries live under viking://session/... but must index as resources
+            # because the vector backend only accepts resource, memory, or skill.
+            await vectorize_directory_meta(
+                self._session_uri,
+                abstract=abstract,
+                overview=overview,
+                context_type="resource",
+                ctx=self.ctx,
+            )
+
+        return {
+            "session_id": self.session_id,
+            "session_uri": self._session_uri,
+            "message_count": len(self._messages),
+            "original_uri": original_uri,
+            "indexed": build_index,
+        }
 
     @property
     def messages(self) -> List[Message]:
@@ -873,7 +948,12 @@ class Session:
             )
         )
 
-    async def _write_to_agfs_async(self, messages: List[Message]) -> None:
+    async def _write_to_agfs_async(
+        self,
+        messages: List[Message],
+        abstract: Optional[str] = None,
+        overview: Optional[str] = None,
+    ) -> None:
         """Write messages.jsonl to AGFS (async)."""
         if not self._viking_fs:
             return
@@ -881,8 +961,8 @@ class Session:
         viking_fs = self._viking_fs
         turn_count = len([m for m in messages if m.role == "user"])
 
-        abstract = self._generate_abstract()
-        overview = self._generate_overview(turn_count)
+        resolved_abstract = abstract if abstract is not None else self._generate_abstract()
+        resolved_overview = overview if overview is not None else self._generate_overview(turn_count)
 
         lines = [m.to_jsonl() for m in messages]
         content = "\n".join(lines) + "\n" if lines else ""
@@ -894,12 +974,12 @@ class Session:
         )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.abstract.md",
-            content=abstract,
+            content=resolved_abstract,
             ctx=self.ctx,
         )
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.overview.md",
-            content=overview,
+            content=resolved_overview,
             ctx=self.ctx,
         )
 
@@ -995,6 +1075,49 @@ class Session:
         )
         if self._compression.compression_index > 0:
             parts.append(f"- Historical archives: `{self._session_uri}/history/`")
+        return "\n".join(parts)
+
+    def _generate_import_abstract(self, metadata: Dict[str, Any]) -> str:
+        if not self._messages:
+            adapter = metadata.get("adapter") or "external"
+            return f"Imported {adapter} session with no normalized messages."
+
+        adapter = metadata.get("adapter") or "external"
+        first = self._messages[0].content
+        turn_count = len([message for message in self._messages if message.role == "user"])
+        return f"Imported {adapter} session with {turn_count} turns, starting from '{first[:50]}...'"
+
+    def _generate_import_overview(
+        self,
+        metadata: Dict[str, Any],
+        *,
+        preserve_original: bool,
+    ) -> str:
+        adapter = metadata.get("adapter") or "unknown"
+        source_session_id = metadata.get("source_session_id") or "unknown"
+        source_path = metadata.get("source_path") or "unknown"
+        parts = [
+            "# Imported Session",
+            "",
+            "## Provenance",
+            f"- Adapter: `{adapter}`",
+            f"- Source session ID: `{source_session_id}`",
+            f"- Source path: `{source_path}`",
+            "",
+            "## File Description",
+            f"- `messages.jsonl` - Native OpenViking messages ({len(self._messages)} total)",
+            "- `.source.json` - Canonical provenance and import metadata",
+        ]
+        if preserve_original:
+            parts.append("- `originals/source.jsonl` - Canonical raw source log")
+        parts.extend(
+            [
+                "",
+                "## Access Methods",
+                f"- Imported session root: `{self._session_uri}`",
+                f"- Session messages: `{self._session_uri}/messages.jsonl`",
+            ]
+        )
         return "\n".join(parts)
 
     def _write_relations(self) -> None:

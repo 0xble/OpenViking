@@ -31,6 +31,7 @@ from .parser_config import (
 )
 from .rerank_config import RerankConfig
 from .storage_config import StorageConfig
+from .sources_config import SourcesConfig
 from .vlm_config import VLMConfig
 
 
@@ -124,6 +125,11 @@ class OpenVikingConfig(BaseModel):
     )
 
     log: LogConfig = Field(default_factory=lambda: LogConfig(), description="Logging configuration")
+
+    sources: SourcesConfig = Field(
+        default_factory=lambda: SourcesConfig(),
+        description="Source sync configuration for external session logs",
+    )
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
 

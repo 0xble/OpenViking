@@ -65,6 +65,7 @@ def create_app(
             logger.info("OpenVikingService initialized")
 
         set_service(service)
+        app.state.default_identity = service.user
 
         # Initialize APIKeyManager after service (needs AGFS)
         if config.root_api_key:
@@ -105,6 +106,7 @@ def create_app(
     )
 
     app.state.config = config
+    app.state.default_identity = service.user if service is not None else None
 
     # Add CORS middleware
     app.add_middleware(

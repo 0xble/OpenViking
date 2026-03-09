@@ -3,11 +3,13 @@
 
 """Shared fixtures for OpenViking server tests."""
 
+import json
 import shutil
 import socket
 import threading
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -42,6 +44,91 @@ This is a sample markdown document for server testing.
 - Feature 1: Resource management
 - Feature 2: Semantic search
 """
+
+
+class _DummyEmbedResult:
+    def __init__(self, dense_vector: list[float]):
+        self.dense_vector = dense_vector
+
+
+class _DummyEmbedder:
+    def __init__(self, dimension: int = 8):
+        self.dimension = dimension
+        self.is_sparse = False
+        self.is_hybrid = False
+
+    def get_dimension(self) -> int:
+        return self.dimension
+
+    def _embed(self, text: str) -> list[float]:
+        base = sum(ord(char) for char in text) or 1
+        return [float((base + index) % 17) for index in range(self.dimension)]
+
+    def embed(self, text: str) -> _DummyEmbedResult:
+        return _DummyEmbedResult(self._embed(text))
+
+    def embed_batch(self, texts: list[str]) -> list[_DummyEmbedResult]:
+        return [self.embed(text) for text in texts]
+
+
+class _DummyVLM:
+    def get_completion(self, _prompt: str, thinking: bool = False) -> str:
+        return "dummy completion"
+
+    async def get_completion_async(
+        self, _prompt: str, thinking: bool = False, max_retries: int = 0
+    ) -> str:
+        return "dummy completion"
+
+    def get_vision_completion(self, _prompt: str, images: list, thinking: bool = False) -> str:
+        return "dummy completion"
+
+    async def get_vision_completion_async(
+        self, _prompt: str, images: list, thinking: bool = False
+    ) -> str:
+        return "dummy completion"
+
+
+@pytest.fixture(scope="function", autouse=True)
+def test_openviking_config(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    """Provide an isolated ov.conf and dummy model backends for server tests."""
+    config_path = temp_dir / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "storage": {"workspace": str(temp_dir / "workspace")},
+                "embedding": {
+                    "dense": {
+                        "provider": "openai",
+                        "model": "text-embedding-3-small",
+                        "api_key": "test-key",
+                        "dimension": 8,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
+
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+    OpenVikingConfigSingleton.reset_instance()
+
+    with (
+        patch(
+            "openviking_cli.utils.config.EmbeddingConfig.get_embedder",
+            return_value=_DummyEmbedder(),
+        ),
+        patch(
+            "openviking_cli.utils.config.VLMConfig.get_vlm_instance",
+            return_value=_DummyVLM(),
+        ),
+    ):
+        yield
+
+    OpenVikingConfigSingleton.reset_instance()
 
 
 # ---------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
+import os
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -41,6 +42,15 @@ class EmbeddingModelConfig(BaseModel):
                 data["provider"] = backend
         return data
 
+    def _has_env_api_key(self) -> bool:
+        provider = (self.provider or self.backend or "").lower()
+        env_keys = {
+            "openai": ("OPENVIKING_EMBEDDING_API_KEY", "OPENAI_API_KEY"),
+            "volcengine": ("VOLCENGINE_API_KEY", "ARK_API_KEY"),
+            "jina": ("JINA_API_KEY",),
+        }
+        return any(os.environ.get(key) for key in env_keys.get(provider, ()))
+
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
@@ -60,11 +70,11 @@ class EmbeddingModelConfig(BaseModel):
 
         # Provider-specific validation
         if self.provider == "openai":
-            if not self.api_key:
+            if not self.api_key and not self._has_env_api_key():
                 raise ValueError("OpenAI provider requires 'api_key' to be set")
 
         elif self.provider == "volcengine":
-            if not self.api_key:
+            if not self.api_key and not self._has_env_api_key():
                 raise ValueError("Volcengine provider requires 'api_key' to be set")
 
         elif self.provider == "vikingdb":
@@ -82,7 +92,7 @@ class EmbeddingModelConfig(BaseModel):
                 )
 
         elif self.provider == "jina":
-            if not self.api_key:
+            if not self.api_key and not self._has_env_api_key():
                 raise ValueError("Jina provider requires 'api_key' to be set")
 
         return self
