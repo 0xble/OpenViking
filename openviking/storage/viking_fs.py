@@ -1485,6 +1485,7 @@ class VikingFS:
         await self._ensure_parent_dirs(to_path)
         self.agfs.write(to_path, content)
         self.agfs.rm(from_path)
+        await self._update_vector_store_uris([from_uri], from_uri, to_uri, ctx=ctx)
 
     async def copy_directory(
         self,
