@@ -50,6 +50,8 @@ def normalize_session_log(
 
 
 def _parse_codex(path: Path, session_id: Optional[str]) -> SessionImportResult:
+    explicit_session_id = session_id.strip() if session_id and session_id.strip() else None
+    source_session_id: Optional[str] = None
     messages: List[Message] = []
     instruction_messages: List[Dict[str, Any]] = []
     tool_event_count = 0
@@ -67,8 +69,8 @@ def _parse_codex(path: Path, session_id: Optional[str]) -> SessionImportResult:
                 "source": payload.get("source"),
                 "model_provider": payload.get("model_provider"),
             }
-            if session_id is None:
-                session_id = str(payload.get("id") or "").strip() or None
+            if source_session_id is None:
+                source_session_id = str(payload.get("id") or "").strip() or None
             continue
 
         if event_type != "response_item":
@@ -99,14 +101,14 @@ def _parse_codex(path: Path, session_id: Optional[str]) -> SessionImportResult:
         elif payload_type in {"function_call", "function_call_output"}:
             tool_event_count += 1
 
-    resolved_session_id = _resolve_session_id("codex", path, session_id)
+    resolved_session_id = _resolve_session_id("codex", path, source_session_id, explicit_session_id)
     return SessionImportResult(
         adapter="codex",
         session_id=resolved_session_id,
         messages=messages,
         metadata={
             "adapter": "codex",
-            "source_session_id": session_id,
+            "source_session_id": source_session_id,
             "source_path": str(path),
             "instruction_messages": instruction_messages,
             "tool_event_count": tool_event_count,
@@ -118,6 +120,8 @@ def _parse_codex(path: Path, session_id: Optional[str]) -> SessionImportResult:
 
 
 def _parse_openclaw(path: Path, session_id: Optional[str]) -> SessionImportResult:
+    explicit_session_id = session_id.strip() if session_id and session_id.strip() else None
+    source_session_id: Optional[str] = None
     messages: List[Message] = []
     tool_event_count = 0
     session_meta: Dict[str, Any] = {}
@@ -131,8 +135,8 @@ def _parse_openclaw(path: Path, session_id: Optional[str]) -> SessionImportResul
                 "version": event.get("version"),
                 "cwd": event.get("cwd"),
             }
-            if session_id is None:
-                session_id = str(event.get("id") or "").strip() or None
+            if source_session_id is None:
+                source_session_id = str(event.get("id") or "").strip() or None
             continue
 
         if event_type != "message":
@@ -153,14 +157,16 @@ def _parse_openclaw(path: Path, session_id: Optional[str]) -> SessionImportResul
         elif role == "toolResult":
             tool_event_count += 1
 
-    resolved_session_id = _resolve_session_id("openclaw", path, session_id)
+    resolved_session_id = _resolve_session_id(
+        "openclaw", path, source_session_id, explicit_session_id
+    )
     return SessionImportResult(
         adapter="openclaw",
         session_id=resolved_session_id,
         messages=messages,
         metadata={
             "adapter": "openclaw",
-            "source_session_id": session_id,
+            "source_session_id": source_session_id,
             "source_path": str(path),
             "tool_event_count": tool_event_count,
             "event_count": _count_jsonl_lines(path),
@@ -171,6 +177,8 @@ def _parse_openclaw(path: Path, session_id: Optional[str]) -> SessionImportResul
 
 
 def _parse_claude(path: Path, session_id: Optional[str]) -> SessionImportResult:
+    explicit_session_id = session_id.strip() if session_id and session_id.strip() else None
+    source_session_id: Optional[str] = None
     messages: List[Message] = []
     tool_event_count = 0
     progress_event_count = 0
@@ -180,10 +188,10 @@ def _parse_claude(path: Path, session_id: Optional[str]) -> SessionImportResult:
     for event in _iter_jsonl(path):
         event_type = event.get("type")
 
-        if session_id is None:
+        if source_session_id is None:
             raw_session_id = str(event.get("sessionId") or "").strip()
             if raw_session_id:
-                session_id = raw_session_id
+                source_session_id = raw_session_id
 
         if not session_meta:
             session_meta = {
@@ -217,23 +225,25 @@ def _parse_claude(path: Path, session_id: Optional[str]) -> SessionImportResult:
                 context=f"claude user event in {path}",
             )
             payload = event.get("message")
-            text = _extract_claude_content(payload if payload is not None else event.get("data"))
-            if not text:
-                continue
             if _is_claude_tool_result(payload):
                 tool_event_count += 1
+                continue
+            text = _extract_claude_content(payload if payload is not None else event.get("data"))
+            if not text:
                 continue
             messages.append(_create_message("user", text, timestamp, message_index))
             message_index += 1
 
-    resolved_session_id = _resolve_session_id("claude", path, session_id)
+    resolved_session_id = _resolve_session_id(
+        "claude", path, source_session_id, explicit_session_id
+    )
     return SessionImportResult(
         adapter="claude",
         session_id=resolved_session_id,
         messages=messages,
         metadata={
             "adapter": "claude",
-            "source_session_id": session_id,
+            "source_session_id": source_session_id,
             "source_path": str(path),
             "tool_event_count": tool_event_count,
             "progress_event_count": progress_event_count,
@@ -340,14 +350,31 @@ def _extract_claude_content(content: Any) -> str:
 
 
 def _is_claude_tool_result(payload: Any) -> bool:
-    if not isinstance(payload, list):
+    if isinstance(payload, dict):
+        if payload.get("type") == "tool_result":
+            return True
+        for key in ("content", "message", "data"):
+            if _is_claude_tool_result(payload.get(key)):
+                return True
         return False
-    return any(isinstance(item, dict) and item.get("type") == "tool_result" for item in payload)
+
+    if isinstance(payload, list):
+        return any(_is_claude_tool_result(item) for item in payload)
+
+    return False
 
 
-def _resolve_session_id(adapter: str, path: Path, session_id: Optional[str]) -> str:
-    if session_id and session_id.strip():
-        return f"{adapter}-{session_id.strip()}"
+def _resolve_session_id(
+    adapter: str,
+    path: Path,
+    source_session_id: Optional[str],
+    explicit_session_id: Optional[str] = None,
+) -> str:
+    if explicit_session_id:
+        return explicit_session_id
+
+    if source_session_id and source_session_id.strip():
+        return f"{adapter}-{source_session_id.strip()}"
 
     base_name = path.name
     stem = base_name.removesuffix(".jsonl")

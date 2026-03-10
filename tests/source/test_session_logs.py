@@ -54,6 +54,36 @@ def test_normalize_codex_session(tmp_path):
     assert result.metadata["event_count"] == 3
 
 
+def test_normalize_codex_session_preserves_explicit_id_and_raw_source_id(tmp_path):
+    raw = tmp_path / "codex.jsonl"
+    _write_jsonl(
+        raw,
+        [
+            {
+                "type": "session_meta",
+                "payload": {"id": "abc123", "cwd": "/tmp/project", "cli_version": "1.0.0"},
+            },
+            {
+                "type": "response_item",
+                "timestamp": "2026-03-09T12:00:00Z",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}],
+                },
+            },
+        ],
+    )
+
+    overridden = normalize_session_log("codex", raw, session_id="incident-42")
+    assert overridden.session_id == "incident-42"
+    assert overridden.metadata["source_session_id"] == "abc123"
+
+    prefixed = normalize_session_log("codex", raw, session_id="codex-incident-42")
+    assert prefixed.session_id == "codex-incident-42"
+    assert prefixed.metadata["source_session_id"] == "abc123"
+
+
 def test_normalize_openclaw_session(tmp_path):
     raw = tmp_path / "openclaw.jsonl"
     _write_jsonl(
