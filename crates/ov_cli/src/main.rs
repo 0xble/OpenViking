@@ -287,6 +287,9 @@ enum Commands {
         /// Target URI
         #[arg(short, long, default_value = "")]
         uri: String,
+        /// Restrict retrieval to one canonical source family, e.g. sessions/documents/email
+        #[arg(long)]
+        source: Option<String>,
         /// Maximum number of results
         #[arg(
             short = 'n',
@@ -306,6 +309,9 @@ enum Commands {
         /// Target URI
         #[arg(short, long, default_value = "")]
         uri: String,
+        /// Restrict retrieval to one canonical source family, e.g. sessions/documents/email
+        #[arg(long)]
+        source: Option<String>,
         /// Session ID for context-aware search
         #[arg(long)]
         session_id: Option<String>,
@@ -693,16 +699,18 @@ async fn main() {
         Commands::Find {
             query,
             uri,
+            source,
             node_limit,
             threshold,
-        } => handle_find(query, uri, node_limit, threshold, ctx).await,
+        } => handle_find(query, uri, source, node_limit, threshold, ctx).await,
         Commands::Search {
             query,
             uri,
+            source,
             session_id,
             node_limit,
             threshold,
-        } => handle_search(query, uri, session_id, node_limit, threshold, ctx).await,
+        } => handle_search(query, uri, source, session_id, node_limit, threshold, ctx).await,
         Commands::Grep {
             uri,
             pattern,
@@ -1121,11 +1129,15 @@ async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<
 async fn handle_find(
     query: String,
     uri: String,
+    source: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(s) = &source {
+        params.push(format!("--source {}", s));
+    }
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
@@ -1138,6 +1150,7 @@ async fn handle_find(
         &uri,
         node_limit,
         threshold,
+        source.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
@@ -1147,12 +1160,16 @@ async fn handle_find(
 async fn handle_search(
     query: String,
     uri: String,
+    source: Option<String>,
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(s) = &source {
+        params.push(format!("--source {}", s));
+    }
     if let Some(s) = &session_id {
         params.push(format!("--session-id {}", s));
     }
@@ -1169,6 +1186,7 @@ async fn handle_search(
         session_id,
         node_limit,
         threshold,
+        source.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
