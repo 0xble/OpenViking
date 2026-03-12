@@ -21,6 +21,7 @@ from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
+from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.session.user_id import UserIdentifier
 
 # ---------------------------------------------------------------------------
@@ -49,6 +50,7 @@ This is a sample markdown document for server testing.
 class _DummyEmbedResult:
     def __init__(self, dense_vector: list[float]):
         self.dense_vector = dense_vector
+        self.sparse_vector = None
 
 
 class _DummyEmbedder:
@@ -242,3 +244,15 @@ async def running_server(temp_dir: Path):
     thread.join(timeout=5)
     await svc.close()
     await AsyncOpenViking.reset()
+
+
+@pytest_asyncio.fixture(scope="function")
+async def http_client(running_server):
+    """Create an AsyncHTTPClient connected to the running server."""
+    port, svc = running_server
+    client = AsyncHTTPClient(
+        url=f"http://127.0.0.1:{port}",
+    )
+    await client.initialize()
+    yield client, svc
+    await client.close()
