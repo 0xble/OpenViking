@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service import OpenVikingService
+from openviking.utils.search_filters import merge_time_filter
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
@@ -196,8 +197,12 @@ class LocalClient(BaseClient):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
+        filter = merge_time_filter(filter, since=since, until=until, time_field=time_field)
         return await self._service.search.find(
             query=query,
             ctx=self._ctx,
@@ -215,12 +220,19 @@ class LocalClient(BaseClient):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
         session = None
         if session_id:
-            session = self._service.sessions.session(self._ctx, session_id)
+            resolved_session_id = await self._service.sessions.resolve_existing_session_id(
+                session_id, self._ctx
+            )
+            session = self._service.sessions.session(self._ctx, resolved_session_id or session_id)
             await session.load()
+        filter = merge_time_filter(filter, since=since, until=until, time_field=time_field)
         return await self._service.search.search(
             query=query,
             ctx=self._ctx,
@@ -305,7 +317,10 @@ class LocalClient(BaseClient):
         """
         from openviking.message.part import Part, TextPart, part_from_dict
 
-        session = self._service.sessions.session(self._ctx, session_id)
+        resolved_session_id = await self._service.sessions.resolve_existing_session_id(
+            session_id, self._ctx
+        )
+        session = self._service.sessions.session(self._ctx, resolved_session_id or session_id)
         await session.load()
 
         message_parts: list[Part]
@@ -318,7 +333,7 @@ class LocalClient(BaseClient):
 
         session.add_message(role, message_parts)
         return {
-            "session_id": session_id,
+            "session_id": session.session_id,
             "message_count": len(session.messages),
         }
 
@@ -405,8 +420,13 @@ class LocalClient(BaseClient):
         Raises:
             NotFoundError: If must_exist=True and the session does not exist.
         """
-        session = self._service.sessions.session(self._ctx, session_id)
-        if must_exist and session_id:
+        resolved_session_id = None
+        if session_id and must_exist:
+            resolved_session_id = run_async(
+                self._service.sessions.resolve_existing_session_id(session_id, self._ctx)
+            )
+        session = self._service.sessions.session(self._ctx, resolved_session_id or session_id)
+        if must_exist and session_id and not resolved_session_id:
             if not run_async(session.exists()):
                 from openviking_cli.exceptions import NotFoundError
 
@@ -422,8 +442,10 @@ class LocalClient(BaseClient):
         Returns:
             True if the session exists, False otherwise
         """
-        session = self._service.sessions.session(self._ctx, session_id)
-        return await session.exists()
+        return (
+            await self._service.sessions.resolve_existing_session_id(session_id, self._ctx)
+            is not None
+        )
 
     def get_status(self) -> Any:
         """Get system status.

@@ -29,6 +29,11 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_IMPORT_PREFIX_PATTERNS = (
+    re.compile(r"(?is)^Conversation info \(untrusted metadata\):\s*```json.*?```\s*"),
+    re.compile(r"(?is)^Sender \(untrusted metadata\):\s*```json.*?```\s*"),
+)
+
 
 @dataclass
 class SessionCompression:
@@ -117,6 +122,10 @@ class Session:
                 for line in content.strip().split("\n")
                 if line.strip()
             ]
+            self._stats.total_turns = len(
+                [message for message in self._messages if message.role == "user"]
+            )
+            self._stats.total_tokens = sum(len(message.content) // 4 for message in self._messages)
             logger.info(f"Session loaded: {self.session_id} ({len(self._messages)} messages)")
         except (FileNotFoundError, Exception):
             logger.debug(f"Session {self.session_id} not found, starting fresh")
@@ -189,6 +198,10 @@ class Session:
             "tool_event_count": metadata.get("tool_event_count", 0),
             "progress_event_count": metadata.get("progress_event_count", 0),
             "event_count": metadata.get("event_count", 0),
+            "first_user_prompt": metadata.get("first_user_prompt"),
+            "index_eligible": metadata.get("index_eligible", True),
+            "index_skip_reason": metadata.get("index_skip_reason"),
+            "index_skip_category": metadata.get("index_skip_category"),
         }
         await self._viking_fs.write_file(
             f"{self._session_uri}/.source.json",
@@ -958,7 +971,9 @@ class Session:
         turn_count = len([m for m in messages if m.role == "user"])
 
         resolved_abstract = abstract if abstract is not None else self._generate_abstract()
-        resolved_overview = overview if overview is not None else self._generate_overview(turn_count)
+        resolved_overview = (
+            overview if overview is not None else self._generate_overview(turn_count)
+        )
 
         lines = [m.to_jsonl() for m in messages]
         content = "\n".join(lines) + "\n" if lines else ""
@@ -1079,9 +1094,26 @@ class Session:
             return f"Imported {adapter} session with no normalized messages."
 
         adapter = metadata.get("adapter") or "external"
-        first = self._messages[0].content
         turn_count = len([message for message in self._messages if message.role == "user"])
-        return f"Imported {adapter} session with {turn_count} turns, starting from '{first[:50]}...'"
+        topic = _find_import_message_snippet(self._messages, role="user")
+        outcome = _find_import_message_snippet(self._messages, role="assistant")
+
+        if topic and outcome:
+            return (
+                f"Imported {adapter} session with {turn_count} turns about '{topic}'. "
+                f"Assistant later reported '{outcome}'."
+            )
+        if topic:
+            return f"Imported {adapter} session with {turn_count} turns about '{topic}'."
+        if outcome:
+            return (
+                f"Imported {adapter} session with {turn_count} turns, "
+                f"assistant reported '{outcome}'."
+            )
+
+        first = self._messages[0].content.strip()
+        fallback = _truncate_summary(first, 50)
+        return f"Imported {adapter} session with {turn_count} turns, starting from '{fallback}'"
 
     def _generate_import_overview(
         self,
@@ -1171,3 +1203,36 @@ class Session:
 
     def __repr__(self) -> str:
         return f"Session(user={self.user}, id={self.session_id})"
+
+
+def _find_import_message_snippet(messages: List[Message], *, role: str) -> str:
+    for message in messages:
+        if message.role != role:
+            continue
+        snippet = _clean_import_message_text(message.content)
+        if snippet:
+            return _truncate_summary(snippet)
+    return ""
+
+
+def _clean_import_message_text(text: str) -> str:
+    cleaned = text.strip()
+    if not cleaned:
+        return ""
+
+    for pattern in _IMPORT_PREFIX_PATTERNS:
+        while True:
+            next_value = pattern.sub("", cleaned, count=1).strip()
+            if next_value == cleaned:
+                break
+            cleaned = next_value
+
+    cleaned = cleaned.replace("[[reply_to_current]]", " ").strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip(" '\"")
+
+
+def _truncate_summary(text: str, limit: int = 120) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."

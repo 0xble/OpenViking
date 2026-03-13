@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +16,75 @@ from openviking.message.part import TextPart
 from openviking.utils.time_utils import parse_iso_datetime
 
 SUPPORTED_SESSION_ADAPTERS = ("claude", "codex", "openclaw")
+
+_GREETING_PROMPTS = {
+    ("hi",),
+    ("hi", "there"),
+    ("hello",),
+    ("hello", "there"),
+    ("hey",),
+    ("hey", "there"),
+    ("hiya",),
+    ("yo",),
+    ("sup",),
+    ("good", "morning"),
+    ("good", "afternoon"),
+    ("good", "evening"),
+}
+
+_TEST_PREFIXES = (
+    ("this", "is", "a"),
+    ("this", "is"),
+    ("it", "is", "a"),
+    ("it", "is"),
+    ("its", "a"),
+    ("just", "a"),
+    ("just",),
+)
+
+_TEST_PROMPTS = {
+    ("test",),
+    ("testing",),
+    ("smoke", "test"),
+    ("test", "run"),
+    ("dry", "run"),
+    ("trial",),
+}
+
+_STORY_PROMPTS = {
+    ("tell", "me", "a", "story"),
+    ("tell", "me", "a", "short", "story"),
+    ("tell", "me", "a", "bedtime", "story"),
+    ("tell", "me", "a", "short", "bedtime", "story"),
+    ("tell", "me", "another", "story"),
+    ("write", "a", "story"),
+    ("write", "me", "a", "story"),
+    ("write", "a", "short", "story"),
+    ("write", "a", "bedtime", "story"),
+    ("make", "up", "a", "story"),
+    ("make", "up", "a", "short", "story"),
+    ("make", "up", "a", "bedtime", "story"),
+}
+
+_MODEL_CHECK_PROMPTS = {
+    ("what", "model", "are", "you"),
+    ("what", "model", "are", "you", "running"),
+    ("what", "model", "is", "this"),
+    ("what", "model", "am", "i", "talking", "to"),
+    ("which", "model", "are", "you"),
+    ("which", "model", "are", "you", "running"),
+    ("which", "model", "is", "this"),
+    ("tell", "me", "what", "model", "you", "are"),
+    ("can", "you", "tell", "me", "what", "model", "you", "are"),
+    ("do", "you", "know", "what", "model", "you", "are"),
+}
+
+_IDENTITY_CHECK_PROMPTS = {
+    ("who", "are", "you"),
+    ("what", "are", "you"),
+}
+
+_EDGE_POLITENESS_TOKENS = {"please", "pls"}
 
 
 @dataclass
@@ -46,7 +116,55 @@ def normalize_session_log(
         "codex": _parse_codex,
         "openclaw": _parse_openclaw,
     }[normalized_adapter]
-    return parser(raw_path, session_id=session_id)
+    result = parser(raw_path, session_id=session_id)
+    root_session_eligible, root_skip_reason = root_session_eligibility(normalized_adapter, raw_path)
+    result.metadata["root_session_eligible"] = root_session_eligible
+    if root_skip_reason:
+        result.metadata["root_skip_reason"] = root_skip_reason
+    first_user_prompt = _first_user_prompt(result.messages)
+    index_eligible, index_skip_category, index_skip_reason = _index_eligibility(result.messages)
+    result.metadata["first_user_prompt"] = first_user_prompt
+    result.metadata["index_eligible"] = index_eligible
+    if index_skip_category:
+        result.metadata["index_skip_category"] = index_skip_category
+    if index_skip_reason:
+        result.metadata["index_skip_reason"] = index_skip_reason
+    return result
+
+
+def root_session_eligibility(adapter: str, path: str | Path) -> tuple[bool, Optional[str]]:
+    normalized_adapter = adapter.strip().lower()
+    raw_path = Path(path).expanduser().resolve()
+    first_event = _first_session_event(raw_path)
+
+    if normalized_adapter == "claude":
+        if any(part.lower() == "subagents" for part in raw_path.parts):
+            return False, "subagent session"
+        if not isinstance(first_event, dict):
+            return False, "non-root session"
+        return (
+            first_event.get("isSidechain") is False,
+            None if first_event.get("isSidechain") is False else "non-root session",
+        )
+
+    if normalized_adapter == "codex":
+        if not isinstance(first_event, dict) or first_event.get("type") != "session_meta":
+            return False, "ephemeral session"
+        payload = first_event.get("payload")
+        if not isinstance(payload, dict):
+            return False, "ephemeral session"
+        if payload.get("originator") != "codex_cli_rs":
+            return False, "ephemeral session"
+        if payload.get("source") != "cli":
+            return False, "subagent session"
+        return True, None
+
+    if normalized_adapter == "openclaw":
+        if "-topic-" not in raw_path.name:
+            return False, "ephemeral session"
+        return True, None
+
+    return True, None
 
 
 def _parse_codex(path: Path, session_id: Optional[str]) -> SessionImportResult:
@@ -268,6 +386,12 @@ def _count_jsonl_lines(path: Path) -> int:
         return sum(1 for line in handle if line.strip())
 
 
+def _first_session_event(path: Path) -> Optional[Dict[str, Any]]:
+    for event in _iter_jsonl(path):
+        return event
+    return None
+
+
 def _parse_timestamp(
     value: Any,
     *,
@@ -379,3 +503,99 @@ def _resolve_session_id(
     base_name = path.name
     stem = base_name.removesuffix(".jsonl")
     return f"{adapter}-{stem}"
+
+
+def _first_user_prompt(messages: List[Message]) -> Optional[str]:
+    for message in messages:
+        if message.role != "user":
+            continue
+        text = str(message.content or "").strip()
+        if text:
+            return text
+    return None
+
+
+def _index_eligibility(messages: List[Message]) -> tuple[bool, Optional[str], Optional[str]]:
+    user_messages = [
+        str(message.content or "").strip() for message in messages if message.role == "user"
+    ]
+    user_messages = [message for message in user_messages if message]
+    if not user_messages:
+        return True, None, None
+
+    category = _low_signal_prompt_category(user_messages[0])
+    if category is None:
+        return True, None, None
+
+    # Keep indexing when the conversation quickly moves past a trivial opener.
+    for followup in user_messages[1:]:
+        normalized_followup = _normalize_prompt(followup)
+        if len(normalized_followup) >= 24 and _low_signal_prompt_category(followup) is None:
+            return True, None, None
+
+    return False, category, f"low-signal first user prompt ({category})"
+
+
+def _low_signal_prompt_category(prompt: str) -> Optional[str]:
+    tokens = _normalized_prompt_tokens(prompt)
+    if not tokens:
+        return "empty"
+
+    polite_tokens = _strip_edge_tokens(tokens, _EDGE_POLITENESS_TOKENS)
+    if polite_tokens in _GREETING_PROMPTS:
+        return "greeting"
+
+    test_tokens = _strip_test_prefix(polite_tokens)
+    if test_tokens in _TEST_PROMPTS:
+        return "test"
+
+    if polite_tokens in _STORY_PROMPTS:
+        return "story"
+
+    model_tokens = _strip_trailing_tokens(polite_tokens, ("today", "right", "now", "currently"))
+    if model_tokens in _MODEL_CHECK_PROMPTS:
+        return "model-check"
+
+    if polite_tokens in _IDENTITY_CHECK_PROMPTS:
+        return "identity-check"
+
+    return None
+
+
+def _normalize_prompt(prompt: str) -> str:
+    normalized = re.sub(r"[^a-z0-9\s]", " ", prompt.lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _normalized_prompt_tokens(prompt: str) -> tuple[str, ...]:
+    normalized = _normalize_prompt(prompt)
+    if not normalized:
+        return ()
+    return tuple(normalized.split())
+
+
+def _strip_edge_tokens(tokens: tuple[str, ...], removable: set[str]) -> tuple[str, ...]:
+    start = 0
+    end = len(tokens)
+    while start < end and tokens[start] in removable:
+        start += 1
+    while end > start and tokens[end - 1] in removable:
+        end -= 1
+    return tokens[start:end]
+
+
+def _strip_test_prefix(tokens: tuple[str, ...]) -> tuple[str, ...]:
+    for prefix in _TEST_PREFIXES:
+        if len(tokens) > len(prefix) and tokens[: len(prefix)] == prefix:
+            return tokens[len(prefix) :]
+    return tokens
+
+
+def _strip_trailing_tokens(
+    tokens: tuple[str, ...], trailing_words: tuple[str, ...]
+) -> tuple[str, ...]:
+    trimmed = tokens
+    while trimmed and trimmed[-1] in trailing_words:
+        trimmed = trimmed[:-1]
+    return trimmed

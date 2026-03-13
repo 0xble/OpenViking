@@ -92,6 +92,34 @@ class TestSessionMustExist:
         session = client.session(session_id=existing_id, must_exist=True)
         assert session.session_id == existing_id
 
+    async def test_must_exist_resolves_imported_raw_source_id(
+        self, client: AsyncOpenViking, temp_dir
+    ):
+        """must_exist=True should resolve imported raw source IDs to canonical IDs."""
+        raw = temp_dir / "codex-imported.jsonl"
+        raw.write_text(
+            "\n".join(
+                [
+                    '{"type":"session_meta","payload":{"id":"imported-raw-123","cwd":"/tmp/project"}}',
+                    '{"type":"response_item","timestamp":"2026-03-09T12:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}',
+                    '{"type":"response_item","timestamp":"2026-03-09T12:00:01Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"world"}]}}',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = await client._client.import_session(
+            adapter="codex", path=str(raw), build_index=False
+        )
+        assert result["status"] == "imported"
+        assert result["session_id"] == "codex-imported-raw-123"
+
+        session = client.session(session_id="imported-raw-123", must_exist=True)
+        assert session.session_id == "codex-imported-raw-123"
+        await session.load()
+        assert len(session.messages) == 2
+
     async def test_must_exist_false_default_accepts_unknown_id(self, client: AsyncOpenViking):
         """Default must_exist=False should silently accept any session_id (backward compat)."""
         session = client.session(session_id="fabricated_id_abc")
@@ -118,3 +146,24 @@ class TestSessionExists:
     ):
         """session_exists() should return True for a session that has messages."""
         assert await client.session_exists(session_with_messages.session_id) is True
+
+    async def test_session_exists_true_for_imported_raw_source_id(
+        self, client: AsyncOpenViking, temp_dir
+    ):
+        """session_exists() should accept imported raw source IDs."""
+        raw = temp_dir / "codex-session-exists.jsonl"
+        raw.write_text(
+            "\n".join(
+                [
+                    '{"type":"session_meta","payload":{"id":"exists-raw-123","cwd":"/tmp/project"}}',
+                    '{"type":"response_item","timestamp":"2026-03-09T12:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}',
+                    '{"type":"response_item","timestamp":"2026-03-09T12:00:01Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"world"}]}}',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        await client._client.import_session(adapter="codex", path=str(raw), build_index=False)
+
+        assert await client.session_exists("exists-raw-123") is True

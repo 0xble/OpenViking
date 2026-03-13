@@ -531,6 +531,9 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> FindResult:
         """Semantic search without session context."""
         if target_uri:
@@ -544,6 +547,9 @@ class AsyncHTTPClient(BaseClient):
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
+                "since": since,
+                "until": until,
+                "time_field": time_field,
             },
         )
         return FindResult.from_dict(self._handle_response(response))
@@ -558,6 +564,9 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> FindResult:
         """Semantic search with optional session context."""
         if target_uri:
@@ -573,6 +582,9 @@ class AsyncHTTPClient(BaseClient):
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
+                "since": since,
+                "until": until,
+                "time_field": time_field,
             },
         )
         return FindResult.from_dict(self._handle_response(response))
@@ -905,7 +917,8 @@ class AsyncHTTPClient(BaseClient):
             session_id = result.get("session_id", "")
         elif must_exist:
             # get_session() raises NotFoundError (via _handle_response) for 404.
-            run_async(self.get_session(session_id))
+            result = run_async(self.get_session(session_id))
+            session_id = result.get("session_id", session_id)
         return Session(self, session_id, self._user)
 
     async def session_exists(self, session_id: str) -> bool:

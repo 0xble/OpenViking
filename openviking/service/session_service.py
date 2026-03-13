@@ -6,20 +6,24 @@ Session Service for OpenViking.
 Provides native session lifecycle operations plus external session import and sync.
 """
 
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 from openviking.server.identity import RequestContext
-from openviking.source import SessionImportResult, discover_session_logs, normalize_session_log
 from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
+from openviking.source import SessionImportResult, discover_session_logs, normalize_session_log
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
+from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.exceptions import NotFoundError, NotInitializedError
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import SessionSourceConfig, get_openviking_config
 
 logger = get_logger(__name__)
+_SOURCE_ALIAS_DIR = ".aliases/source-session-id"
 
 
 class SessionService:
@@ -76,14 +80,186 @@ class SessionService:
         await session.ensure_exists()
         return session
 
+    def _session_base_uri(self, ctx: RequestContext) -> str:
+        return f"viking://session/{ctx.user.user_space_name()}"
+
+    def _source_alias_root_uri(self, ctx: RequestContext) -> str:
+        return f"{self._session_base_uri(ctx)}/{_SOURCE_ALIAS_DIR}"
+
+    def _source_alias_uri(self, source_session_id: str, ctx: RequestContext) -> str:
+        encoded_source_session_id = quote(source_session_id.strip(), safe="")
+        return f"{self._source_alias_root_uri(ctx)}/{encoded_source_session_id}.json"
+
+    async def _read_json_file(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:
+        content = await self._viking_fs.read_file(uri, ctx=ctx)
+        if isinstance(content, bytes):
+            content = content.decode("utf-8")
+        return json.loads(content)
+
+    async def _write_source_session_alias(
+        self,
+        source_session_id: str,
+        canonical_session_id: str,
+        adapter: str,
+        ctx: RequestContext,
+    ) -> None:
+        normalized_source_session_id = str(source_session_id or "").strip()
+        if not normalized_source_session_id:
+            return
+        await self._viking_fs.mkdir(self._source_alias_root_uri(ctx), exist_ok=True, ctx=ctx)
+        await self._viking_fs.write_file(
+            self._source_alias_uri(normalized_source_session_id, ctx),
+            json.dumps(
+                {
+                    "source_session_id": normalized_source_session_id,
+                    "session_id": canonical_session_id,
+                    "adapter": adapter,
+                    "updated_at": get_current_timestamp(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            ctx=ctx,
+        )
+
+    async def _remove_source_session_alias(
+        self, source_session_id: str, ctx: RequestContext
+    ) -> None:
+        normalized_source_session_id = str(source_session_id or "").strip()
+        if not normalized_source_session_id:
+            return
+        try:
+            await self._viking_fs.rm(
+                self._source_alias_uri(normalized_source_session_id, ctx),
+                ctx=ctx,
+            )
+        except Exception:
+            logger.debug(
+                "Alias removal skipped for missing source session id %s", source_session_id
+            )
+
+    async def _resolve_source_session_alias(
+        self, source_session_id: str, ctx: RequestContext
+    ) -> Optional[str]:
+        normalized_source_session_id = source_session_id.strip()
+        if not normalized_source_session_id:
+            return None
+        try:
+            payload = await self._read_json_file(
+                self._source_alias_uri(normalized_source_session_id, ctx),
+                ctx,
+            )
+        except Exception:
+            return None
+
+        canonical_session_id = str(payload.get("session_id") or "").strip()
+        if not canonical_session_id:
+            return None
+
+        session = self.session(ctx, canonical_session_id)
+        if await session.exists():
+            return canonical_session_id
+
+        logger.warning(
+            "Session alias for source %s points to missing session %s; removing stale alias",
+            normalized_source_session_id,
+            canonical_session_id,
+        )
+        await self._remove_source_session_alias(normalized_source_session_id, ctx)
+        return None
+
+    async def _scan_session_aliases(
+        self, source_session_id: str, ctx: RequestContext
+    ) -> Optional[str]:
+        normalized_source_session_id = source_session_id.strip()
+        if not normalized_source_session_id:
+            return None
+
+        try:
+            entries = await self._viking_fs.ls(
+                self._session_base_uri(ctx),
+                node_limit=1_000_000,
+                ctx=ctx,
+            )
+        except Exception:
+            return None
+
+        matched_session_ids: List[str] = []
+        for entry in entries:
+            session_name = str(entry.get("name") or "").strip()
+            if not session_name or session_name.startswith(".") or not entry.get("isDir", False):
+                continue
+            uri = f"{self._session_base_uri(ctx)}/{session_name}/.source.json"
+            try:
+                payload = await self._read_json_file(uri, ctx)
+            except Exception:
+                continue
+            if str(payload.get("source_session_id") or "").strip() != normalized_source_session_id:
+                continue
+            matched_session_ids.append(session_name)
+
+        matched_session_ids = sorted(set(matched_session_ids))
+        if not matched_session_ids:
+            return None
+        if len(matched_session_ids) > 1:
+            logger.warning(
+                "Ambiguous source session id %s matched multiple canonical sessions: %s",
+                normalized_source_session_id,
+                matched_session_ids,
+            )
+            return None
+
+        canonical_session_id = matched_session_ids[0]
+        adapter = (
+            canonical_session_id.split("-", 1)[0] if "-" in canonical_session_id else "unknown"
+        )
+        await self._write_source_session_alias(
+            normalized_source_session_id,
+            canonical_session_id,
+            adapter,
+            ctx,
+        )
+        return canonical_session_id
+
+    async def _source_session_id_for_session(
+        self, session_id: str, ctx: RequestContext
+    ) -> Optional[str]:
+        source_uri = f"{self._session_base_uri(ctx)}/{session_id}/.source.json"
+        try:
+            payload = await self._read_json_file(source_uri, ctx)
+        except Exception:
+            return None
+        source_session_id = str(payload.get("source_session_id") or "").strip()
+        return source_session_id or None
+
+    async def resolve_existing_session_id(
+        self, session_id: str, ctx: RequestContext
+    ) -> Optional[str]:
+        """Resolve a caller-provided session ID to an existing canonical ID."""
+        normalized_session_id = session_id.strip()
+        if not normalized_session_id:
+            return None
+
+        literal_session = self.session(ctx, normalized_session_id)
+        if await literal_session.exists():
+            return normalized_session_id
+
+        aliased_session_id = await self._resolve_source_session_alias(normalized_session_id, ctx)
+        if aliased_session_id:
+            return aliased_session_id
+
+        # Backfill alias entries for older imported sessions that predate the index.
+        return await self._scan_session_aliases(normalized_session_id, ctx)
+
     async def get(self, session_id: str, ctx: RequestContext) -> Session:
         """Get an existing session.
 
         Raises NotFoundError when the session does not exist under current user scope.
         """
-        session = self.session(ctx, session_id)
-        if not await session.exists():
+        resolved_session_id = await self.resolve_existing_session_id(session_id, ctx)
+        if not resolved_session_id:
             raise NotFoundError(session_id, "session")
+        session = self.session(ctx, resolved_session_id)
         await session.load()
         return session
 
@@ -94,14 +270,14 @@ class SessionService:
             List of session info dicts
         """
         self._ensure_initialized()
-        session_base_uri = f"viking://session/{ctx.user.user_space_name()}"
+        session_base_uri = self._session_base_uri(ctx)
 
         try:
             entries = await self._viking_fs.ls(session_base_uri, ctx=ctx)
             sessions = []
             for entry in entries:
                 name = entry.get("name", "")
-                if name in [".", ".."]:
+                if name in [".", ".."] or name.startswith("."):
                     continue
                 sessions.append(
                     {
@@ -124,11 +300,16 @@ class SessionService:
             True if deleted successfully
         """
         self._ensure_initialized()
-        session_uri = f"viking://session/{ctx.user.user_space_name()}/{session_id}"
+        resolved_session_id = await self.resolve_existing_session_id(session_id, ctx)
+        if not resolved_session_id:
+            raise NotFoundError(session_id, "session")
+        session_uri = f"viking://session/{ctx.user.user_space_name()}/{resolved_session_id}"
+        source_session_id = await self._source_session_id_for_session(resolved_session_id, ctx)
 
         try:
             await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
-            logger.info(f"Deleted session: {session_id}")
+            await self._remove_source_session_alias(source_session_id or "", ctx)
+            logger.info(f"Deleted session: {resolved_session_id}")
             return True
         except Exception as e:
             logger.error(f"Failed to delete session {session_id}: {e}")
@@ -187,7 +368,6 @@ class SessionService:
             ctx=ctx,
         )
 
-
     async def import_session_log(
         self,
         adapter: str,
@@ -221,6 +401,8 @@ class SessionService:
         """Import an already-normalized session."""
         self._ensure_initialized()
         resolved_path = str(Path(original_path).expanduser().resolve())
+        index_eligible = bool(normalized.metadata.get("index_eligible", True))
+        resolved_build_index = build_index and index_eligible
         if not normalized.messages:
             return {
                 "status": "skipped",
@@ -233,6 +415,12 @@ class SessionService:
 
         session = self.session(ctx, normalized.session_id)
         if await session.exists():
+            await self._write_source_session_alias(
+                str(normalized.metadata.get("source_session_id") or ""),
+                normalized.session_id,
+                normalized.adapter,
+                ctx,
+            )
             if not overwrite:
                 return {
                     "status": "skipped",
@@ -250,14 +438,24 @@ class SessionService:
             metadata=normalized.metadata,
             original_path=resolved_path,
             preserve_original=preserve_original,
-            build_index=build_index,
+            build_index=resolved_build_index,
         )
-        return {
+        await self._write_source_session_alias(
+            str(normalized.metadata.get("source_session_id") or ""),
+            normalized.session_id,
+            normalized.adapter,
+            ctx,
+        )
+        result = {
             "status": "imported",
             "adapter": normalized.adapter,
             "path": resolved_path,
             **stored,
         }
+        if build_index and not resolved_build_index:
+            result["index_skip_reason"] = normalized.metadata.get("index_skip_reason")
+            result["index_skip_category"] = normalized.metadata.get("index_skip_category")
+        return result
 
     async def sync_session_sources(
         self,
@@ -269,7 +467,9 @@ class SessionService:
     ) -> Dict[str, Any]:
         """Sync all configured session sources into native OpenViking sessions."""
         self._ensure_initialized()
-        configured_sources = sources if sources is not None else get_openviking_config().sources.sessions
+        configured_sources = (
+            sources if sources is not None else get_openviking_config().sources.sessions
+        )
         active_sources = [source for source in configured_sources if source.enabled]
 
         results: List[Dict[str, Any]] = []

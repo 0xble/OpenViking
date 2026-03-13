@@ -3,10 +3,11 @@
 
 """Tests for session endpoints."""
 
+import json
+
 import httpx
 
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.session.user_id import UserIdentifier
 
 
 async def test_create_session(client: httpx.AsyncClient):
@@ -143,6 +144,7 @@ async def test_compress_session(client: httpx.AsyncClient):
     resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+    assert resp.json()["result"]["stats"]["total_turns"] == 1
 
 
 async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, service, monkeypatch):
@@ -206,6 +208,154 @@ async def test_import_session_log(client: httpx.AsyncClient, service, tmp_path):
     session = await service.sessions.get("codex-import-123", ctx)
     assert len(session.messages) == 2
     assert session.messages[0].content == "hello"
+
+
+async def test_get_imported_session_by_raw_source_id(client: httpx.AsyncClient, tmp_path):
+    raw = tmp_path / "codex-raw-get.jsonl"
+    raw.write_text(
+        "\n".join(
+            [
+                '{"type":"session_meta","payload":{"id":"import-raw-123","cwd":"/tmp/project"}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:01Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"world"}]}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import_resp = await client.post(
+        "/api/v1/sessions/import",
+        json={"adapter": "codex", "path": str(raw), "build_index": False},
+    )
+    assert import_resp.status_code == 200
+
+    resp = await client.get("/api/v1/sessions/import-raw-123")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["session_id"] == "codex-import-raw-123"
+    assert body["result"]["message_count"] == 2
+
+
+async def test_imported_session_creates_source_alias_index(
+    client: httpx.AsyncClient, service, tmp_path
+):
+    raw = tmp_path / "codex-alias-index.jsonl"
+    raw.write_text(
+        "\n".join(
+            [
+                '{"type":"session_meta","payload":{"id":"alias-index-123","cwd":"/tmp/project"}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:01Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"world"}]}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import_resp = await client.post(
+        "/api/v1/sessions/import",
+        json={"adapter": "codex", "path": str(raw), "build_index": False},
+    )
+    assert import_resp.status_code == 200
+
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    alias_uri = service.sessions._source_alias_uri("alias-index-123", ctx)
+    alias_payload = json.loads(await service.sessions._viking_fs.read_file(alias_uri, ctx=ctx))
+    assert alias_payload["source_session_id"] == "alias-index-123"
+    assert alias_payload["session_id"] == "codex-alias-index-123"
+    assert alias_payload["adapter"] == "codex"
+
+    list_resp = await client.get("/api/v1/sessions")
+    assert list_resp.status_code == 200
+    listed_ids = {entry["session_id"] for entry in list_resp.json()["result"]}
+    assert ".aliases" not in listed_ids
+
+
+async def test_raw_source_lookup_backfills_missing_alias_index(
+    client: httpx.AsyncClient, service, monkeypatch, tmp_path
+):
+    raw = tmp_path / "codex-alias-backfill.jsonl"
+    raw.write_text(
+        "\n".join(
+            [
+                '{"type":"session_meta","payload":{"id":"alias-backfill-123","cwd":"/tmp/project"}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:01Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"world"}]}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import_resp = await client.post(
+        "/api/v1/sessions/import",
+        json={"adapter": "codex", "path": str(raw), "build_index": False},
+    )
+    assert import_resp.status_code == 200
+
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    alias_uri = service.sessions._source_alias_uri("alias-backfill-123", ctx)
+    await service.sessions._viking_fs.rm(alias_uri, ctx=ctx)
+
+    original_ls = service.sessions._viking_fs.ls
+    observed_node_limits: list[int] = []
+
+    async def recording_ls(uri: str, *args, **kwargs):
+        observed_node_limits.append(kwargs.get("node_limit"))
+        return await original_ls(uri, *args, **kwargs)
+
+    monkeypatch.setattr(service.sessions._viking_fs, "ls", recording_ls)
+
+    resp = await client.get("/api/v1/sessions/alias-backfill-123")
+    assert resp.status_code == 200
+    assert resp.json()["result"]["session_id"] == "codex-alias-backfill-123"
+    assert 1_000_000 in observed_node_limits
+
+    alias_payload = json.loads(await service.sessions._viking_fs.read_file(alias_uri, ctx=ctx))
+    assert alias_payload["session_id"] == "codex-alias-backfill-123"
+
+
+async def test_add_message_by_raw_source_id_reuses_imported_session(
+    client: httpx.AsyncClient, service, tmp_path
+):
+    raw = tmp_path / "codex-raw-add.jsonl"
+    raw.write_text(
+        "\n".join(
+            [
+                '{"type":"session_meta","payload":{"id":"import-raw-add-123","cwd":"/tmp/project"}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:01Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"world"}]}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    import_resp = await client.post(
+        "/api/v1/sessions/import",
+        json={"adapter": "codex", "path": str(raw), "build_index": False},
+    )
+    assert import_resp.status_code == 200
+
+    add_resp = await client.post(
+        "/api/v1/sessions/import-raw-add-123/messages",
+        json={"role": "user", "content": "follow-up"},
+    )
+    assert add_resp.status_code == 200
+    add_body = add_resp.json()
+    assert add_body["status"] == "ok"
+    assert add_body["result"]["session_id"] == "codex-import-raw-add-123"
+    assert add_body["result"]["message_count"] == 3
+
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    canonical_session = await service.sessions.get("import-raw-add-123", ctx)
+    assert canonical_session.session_id == "codex-import-raw-add-123"
+    assert len(canonical_session.messages) == 3
+
+    literal_session = service.sessions.session(ctx, "import-raw-add-123")
+    assert not await literal_session.exists()
 
 
 async def test_import_session_indexes_as_resource(client: httpx.AsyncClient, monkeypatch, tmp_path):
@@ -280,3 +430,92 @@ async def test_import_session_log_skips_hook_only_claude(client: httpx.AsyncClie
     assert body["result"]["status"] == "skipped"
     assert body["result"]["session_id"] == "claude-claude-empty"
     assert body["result"]["reason"] == "no normalizable messages"
+
+
+async def test_import_session_log_skips_index_for_low_signal_first_prompt(
+    client: httpx.AsyncClient, service, monkeypatch, tmp_path
+):
+    raw = tmp_path / "codex-low-signal.jsonl"
+    raw.write_text(
+        "\n".join(
+            [
+                '{"type":"session_meta","payload":{"id":"low-signal-123","cwd":"/tmp/project"}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Tell me what model you are"}]}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:01Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I am a model."}]}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    vectorized = {"called": False}
+
+    async def fake_vectorize(*args, **kwargs):
+        vectorized["called"] = True
+
+    monkeypatch.setattr("openviking.session.session.vectorize_directory_meta", fake_vectorize)
+
+    resp = await client.post(
+        "/api/v1/sessions/import",
+        json={
+            "adapter": "codex",
+            "path": str(raw),
+            "build_index": True,
+            "preserve_original": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["status"] == "imported"
+    assert body["result"]["indexed"] is False
+    assert body["result"]["index_skip_category"] == "model-check"
+    assert body["result"]["index_skip_reason"] == "low-signal first user prompt (model-check)"
+    assert vectorized["called"] is False
+
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
+    source_uri = "viking://session/test_user/codex-low-signal-123/.source.json"
+    source_payload = json.loads(await service.sessions._viking_fs.read_file(source_uri, ctx=ctx))
+    assert source_payload["index_eligible"] is False
+    assert source_payload["index_skip_category"] == "model-check"
+
+
+async def test_import_session_log_indexes_when_real_followup_exists(
+    client: httpx.AsyncClient, monkeypatch, tmp_path
+):
+    raw = tmp_path / "codex-followup-index.jsonl"
+    raw.write_text(
+        "\n".join(
+            [
+                '{"type":"session_meta","payload":{"id":"followup-123","cwd":"/tmp/project"}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:01Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hello"}]}}',
+                '{"type":"response_item","timestamp":"2026-03-09T12:00:02Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Can you walk me through why my Redis cache is serving stale data after deploys?"}]}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    vectorized = {"called": False}
+
+    async def fake_vectorize(*args, **kwargs):
+        vectorized["called"] = True
+
+    monkeypatch.setattr("openviking.session.session.vectorize_directory_meta", fake_vectorize)
+
+    resp = await client.post(
+        "/api/v1/sessions/import",
+        json={
+            "adapter": "codex",
+            "path": str(raw),
+            "build_index": True,
+            "preserve_original": True,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["status"] == "imported"
+    assert body["result"]["indexed"] is True
+    assert vectorized["called"] is True

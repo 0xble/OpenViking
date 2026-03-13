@@ -165,7 +165,7 @@ async def import_session(
         preserve_original=request.preserve_original,
         overwrite=request.overwrite,
     )
-    if request.wait and request.build_index and result.get("status") == "imported":
+    if request.wait and result.get("status") == "imported" and result.get("indexed"):
         result["queue_status"] = await service.resources.wait_processed(timeout=request.timeout)
     return Response(status="ok", result=result)
 
@@ -347,7 +347,8 @@ async def add_message(
     If both `content` and `parts` are provided, `parts` takes precedence.
     """
     service = get_service()
-    session = service.sessions.session(_ctx, session_id)
+    resolved_session_id = await service.sessions.resolve_existing_session_id(session_id, _ctx)
+    session = service.sessions.session(_ctx, resolved_session_id or session_id)
     await session.load()
 
     if request.parts is not None:
@@ -359,7 +360,7 @@ async def add_message(
     return Response(
         status="ok",
         result={
-            "session_id": session_id,
+            "session_id": session.session_id,
             "message_count": len(session.messages),
         },
     )

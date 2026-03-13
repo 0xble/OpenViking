@@ -156,3 +156,188 @@ def test_normalize_claude_requires_exact_timestamps(tmp_path):
 
     with pytest.raises(ValueError, match="Missing exact timestamp"):
         normalize_session_log("claude", raw)
+
+
+def test_normalize_session_marks_low_signal_greeting_as_not_index_eligible(tmp_path):
+    raw = tmp_path / "codex-hi.jsonl"
+    _write_jsonl(
+        raw,
+        [
+            {
+                "type": "session_meta",
+                "payload": {"id": "hi-only", "cwd": "/tmp/project", "cli_version": "1.0.0"},
+            },
+            {
+                "type": "response_item",
+                "timestamp": "2026-03-09T12:00:00Z",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Hi!!!"}],
+                },
+            },
+            {
+                "type": "response_item",
+                "timestamp": "2026-03-09T12:00:01Z",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hello"}],
+                },
+            },
+        ],
+    )
+
+    result = normalize_session_log("codex", raw)
+
+    assert result.metadata["first_user_prompt"] == "Hi!!!"
+    assert result.metadata["index_eligible"] is False
+    assert result.metadata["index_skip_category"] == "greeting"
+    assert result.metadata["index_skip_reason"] == "low-signal first user prompt (greeting)"
+
+
+def test_normalize_session_keeps_indexing_when_trivial_opener_has_real_followup(tmp_path):
+    raw = tmp_path / "codex-hi-followup.jsonl"
+    _write_jsonl(
+        raw,
+        [
+            {
+                "type": "session_meta",
+                "payload": {
+                    "id": "hi-followup",
+                    "cwd": "/tmp/project",
+                    "cli_version": "1.0.0",
+                },
+            },
+            {
+                "type": "response_item",
+                "timestamp": "2026-03-09T12:00:00Z",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hi"}],
+                },
+            },
+            {
+                "type": "response_item",
+                "timestamp": "2026-03-09T12:00:01Z",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hey"}],
+                },
+            },
+            {
+                "type": "response_item",
+                "timestamp": "2026-03-09T12:00:02Z",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Can you explain why my postgres migration is deadlocking in CI?",
+                        }
+                    ],
+                },
+            },
+        ],
+    )
+
+    result = normalize_session_log("codex", raw)
+
+    assert result.metadata["index_eligible"] is True
+    assert "index_skip_reason" not in result.metadata
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected_category"),
+    [
+        ("hello!!!", "greeting"),
+        ("pls hello", "greeting"),
+        ("this is a test", "test"),
+        ("just testing", "test"),
+        ("smoke test", "test"),
+        ("tell me a short bedtime story", "story"),
+        ("make up a story", "story"),
+        ("please tell me what model you are", "model-check"),
+        ("what model are you running right now", "model-check"),
+        ("who are you", "identity-check"),
+    ],
+)
+def test_normalize_session_skips_expected_low_signal_variants(tmp_path, prompt, expected_category):
+    raw = tmp_path / "codex-low-signal-variants.jsonl"
+    _write_jsonl(
+        raw,
+        [
+            {"type": "session_meta", "payload": {"id": "variant-check", "cwd": "/tmp/project"}},
+            {
+                "type": "response_item",
+                "timestamp": "2026-03-09T12:00:00Z",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}],
+                },
+            },
+            {
+                "type": "response_item",
+                "timestamp": "2026-03-09T12:00:01Z",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok"}],
+                },
+            },
+        ],
+    )
+
+    result = normalize_session_log("codex", raw)
+
+    assert result.metadata["index_eligible"] is False
+    assert result.metadata["index_skip_category"] == expected_category
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "hello can you debug this stack trace for me",
+        "this is a test of my webhook parser and I need help understanding why it fails",
+        "what model should I use for embedding restaurant menus",
+        "tell me a story about raft leader election tradeoffs",
+        "who are you working for on this incident response timeline",
+    ],
+)
+def test_normalize_session_does_not_skip_substantive_prompts_with_overlapping_words(
+    tmp_path, prompt
+):
+    raw = tmp_path / "codex-substantive-overlap.jsonl"
+    _write_jsonl(
+        raw,
+        [
+            {"type": "session_meta", "payload": {"id": "overlap-check", "cwd": "/tmp/project"}},
+            {
+                "type": "response_item",
+                "timestamp": "2026-03-09T12:00:00Z",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": prompt}],
+                },
+            },
+            {
+                "type": "response_item",
+                "timestamp": "2026-03-09T12:00:01Z",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok"}],
+                },
+            },
+        ],
+    )
+
+    result = normalize_session_log("codex", raw)
+
+    assert result.metadata["index_eligible"] is True
+    assert "index_skip_reason" not in result.metadata
