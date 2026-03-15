@@ -371,8 +371,8 @@ enum Commands {
     },
     /// Interactive TUI file explorer
     Tui {
-        /// Viking URI to start browsing (default: viking://)
-        #[arg(default_value = "viking://")]
+        /// Viking URI to start browsing (default: /)
+        #[arg(default_value = "/")]
         uri: String,
     },
     /// Chat with vikingbot agent
@@ -383,6 +383,9 @@ enum Commands {
         /// Session ID (defaults to machine unique ID)
         #[arg(short, long)]
         session: Option<String>,
+        /// Sender ID
+        #[arg(short, long, default_value = "user")]
+        sender: String,
         /// Stream the response (default: true)
         #[arg(long, default_value_t = true)]
         stream: bool,
@@ -424,6 +427,10 @@ enum ObserverCommands {
     Vikingdb,
     /// Get VLM status
     Vlm,
+    /// Get transaction system status
+    Transaction,
+    /// Get retrieval quality metrics
+    Retrieval,
     /// Get overall system status
     System,
 }
@@ -669,6 +676,7 @@ async fn main() {
         Commands::Chat {
             message,
             session,
+            sender,
             stream,
             no_format,
             no_history,
@@ -679,7 +687,7 @@ async fn main() {
                     .unwrap_or_else(|_| "http://localhost:1933/bot/v1".to_string()),
                 api_key: std::env::var("VIKINGBOT_API_KEY").ok(),
                 session: session_id,
-                user: "cli_user".to_string(),
+                sender,
                 message,
                 stream,
                 no_format,
@@ -909,6 +917,12 @@ async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<()> {
         }
         ObserverCommands::Vlm => {
             commands::observer::vlm(&client, ctx.output_format, ctx.compact).await
+        }
+        ObserverCommands::Transaction => {
+            commands::observer::transaction(&client, ctx.output_format, ctx.compact).await
+        }
+        ObserverCommands::Retrieval => {
+            commands::observer::retrieval(&client, ctx.output_format, ctx.compact).await
         }
         ObserverCommands::System => {
             commands::observer::system(&client, ctx.output_format, ctx.compact).await

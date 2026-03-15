@@ -23,7 +23,6 @@ from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.pyagfs.exceptions import AGFSHTTPError
-from openviking.pyagfs.helpers import cp as agfs_cp
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
@@ -361,22 +360,6 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         return self.agfs.stat(path)
 
-    async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
-        """Check if a URI exists.
-
-        Args:
-            uri: Viking URI
-            ctx: Request context
-
-        Returns:
-            bool: True if the URI exists, False otherwise
-        """
-        try:
-            await self.stat(uri, ctx=ctx)
-            return True
-        except Exception:
-            return False
-
     async def glob(
         self,
         pattern: str,
@@ -661,9 +644,14 @@ class VikingFS:
             target_directories=[target_uri] if target_uri else None,
         )
 
+        real_ctx = self._ctx_or_default(ctx)
+        logger.debug(
+            f"[VikingFS.find] Calling retriever.retrieve with ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
+        )
+
         result = await retriever.retrieve(
             typed_query,
-            ctx=self._ctx_or_default(ctx),
+            ctx=real_ctx,
             limit=limit,
             score_threshold=score_threshold,
             scope_dsl=filter,
@@ -788,9 +776,13 @@ class VikingFS:
         )
 
         async def _execute(tq: TypedQuery):
+            real_ctx = self._ctx_or_default(ctx)
+            logger.debug(
+                f"[VikingFS.search._execute] Calling retriever.retrieve with ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
+            )
             return await retriever.retrieve(
                 tq,
-                ctx=self._ctx_or_default(ctx),
+                ctx=real_ctx,
                 limit=limit,
                 score_threshold=score_threshold,
                 scope_dsl=filter,
@@ -1149,9 +1141,9 @@ class VikingFS:
         for uri in uris:
             try:
                 records = await vector_store.get_context_by_uri(
-                    account_id=self._ctx_or_default(ctx).account_id,
                     uri=uri,
                     limit=1,
+                    ctx=self._ctx_or_default(ctx),
                 )
 
                 if not records or "id" not in records[0]:
@@ -1486,29 +1478,6 @@ class VikingFS:
         self.agfs.write(to_path, content)
         self.agfs.rm(from_path)
         await self._update_vector_store_uris([from_uri], from_uri, to_uri, ctx=ctx)
-
-    async def copy_directory(
-        self,
-        from_uri: str,
-        to_uri: str,
-        ctx: Optional[RequestContext] = None,
-    ) -> None:
-        """Copy directory recursively.
-
-        Args:
-            from_uri: Source directory URI
-            to_uri: Destination directory URI
-            ctx: Request context
-        """
-        self._ensure_access(from_uri, ctx)
-        self._ensure_access(to_uri, ctx)
-
-        from_path = self._uri_to_path(from_uri, ctx=ctx)
-        to_path = self._uri_to_path(to_uri, ctx=ctx)
-
-        await self._ensure_parent_dirs(to_path)
-
-        await asyncio.to_thread(agfs_cp, self.agfs, from_path, to_path, recursive=True)
 
     # ========== Temp File Operations (backward compatible) ==========
 

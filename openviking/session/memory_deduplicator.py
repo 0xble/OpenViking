@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 from openviking.core.context import Context
 from openviking.models.embedder.base import EmbedResult
 from openviking.prompts import render_prompt
+from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -88,10 +89,11 @@ class MemoryDeduplicator:
     async def deduplicate(
         self,
         candidate: CandidateMemory,
+        ctx: RequestContext,
     ) -> DedupResult:
         """Decide how to handle a candidate memory."""
         # Step 1: Vector pre-filtering - find similar memories in same category
-        similar_memories = await self._find_similar_memories(candidate)
+        similar_memories = await self._find_similar_memories(candidate, ctx=ctx)
 
         if not similar_memories:
             # No similar memories, create directly
@@ -117,19 +119,9 @@ class MemoryDeduplicator:
     async def _find_similar_memories(
         self,
         candidate: CandidateMemory,
-        user_temp_uri: Optional[str] = None,
-        agent_temp_uri: Optional[str] = None,
+        ctx: RequestContext,
     ) -> List[Context]:
-        """Find similar existing memories using vector search.
-
-        Args:
-            candidate: Candidate memory
-            user_temp_uri: Temp user URI (for COW pattern)
-            agent_temp_uri: Temp agent URI (for COW pattern)
-
-        Returns:
-            List of similar memories with temp URIs (if temp URIs provided)
-        """
+        """Find similar existing memories using vector search."""
         if not self.embedder:
             return []
 
@@ -138,11 +130,9 @@ class MemoryDeduplicator:
         embed_result: EmbedResult = self.embedder.embed(query_text)
         query_vector = embed_result.dense_vector
 
-        # Search target URI (not temp URI) because vectors are stored for target URIs
         category_uri_prefix = self._category_uri_prefix(candidate.category.value, candidate.user)
 
         owner = candidate.user
-        account_id = owner.account_id if hasattr(owner, "account_id") else "default"
         owner_space = None
         if owner and hasattr(owner, "user_space_name"):
             owner_space = (
@@ -151,9 +141,8 @@ class MemoryDeduplicator:
                 else owner.user_space_name()
             )
         logger.debug(
-            "Dedup prefilter candidate category=%s account=%s owner_space=%s uri_prefix=%s",
+            "Dedup prefilter candidate category=%s owner_space=%s uri_prefix=%s",
             candidate.category.value,
-            account_id,
             owner_space,
             category_uri_prefix,
         )
@@ -161,11 +150,11 @@ class MemoryDeduplicator:
         try:
             # Search with memory-scope filter.
             results = await self.vikingdb.search_similar_memories(
-                account_id=account_id,
                 owner_space=owner_space,
                 category_uri_prefix=category_uri_prefix,
                 query_vector=query_vector,
                 limit=5,
+                ctx=ctx,
             )
 
             # Filter by similarity threshold
@@ -189,25 +178,6 @@ class MemoryDeduplicator:
                     if context:
                         # Keep retrieval score for later destructive-action guardrails.
                         context.meta = {**(context.meta or {}), "_dedup_score": score}
-
-                        # Convert target URI to temp URI (for COW pattern)
-                        if user_temp_uri or agent_temp_uri:
-                            original_uri = context.uri
-                            # Convert user URI
-                            if user_temp_uri and original_uri.startswith("viking://user/"):
-                                parts = original_uri.split("/")
-                                if len(parts) >= 5:
-                                    rest = "/".join(parts[4:])
-                                    context.uri = f"{user_temp_uri}/{rest}"
-                                    logger.debug(f"Converted URI: {original_uri} -> {context.uri}")
-                            # Convert agent URI
-                            elif agent_temp_uri and original_uri.startswith("viking://agent/"):
-                                parts = original_uri.split("/")
-                                if len(parts) >= 5:
-                                    rest = "/".join(parts[4:])
-                                    context.uri = f"{agent_temp_uri}/{rest}"
-                                    logger.debug(f"Converted URI: {original_uri} -> {context.uri}")
-
                         similar.append(context)
             logger.debug("Dedup similar memories after threshold=%d", len(similar))
             return similar
