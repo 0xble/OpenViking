@@ -6,6 +6,15 @@ OpenViking - An Agent-native context database
 Data in, Context out.
 """
 
+from openviking.async_client import AsyncOpenViking
+from openviking.session import Session
+from openviking.sync_client import SyncOpenViking
+from openviking_cli.client.http import AsyncHTTPClient
+from openviking_cli.client.sync_http import SyncHTTPClient
+from openviking_cli.session.user_id import UserIdentifier
+
+OpenViking = SyncOpenViking
+FORK_VERSION_SUFFIX = "-0xble.0.1.0"
 try:
     from ._version import version as __version__
 except ImportError:
@@ -15,6 +24,9 @@ except ImportError:
         __version__ = version("openviking")
     except ImportError:
         __version__ = "0.0.0+unknown"
+
+if FORK_VERSION_SUFFIX not in __version__:
+    __version__ = f"{__version__}{FORK_VERSION_SUFFIX}"
 
 try:
     from openviking.pyagfs import AGFSClient

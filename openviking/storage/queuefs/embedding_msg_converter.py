@@ -10,6 +10,7 @@ to EmbeddingMsg objects for asynchronous vector processing.
 from openviking.core.context import Context, ContextLevel
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.source_utils import infer_source
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -28,6 +29,7 @@ class EmbeddingMsgConverter:
             return None
 
         context_data = context.to_dict()
+        uri = context_data.get("uri", "")
 
         # Backfill tenant fields for legacy writers that only set user/uri.
         if not context_data.get("account_id"):
@@ -35,7 +37,6 @@ class EmbeddingMsgConverter:
             context_data["account_id"] = user.get("account_id", "default")
         if not context_data.get("owner_space"):
             user = context_data.get("user") or {}
-            uri = context_data.get("uri", "")
             account = user.get("account_id", "default")
             user_id = user.get("user_id", "default")
             agent_id = user.get("agent_id", "default")
@@ -49,8 +50,10 @@ class EmbeddingMsgConverter:
             else:
                 context_data["owner_space"] = ""
 
+        if not context_data.get("source"):
+            context_data["source"] = infer_source(uri, context_data.get("context_type"))
+
         # Derive level field for hierarchical retrieval.
-        uri = context_data.get("uri", "")
         context_level = getattr(context, "level", None)
         if context_level is not None:
             resolved_level = context_level

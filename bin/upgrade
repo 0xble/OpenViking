@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+install_link="$HOME/.local/bin/ov"
+install_path="$(python3 - <<'PY' "$install_link"
+import os
+import sys
+
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
+
+cd "$repo_root"
+cargo build --release -p ov_cli
+mkdir -p "$(dirname "$install_path")"
+cp target/release/ov "$install_path"
+
+echo "installed ov from $(git describe --tags --always 2>/dev/null || git rev-parse --short HEAD)"
+"$install_link" --version

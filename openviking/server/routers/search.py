@@ -5,7 +5,7 @@
 import math
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from openviking.server.auth import get_request_context
@@ -15,6 +15,9 @@ from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 
+
+
+from openviking.utils.search_filters import merge_time_filter
 
 def _sanitize_floats(obj: Any) -> Any:
     """Recursively replace inf/nan with 0.0 to ensure JSON compliance."""
@@ -42,6 +45,11 @@ class FindRequest(BaseModel):
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
+    after: Optional[str] = None
+    before: Optional[str] = None
+    since: Optional[str] = None
+    until: Optional[str] = None
+    time_field: Optional[str] = None
     telemetry: TelemetryRequest = False
 
 
@@ -56,6 +64,11 @@ class SearchRequest(BaseModel):
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
+    after: Optional[str] = None
+    before: Optional[str] = None
+    since: Optional[str] = None
+    until: Optional[str] = None
+    time_field: Optional[str] = None
     telemetry: TelemetryRequest = False
 
 
@@ -86,6 +99,15 @@ async def find(
     """Semantic search without session context."""
     service = get_service()
     actual_limit = request.node_limit if request.node_limit is not None else request.limit
+    try:
+        effective_filter = merge_time_filter(
+            request.filter,
+            since=request.after or request.since,
+            until=request.before or request.until,
+            time_field=request.time_field,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     execution = await run_operation(
         operation="search.find",
         telemetry=request.telemetry,
@@ -95,7 +117,7 @@ async def find(
             target_uri=request.target_uri,
             limit=actual_limit,
             score_threshold=request.score_threshold,
-            filter=request.filter,
+            filter=effective_filter,
         ),
     )
     result = execution.result
@@ -116,6 +138,15 @@ async def search(
 ):
     """Semantic search with optional session context."""
     service = get_service()
+    try:
+        effective_filter = merge_time_filter(
+            request.filter,
+            since=request.after or request.since,
+            until=request.before or request.until,
+            time_field=request.time_field,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     async def _search():
         session = None
@@ -130,7 +161,7 @@ async def search(
             session=session,
             limit=actual_limit,
             score_threshold=request.score_threshold,
-            filter=request.filter,
+            filter=effective_filter,
         )
 
     execution = await run_operation(
@@ -176,6 +207,9 @@ async def glob(
     """File pattern matching."""
     service = get_service()
     result = await service.fs.glob(
-        request.pattern, ctx=_ctx, uri=request.uri, node_limit=request.node_limit
+        request.pattern,
+        ctx=_ctx,
+        uri=request.uri,
+        node_limit=request.node_limit,
     )
     return Response(status="ok", result=result)

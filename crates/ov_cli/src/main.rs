@@ -366,6 +366,9 @@ enum Commands {
         /// Target URI
         #[arg(short, long, default_value = "")]
         uri: String,
+        /// Restrict retrieval to one canonical source family, e.g. sessions/documents/email
+        #[arg(long)]
+        source: Option<String>,
         /// Maximum number of results
         #[arg(
             short = 'n',
@@ -377,6 +380,18 @@ enum Commands {
         /// Score threshold
         #[arg(short, long)]
         threshold: Option<f64>,
+        /// Only include results updated after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
+        #[arg(long, alias = "since")]
+        after: Option<String>,
+        /// Only include results updated before this time (e.g. 24h, 2026-03-15, ISO-8601)
+        #[arg(long, alias = "until")]
+        before: Option<String>,
+        /// Results from within the last duration (e.g. 48h, 7d, 2w). Shorthand for --after
+        #[arg(long, conflicts_with = "after")]
+        within: Option<String>,
+        /// Results from a single day (e.g. 2026-03-15)
+        #[arg(long, conflicts_with_all = ["after", "before", "within"])]
+        on: Option<String>,
     },
     /// Run context-aware retrieval
     Search {
@@ -385,6 +400,9 @@ enum Commands {
         /// Target URI
         #[arg(short, long, default_value = "")]
         uri: String,
+        /// Restrict retrieval to one canonical source family, e.g. sessions/documents/email
+        #[arg(long)]
+        source: Option<String>,
         /// Session ID for context-aware search
         #[arg(long)]
         session_id: Option<String>,
@@ -399,6 +417,18 @@ enum Commands {
         /// Score threshold
         #[arg(short, long)]
         threshold: Option<f64>,
+        /// Only include results updated after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
+        #[arg(long, alias = "since")]
+        after: Option<String>,
+        /// Only include results updated before this time (e.g. 24h, 2026-03-15, ISO-8601)
+        #[arg(long, alias = "until")]
+        before: Option<String>,
+        /// Results from within the last duration (e.g. 48h, 7d, 2w). Shorthand for --after
+        #[arg(long, conflicts_with = "after")]
+        within: Option<String>,
+        /// Results from a single day (e.g. 2026-03-15)
+        #[arg(long, conflicts_with_all = ["after", "before", "within"])]
+        on: Option<String>,
     },
     /// Run content pattern search
     Grep {
@@ -529,21 +559,6 @@ enum SessionCommands {
     Get {
         /// Session ID
         session_id: String,
-    },
-    /// Get full merged session context
-    GetSessionContext {
-        /// Session ID
-        session_id: String,
-        /// Token budget for latest archive overview inclusion
-        #[arg(long = "token-budget", default_value = "128000")]
-        token_budget: i32,
-    },
-    /// Get one completed archive for a session
-    GetSessionArchive {
-        /// Session ID
-        session_id: String,
-        /// Archive ID
-        archive_id: String,
     },
     /// Delete a session
     Delete {
@@ -794,16 +809,35 @@ async fn main() {
         Commands::Find {
             query,
             uri,
+            source,
             node_limit,
             threshold,
-        } => handle_find(query, uri, node_limit, threshold, ctx).await,
+            after,
+            before,
+            within,
+            on,
+        } => {
+            let (since, until) = resolve_time_flags(after, before, within, on);
+            handle_find(query, uri, source, node_limit, threshold, since, until, ctx).await
+        }
         Commands::Search {
             query,
             uri,
+            source,
             session_id,
             node_limit,
             threshold,
-        } => handle_search(query, uri, session_id, node_limit, threshold, ctx).await,
+            after,
+            before,
+            within,
+            on,
+        } => {
+            let (since, until) = resolve_time_flags(after, before, within, on);
+            handle_search(
+                query, uri, source, session_id, node_limit, threshold, since, until, ctx,
+            )
+            .await
+        }
         Commands::Grep {
             uri,
             exclude_uri,
@@ -1060,32 +1094,6 @@ async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
             commands::session::get_session(&client, &session_id, ctx.output_format, ctx.compact)
                 .await
         }
-        SessionCommands::GetSessionContext {
-            session_id,
-            token_budget,
-        } => {
-            commands::session::get_session_context(
-                &client,
-                &session_id,
-                token_budget,
-                ctx.output_format,
-                ctx.compact,
-            )
-            .await
-        }
-        SessionCommands::GetSessionArchive {
-            session_id,
-            archive_id,
-        } => {
-            commands::session::get_session_archive(
-                &client,
-                &session_id,
-                &archive_id,
-                ctx.output_format,
-                ctx.compact,
-            )
-            .await
-        }
         SessionCommands::Delete { session_id } => {
             commands::session::delete_session(&client, &session_id, ctx.output_format, ctx.compact)
                 .await
@@ -1292,13 +1300,25 @@ async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<
 async fn handle_find(
     query: String,
     uri: String,
+    source: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
+    since: Option<String>,
+    until: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(s) = &source {
+        params.push(format!("--source {}", s));
+    }
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
+    }
+    if let Some(s) = &since {
+        params.push(format!("--after {}", s));
+    }
+    if let Some(u) = &until {
+        params.push(format!("--before {}", u));
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
@@ -1309,6 +1329,9 @@ async fn handle_find(
         &uri,
         node_limit,
         threshold,
+        source.as_deref(),
+        since.as_deref(),
+        until.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
@@ -1318,17 +1341,29 @@ async fn handle_find(
 async fn handle_search(
     query: String,
     uri: String,
+    source: Option<String>,
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
+    since: Option<String>,
+    until: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(s) = &source {
+        params.push(format!("--source {}", s));
+    }
     if let Some(s) = &session_id {
         params.push(format!("--session-id {}", s));
     }
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
+    }
+    if let Some(s) = &since {
+        params.push(format!("--after {}", s));
+    }
+    if let Some(u) = &until {
+        params.push(format!("--before {}", u));
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
@@ -1340,10 +1375,27 @@ async fn handle_search(
         session_id,
         node_limit,
         threshold,
+        source.as_deref(),
+        since.as_deref(),
+        until.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
     .await
+}
+
+/// Resolve --after/--before/--within/--on into (since, until) for the API.
+fn resolve_time_flags(
+    after: Option<String>,
+    before: Option<String>,
+    within: Option<String>,
+    on: Option<String>,
+) -> (Option<String>, Option<String>) {
+    if let Some(date) = on {
+        return (Some(date.clone()), Some(date));
+    }
+    let since = within.or(after);
+    (since, before)
 }
 
 /// Print command with specified parameters for debugging
@@ -1522,10 +1574,10 @@ async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: CliCont
 
 async fn handle_health(ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-
-    // Reuse the system health command
-    let _ = commands::system::health(&client, ctx.output_format, ctx.compact).await?;
-
+    let is_healthy = commands::system::health(&client, ctx.output_format, ctx.compact).await?;
+    if !is_healthy {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
@@ -1533,7 +1585,6 @@ async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     tui::run_tui(client, &uri).await
 }
-
 #[cfg(test)]
 mod tests {
     use super::{Cli, CliContext};

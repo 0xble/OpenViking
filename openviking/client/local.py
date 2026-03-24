@@ -14,6 +14,7 @@ from openviking.telemetry.execution import (
     attach_telemetry_payload,
     run_with_telemetry,
 )
+from openviking.utils.search_filters import merge_time_filter
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
@@ -264,8 +265,14 @@ class LocalClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
+        resolved_filter = merge_time_filter(
+            filter, since=since, until=until, time_field=time_field
+        )
         execution = await run_with_telemetry(
             operation="search.find",
             telemetry=telemetry,
@@ -275,7 +282,7 @@ class LocalClient(BaseClient):
                 target_uri=target_uri,
                 limit=limit,
                 score_threshold=score_threshold,
-                filter=filter,
+                filter=resolved_filter,
             ),
         )
         return attach_telemetry_payload(
@@ -292,6 +299,9 @@ class LocalClient(BaseClient):
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
 
@@ -300,6 +310,9 @@ class LocalClient(BaseClient):
             if session_id:
                 session = self._service.sessions.session(self._ctx, session_id)
                 await session.load()
+            resolved_filter = merge_time_filter(
+                filter, since=since, until=until, time_field=time_field
+            )
             return await self._service.search.search(
                 query=query,
                 ctx=self._ctx,
@@ -307,7 +320,7 @@ class LocalClient(BaseClient):
                 session=session,
                 limit=limit,
                 score_threshold=score_threshold,
-                filter=filter,
+                filter=resolved_filter,
             )
 
         execution = await run_with_telemetry(

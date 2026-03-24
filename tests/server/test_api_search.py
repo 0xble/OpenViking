@@ -3,6 +3,8 @@
 
 """Tests for search endpoints: find, search, grep, glob."""
 
+from datetime import datetime, timezone
+
 import httpx
 import pytest
 
@@ -16,6 +18,8 @@ def fake_query_embedder(service):
             return EmbedResult(dense_vector=[0.1, 0.2, 0.3])
 
     service.viking_fs.query_embedder = FakeEmbedder()
+
+from openviking.utils.time_utils import parse_iso_datetime
 
 
 async def test_find_basic(client_with_resource):
@@ -65,6 +69,86 @@ async def test_find_no_results(client: httpx.AsyncClient):
     assert resp.json()["status"] == "ok"
 
 
+async def test_find_with_since_compiles_time_range(client: httpx.AsyncClient, service, monkeypatch):
+    captured = {}
+
+    async def fake_find(*, filter=None, **kwargs):
+        captured["filter"] = filter
+        captured["kwargs"] = kwargs
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "since": "2h"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["filter"]["op"] == "time_range"
+    assert captured["filter"]["field"] == "updated_at"
+    gte = parse_iso_datetime(captured["filter"]["gte"])
+    delta = datetime.now(timezone.utc) - gte
+    assert 7_100 <= delta.total_seconds() <= 7_300
+
+
+async def test_find_combines_existing_filter_with_time_range(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
+
+    async def fake_find(*, filter=None, **kwargs):
+        captured["filter"] = filter
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={
+            "query": "sample",
+            "filter": {"op": "must", "field": "kind", "conds": ["email"]},
+            "since": "2026-03-10",
+            "time_field": "created_at",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["filter"] == {
+        "op": "and",
+        "conds": [
+            {"op": "must", "field": "kind", "conds": ["email"]},
+            {
+                "op": "time_range",
+                "field": "created_at",
+                "gte": "2026-03-10T00:00:00.000",
+            },
+        ],
+    }
+
+
+async def test_find_with_invalid_time_returns_422(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "since": "not-a-time"},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]
+
+
+async def test_find_with_inverted_mixed_time_range_returns_422(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "since": "2099-01-01", "until": "2h"},
+    )
+
+    assert resp.status_code == 422
+    assert "earlier than or equal to" in resp.json()["detail"]
+
+
 async def test_search_basic(client_with_resource):
     client, uri = client_with_resource
     resp = await client.post(
@@ -93,7 +177,6 @@ async def test_search_with_session(client_with_resource):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
-
 
 async def test_find_telemetry_metrics(client_with_resource):
     client, _ = client_with_resource
@@ -167,6 +250,31 @@ async def test_find_rejects_events_telemetry_request(client_with_resource):
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
     assert "events" in body["error"]["message"]
+
+
+async def test_search_with_until_compiles_time_range(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    captured = {}
+
+    async def fake_search(*, filter=None, **kwargs):
+        captured["filter"] = filter
+        return {"items": []}
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample", "until": "2026-03-11", "time_field": "created_at"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+    assert captured["filter"] == {
+        "op": "time_range",
+        "field": "created_at",
+        "lte": "2026-03-11T23:59:59.999",
+    }
 
 
 async def test_grep(client_with_resource):
