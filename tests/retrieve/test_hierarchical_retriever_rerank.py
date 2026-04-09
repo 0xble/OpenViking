@@ -182,6 +182,77 @@ class LevelTwoGlobalStorage(DummyStorage):
         return []
 
 
+class ScopedBuriedMatchStorage(DummyStorage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.target_uri = "viking://user/user1/memories/preferences"
+
+    async def search_global_roots_in_tenant(
+        self,
+        ctx,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        limit: int = 10,
+    ):
+        self.global_search_calls.append(
+            {
+                "ctx": ctx,
+                "query_vector": query_vector,
+                "sparse_query_vector": sparse_query_vector,
+                "context_type": context_type,
+                "target_directories": target_directories,
+                "extra_filter": extra_filter,
+                "limit": limit,
+            }
+        )
+        return []
+
+    async def search_children_in_tenant(
+        self,
+        ctx,
+        parent_uri: str,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        limit: int = 10,
+    ):
+        self.child_search_calls.append(
+            {
+                "ctx": ctx,
+                "parent_uri": parent_uri,
+                "query_vector": query_vector,
+                "sparse_query_vector": sparse_query_vector,
+                "context_type": context_type,
+                "target_directories": target_directories,
+                "extra_filter": extra_filter,
+                "limit": limit,
+            }
+        )
+        buried_rank = 69
+        results = []
+        for idx in range(limit):
+            uri = f"{self.target_uri}/mem_{idx:03d}.md"
+            abstract = f"generic memory {idx}"
+            if idx == buried_rank:
+                abstract = "Brian Le prefers long-term maintainability over quick hacks."
+            results.append(
+                {
+                    "uri": uri,
+                    "abstract": abstract,
+                    "_score": 1.0 - (idx / 1000.0),
+                    "level": 2,
+                    "context_type": "memory",
+                    "category": "memory",
+                }
+            )
+        return results
+
+
 class FakeRerankClient:
     def __init__(self, scores):
         self.scores = list(scores)
@@ -366,3 +437,109 @@ async def test_quick_mode_skips_rerank(monkeypatch):
         "viking://resources/file-a",
     ]
     assert fake_client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_retrieve_widens_scoped_rerank_candidate_pool(monkeypatch):
+    rerank_scores = [0.01] * 100
+    rerank_scores[69] = 0.99
+    fake_client = FakeRerankClient(rerank_scores)
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    storage = ScopedBuriedMatchStorage()
+    retriever = HierarchicalRetriever(
+        storage=storage,
+        embedder=DummyEmbedder(),
+        rerank_config=_config(),
+    )
+
+    query = TypedQuery(
+        query="Brian Le prefers long-term maintainability over quick hacks",
+        context_type=ContextType.MEMORY,
+        intent="",
+        target_directories=[storage.target_uri],
+    )
+
+    result = await retriever.retrieve(query, ctx=_ctx(), limit=5, mode=RetrieverMode.THINKING)
+
+    assert storage.child_search_calls[0]["limit"] == 100
+    assert result.matched_contexts[0].uri == f"{storage.target_uri}/mem_069.md"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_prefers_exact_memory_phrase_match(monkeypatch):
+    rerank_scores = [0.01] * 100
+    rerank_scores[2] = 0.99
+    rerank_scores[69] = 0.4
+    fake_client = FakeRerankClient(rerank_scores)
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    storage = ScopedBuriedMatchStorage()
+
+    async def custom_search_children(
+        ctx,
+        parent_uri: str,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        limit: int = 10,
+    ):
+        storage.child_search_calls.append(
+            {
+                "ctx": ctx,
+                "parent_uri": parent_uri,
+                "query_vector": query_vector,
+                "sparse_query_vector": sparse_query_vector,
+                "context_type": context_type,
+                "target_directories": target_directories,
+                "extra_filter": extra_filter,
+                "limit": limit,
+            }
+        )
+        results = []
+        for idx in range(limit):
+            abstract = f"generic memory {idx}"
+            if idx == 2:
+                abstract = (
+                    "Brian prioritizes long-term maintainability and sustainable architecture "
+                    "over quick hacks in his engineering work."
+                )
+            if idx == 69:
+                abstract = "Brian Le prefers long-term maintainability over quick hacks."
+            results.append(
+                {
+                    "uri": f"{storage.target_uri}/mem_{idx:03d}.md",
+                    "abstract": abstract,
+                    "_score": 1.0 - (idx / 1000.0),
+                    "level": 2,
+                    "context_type": "memory",
+                    "category": "memory",
+                }
+            )
+        return results
+
+    storage.search_children_in_tenant = custom_search_children
+    retriever = HierarchicalRetriever(
+        storage=storage,
+        embedder=DummyEmbedder(),
+        rerank_config=_config(),
+    )
+
+    query = TypedQuery(
+        query="Brian Le prefers long-term maintainability over quick hacks",
+        context_type=ContextType.MEMORY,
+        intent="",
+        target_directories=[storage.target_uri],
+    )
+
+    result = await retriever.retrieve(query, ctx=_ctx(), limit=5, mode=RetrieverMode.THINKING)
+
+    assert result.matched_contexts[0].uri == f"{storage.target_uri}/mem_069.md"

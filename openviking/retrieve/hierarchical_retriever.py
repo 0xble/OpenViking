@@ -10,6 +10,7 @@ and rerank-based relevance scoring.
 import heapq
 import logging
 import math
+import re
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -50,6 +51,7 @@ class HierarchicalRetriever:
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     HOTNESS_ALPHA = 0.2  # Weight for hotness score in final ranking (0 = disabled)
+    SCOPED_RERANK_CANDIDATE_FLOOR = 100  # Let rerank see enough scoped children to rescue exact hits
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
     def __init__(
@@ -254,8 +256,11 @@ class HierarchicalRetriever:
         fallback_scores: List[float],
     ) -> List[float]:
         """Return rerank scores or fall back to vector scores."""
-        if not self._rerank_client or not documents:
+        if not documents:
             return fallback_scores
+
+        if not self._rerank_client:
+            return self._apply_exact_match_rescue(query, documents, fallback_scores)
 
         try:
             scores = self._rerank_client.rerank_batch(query, documents)
@@ -263,13 +268,13 @@ class HierarchicalRetriever:
             logger.warning(
                 "[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e
             )
-            return fallback_scores
+            return self._apply_exact_match_rescue(query, documents, fallback_scores)
 
         if not scores or len(scores) != len(documents):
             logger.warning(
                 "[HierarchicalRetriever] Invalid rerank result, fallback to vector scores"
             )
-            return fallback_scores
+            return self._apply_exact_match_rescue(query, documents, fallback_scores)
 
         normalized_scores: List[float] = []
         for score, fallback in zip(scores, fallback_scores, strict=True):
@@ -277,7 +282,33 @@ class HierarchicalRetriever:
                 normalized_scores.append(float(score))
             else:
                 normalized_scores.append(fallback)
-        return normalized_scores
+        return self._apply_exact_match_rescue(query, documents, normalized_scores)
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", text.lower())).strip()
+
+    @classmethod
+    def _apply_exact_match_rescue(
+        cls,
+        query: str,
+        documents: List[str],
+        scores: List[float],
+    ) -> List[float]:
+        query_norm = cls._normalize_text(query)
+        if not query_norm:
+            return scores
+
+        rescued = list(scores)
+        for idx, document in enumerate(documents):
+            document_norm = cls._normalize_text(document)
+            if not document_norm:
+                continue
+            if query_norm == document_norm:
+                rescued[idx] = max(rescued[idx], 1.0)
+            elif len(query_norm) >= 24 and query_norm in document_norm:
+                rescued[idx] = max(rescued[idx], 0.98)
+        return rescued
 
     def _merge_starting_points(
         self,
@@ -347,6 +378,29 @@ class HierarchicalRetriever:
             candidate["_score"] = score
 
         return initial_candidates
+
+    def _child_search_limit(
+        self,
+        *,
+        limit: int,
+        current_uri: str,
+        mode: str,
+        target_dirs: Optional[List[str]],
+    ) -> int:
+        """Choose a child candidate budget.
+
+        Scoped queries need a wider candidate pool so rerank can rescue exact
+        matches that dense retrieval alone may bury inside a large memory folder.
+        """
+        pre_filter_limit = max(limit * 2, 20)
+        if (
+            self._rerank_client
+            and mode == RetrieverMode.THINKING
+            and target_dirs
+            and current_uri in set(target_dirs)
+        ):
+            return max(pre_filter_limit, self.SCOPED_RERANK_CANDIDATE_FLOOR)
+        return pre_filter_limit
 
     async def _recursive_search(
         self,
@@ -418,7 +472,12 @@ class HierarchicalRetriever:
             visited.add(current_uri)
             logger.info(f"[RecursiveSearch] Entering URI: {current_uri}")
 
-            pre_filter_limit = max(limit * 2, 20)
+            pre_filter_limit = self._child_search_limit(
+                limit=limit,
+                current_uri=current_uri,
+                mode=mode,
+                target_dirs=target_dirs,
+            )
 
             results = await vector_proxy.search_children_in_tenant(
                 parent_uri=current_uri,

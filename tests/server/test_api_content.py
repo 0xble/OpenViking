@@ -4,11 +4,12 @@
 """Tests for content endpoints: read, abstract, overview."""
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.server.routers.content import ReindexRequest, reindex
+from openviking.server.routers.content import ReindexRequest, _do_reindex, reindex
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -133,3 +134,63 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
     assert response.status == "ok"
     assert seen["uri"] == "viking://resources/demo/demo-note.md"
     assert seen["ctx"] == ctx
+
+
+@pytest.mark.asyncio
+async def test_do_reindex_memory_uri_queues_semantic_memory(monkeypatch):
+    """Memory reindex must enqueue semantic memory processing, not resource indexing."""
+
+    class FakeLockContext:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    enqueued = []
+
+    class FakeQueue:
+        async def enqueue(self, msg):
+            enqueued.append(msg)
+
+    class FakeQueueManager:
+        SEMANTIC = "Semantic"
+
+        def get_queue(self, name, allow_create=False):
+            assert name == self.SEMANTIC
+            assert allow_create is True
+            return FakeQueue()
+
+    service = SimpleNamespace(
+        viking_fs=SimpleNamespace(_uri_to_path=lambda uri, ctx=None: f"/tmp/{uri}"),
+        resources=SimpleNamespace(
+            summarize=AsyncMock(),
+            build_index=AsyncMock(),
+        ),
+    )
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice", agent_id="default"),
+        role=Role.ADMIN,
+    )
+    uri = "viking://user/alice/memories/preferences"
+
+    monkeypatch.setattr("openviking.storage.queuefs.get_queue_manager", lambda: FakeQueueManager())
+    monkeypatch.setattr("openviking.storage.transaction.get_lock_manager", lambda: object())
+    monkeypatch.setattr("openviking.storage.transaction.LockContext", FakeLockContext)
+
+    result = await _do_reindex(service, uri, regenerate=False, ctx=ctx)
+
+    assert result == {
+        "status": "success",
+        "message": "Queued memory reindex",
+        "uri": uri,
+        "context_type": "memory",
+    }
+    assert len(enqueued) == 1
+    assert enqueued[0].uri == uri
+    assert enqueued[0].context_type == "memory"
+    service.resources.summarize.assert_not_awaited()
+    service.resources.build_index.assert_not_awaited()
