@@ -63,6 +63,8 @@ Supported environment overrides:
 
 - `OPENVIKING_CONFIG_FILE`: alternate `ov.conf` path
 - `OPENVIKING_API_KEY`: API key override
+- `OPENVIKING_ACCOUNT`: account identity, default from `ov.conf`
+- `OPENVIKING_USER`: user identity, default from `ov.conf`
 - `OPENVIKING_AGENT_ID`: agent identity, default `codex`
 - `OPENVIKING_TIMEOUT_MS`: HTTP timeout, default `15000`
 - `OPENVIKING_RECALL_LIMIT`: recall result limit, default `6`
@@ -84,7 +86,8 @@ Parameters:
 ### `openviking_store`
 
 Store a memory by creating a short OpenViking session, adding the text, and
-committing the session.
+committing the session. Memory creation is extraction-dependent; the tool
+reports when OpenViking commits the session but extracts zero memory items.
 
 Parameters:
 

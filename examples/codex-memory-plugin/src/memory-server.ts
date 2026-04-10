@@ -100,7 +100,9 @@ const port = Math.floor(num(serverConfig.port, 1933))
 const config = {
   baseUrl: `http://${host}:${port}`,
   apiKey: str(process.env.OPENVIKING_API_KEY, str(serverConfig.root_api_key, "")),
-  agentId: str(process.env.OPENVIKING_AGENT_ID, "codex"),
+  accountId: str(process.env.OPENVIKING_ACCOUNT, str(ovConf.default_account, "default")),
+  userId: str(process.env.OPENVIKING_USER, str(ovConf.default_user, "default")),
+  agentId: str(process.env.OPENVIKING_AGENT_ID, str(ovConf.default_agent, "codex")),
   timeoutMs: Math.max(1000, Math.floor(num(process.env.OPENVIKING_TIMEOUT_MS, 15000))),
   recallLimit: Math.max(1, Math.floor(num(process.env.OPENVIKING_RECALL_LIMIT, 6))),
   scoreThreshold: Math.min(1, Math.max(0, num(process.env.OPENVIKING_SCORE_THRESHOLD, 0.01))),
@@ -112,6 +114,8 @@ class OpenVikingClient {
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
+    private readonly accountId: string,
+    private readonly userId: string,
     private readonly agentId: string,
     private readonly timeoutMs: number,
   ) {}
@@ -123,6 +127,8 @@ class OpenVikingClient {
     try {
       const headers = new Headers(init.headers ?? {})
       if (this.apiKey) headers.set("X-API-Key", this.apiKey)
+      if (this.accountId) headers.set("X-OpenViking-Account", this.accountId)
+      if (this.userId) headers.set("X-OpenViking-User", this.userId)
       if (this.agentId) headers.set("X-OpenViking-Agent", this.agentId)
       if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json")
 
@@ -161,10 +167,10 @@ class OpenVikingClient {
   private async getRuntimeIdentity(): Promise<{ userId: string; agentId: string }> {
     if (this.runtimeIdentity) return this.runtimeIdentity
 
-    const fallback = { userId: "default", agentId: this.agentId || "default" }
+    const fallback = { userId: this.userId || "default", agentId: this.agentId || "default" }
     try {
       const status = await this.request<SystemStatus>("/api/v1/system/status")
-      const userId = typeof status.user === "string" && status.user.trim() ? status.user.trim() : "default"
+      const userId = typeof status.user === "string" && status.user.trim() ? status.user.trim() : fallback.userId
       this.runtimeIdentity = { userId, agentId: this.agentId || "default" }
       return this.runtimeIdentity
     } catch {
@@ -267,7 +273,14 @@ function formatMemoryResults(items: FindResultItem[]): string {
     .join("\n\n")
 }
 
-const client = new OpenVikingClient(config.baseUrl, config.apiKey, config.agentId, config.timeoutMs)
+const client = new OpenVikingClient(
+  config.baseUrl,
+  config.apiKey,
+  config.accountId,
+  config.userId,
+  config.agentId,
+  config.timeoutMs,
+)
 const server = new McpServer({ name: "openviking-memory-codex", version: "0.1.0" })
 
 server.tool(
@@ -319,6 +332,14 @@ server.tool(
           content: [{
             type: "text" as const,
             text: `Memory extraction is still running (task_id=${result.task_id ?? "unknown"}).`,
+          }],
+        }
+      }
+      if (count === 0) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: "Committed session, but OpenViking extracted 0 memory item(s).",
           }],
         }
       }
