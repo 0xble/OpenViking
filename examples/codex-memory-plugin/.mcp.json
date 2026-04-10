@@ -5,10 +5,7 @@
       "args": [
         "servers/memory-server.js"
       ],
-      "cwd": ".",
-      "env": {
-        "OPENVIKING_CONFIG_FILE": "${OPENVIKING_CONFIG_FILE:-}"
-      }
+      "cwd": "."
     }
   }
 }

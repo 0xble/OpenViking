@@ -1,7 +1,7 @@
 {
   "name": "codex-openviking-memory",
   "version": "0.1.0",
-  "description": "OpenViking memory plugin for Codex — semantic long-term memory via MCP",
+  "description": "OpenViking memory MCP server for Codex",
   "type": "module",
   "scripts": {
     "build": "tsc",
