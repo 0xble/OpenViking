@@ -86,7 +86,6 @@ export type PreArchiveAbstract = {
 
 export type SessionContextResult = {
   latest_archive_overview: string;
-  latest_archive_id: string;
   pre_archive_abstracts: PreArchiveAbstract[];
   messages: OVMessage[];
   estimatedTokens: number;
@@ -376,7 +375,21 @@ export class OpenVikingClient {
     );
   }
 
-  async addSessionMessage(sessionId: string, role: string, content: string, agentId?: string): Promise<void> {
+  async addSessionMessage(
+    sessionId: string,
+    role: string,
+    content: string,
+    agentId?: string,
+    createdAt?: string,
+  ): Promise<void> {
+    const body: {
+      role: string;
+      content: string;
+      created_at?: string;
+    } = { role, content };
+    if (createdAt) {
+      body.created_at = createdAt;
+    }
     await this.emitRoutingDebug(
       "session message POST",
       {
@@ -384,6 +397,7 @@ export class OpenVikingClient {
         sessionId,
         role,
         contentChars: content.length,
+        created_at: createdAt ?? null,
       },
       agentId,
     );
@@ -391,7 +405,7 @@ export class OpenVikingClient {
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
       {
         method: "POST",
-        body: JSON.stringify({ role, content }),
+        body: JSON.stringify(body),
       },
       agentId,
     );
@@ -457,8 +471,9 @@ export class OpenVikingClient {
       if (!task) break;
       if (task.status === "completed") {
         const taskResult = (task.result ?? {}) as Record<string, unknown>;
+        const memoriesExtracted = (taskResult.memories_extracted ?? {}) as Record<string, number>;
         result.status = "completed";
-        result.memories_extracted = (taskResult.memories_extracted ?? {}) as Record<string, number>;
+        result.memories_extracted = memoriesExtracted;
         return result;
       }
       if (task.status === "failed") {

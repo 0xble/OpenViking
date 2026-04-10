@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Session management for OpenViking.
 
 Session as Context: Sessions integrated into L0/L1/L2 system.
@@ -9,13 +9,13 @@ import asyncio
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.message import Message, Part
 from openviking.server.identity import RequestContext, Role
-from openviking.telemetry import get_current_telemetry
+from openviking.telemetry import get_current_telemetry, tracer
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
@@ -169,7 +169,7 @@ class Session:
         self.user = user or UserIdentifier.the_default_user()
         self.ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
         self.session_id = session_id or str(uuid4())
-        self.created_at = datetime.now()
+        self.created_at = int(datetime.now(timezone.utc).timestamp() * 1000)
         self._auto_commit_threshold = auto_commit_threshold
         self._session_uri = f"viking://session/{self.user.user_space_name()}/{self.session_id}"
 
@@ -301,13 +301,14 @@ class Session:
         self,
         role: str,
         parts: List[Part],
+        created_at: str = None,
     ) -> Message:
         """Add a message."""
         msg = Message(
             id=f"msg_{uuid4().hex}",
             role=role,
             parts=parts,
-            created_at=datetime.now(),
+            created_at=created_at or datetime.now(timezone.utc).isoformat(),
         )
         self._messages.append(msg)
 
@@ -348,6 +349,7 @@ class Session:
         """Sync wrapper for commit_async()."""
         return run_async(self.commit_async())
 
+    @tracer("session.commit")
     async def commit_async(self) -> Dict[str, Any]:
         """Async commit session: archive immediately, extract memories in background.
 
@@ -362,6 +364,9 @@ class Session:
         from openviking.storage.transaction import LockContext, get_lock_manager
         from openviking_cli.exceptions import FailedPreconditionError
 
+        trace_id = tracer.get_trace_id()
+        logger.info(f"[TRACER] session_commit started, trace_id={trace_id}")
+
         # ===== Phase 1: Snapshot + clear (PathLock-protected) =====
         # Fast pre-check: skip lock entirely if no messages (common case avoids
         # unnecessary filesystem lock acquisition).
@@ -373,6 +378,7 @@ class Session:
                 "task_id": None,
                 "archive_uri": None,
                 "archived": False,
+                "trace_id": trace_id,
             }
 
         blocking_archive = await self._get_blocking_failed_archive_ref()
@@ -396,6 +402,7 @@ class Session:
                     "task_id": None,
                     "archive_uri": None,
                     "archived": False,
+                    "trace_id": trace_id,
                 }
 
             self._compression.compression_index += 1
@@ -440,7 +447,12 @@ class Session:
 
         # Create TaskRecord for tracking Phase 2
         tracker = get_task_tracker()
-        task = tracker.create("session_commit", resource_id=self.session_id)
+        task = tracker.create(
+            "session_commit",
+            resource_id=self.session_id,
+            owner_account_id=self.ctx.account_id,
+            owner_user_id=self.ctx.user.user_id,
+        )
 
         asyncio.create_task(
             self._run_memory_extraction(
@@ -459,7 +471,9 @@ class Session:
             "task_id": task.task_id,
             "archive_uri": archive_uri,
             "archived": True,
+            "trace_id": trace_id,
         }
+
 
     async def _run_memory_extraction(
         self,
@@ -739,9 +753,7 @@ class Session:
             remaining_budget -= item["tokens"]
 
         archive_tokens = latest_archive_tokens + pre_archive_tokens
-        included_archives = (1 if include_latest_overview else 0) + len(
-            included_pre_archive_abstracts
-        )
+        included_archives = len(included_pre_archive_abstracts)
         dropped_archives = max(
             0, context["total_archives"] - context["failed_archives"] - included_archives
         )
@@ -750,7 +762,6 @@ class Session:
             "latest_archive_overview": (
                 latest_archive["overview"] if include_latest_overview else ""
             ),
-            "latest_archive_id": latest_archive["archive_id"] if latest_archive else "",
             "pre_archive_abstracts": included_pre_archive_abstracts,
             "messages": [m.to_dict() for m in merged_messages],
             "estimatedTokens": message_tokens + archive_tokens,
@@ -834,8 +845,6 @@ class Session:
                         archive["archive_uri"], overview
                     ),
                 }
-                continue
-
             abstract = await self._read_archive_abstract(archive["archive_uri"])
             if abstract:
                 pre_archive_abstracts.append(

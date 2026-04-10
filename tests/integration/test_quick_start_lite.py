@@ -77,7 +77,11 @@ class TestQuickStartLite(unittest.TestCase):
 
         # Create a dummy config structure (minimal valid config for Volcengine provider)
         config_data = {
-            "storage": {"agfs": {"port": 1833}},
+            "storage": {
+                "workspace": self.data_dir,
+                "agfs": {"backend": "local"},
+                "vectordb": {"backend": "local"},
+            },
             "embedding": {
                 "dense": {
                     "provider": "volcengine",

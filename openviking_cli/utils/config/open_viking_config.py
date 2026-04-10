@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 import json
 import os
 from pathlib import Path
@@ -35,8 +35,10 @@ from .parser_config import (
     TextConfig,
     VideoConfig,
 )
+from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
 from .storage_config import StorageConfig
+from .telemetry_config import TelemetryConfig
 from .vlm_config import VLMConfig
 
 
@@ -139,8 +141,8 @@ class OpenVikingConfig(BaseModel):
     language_fallback: str = Field(
         default="en",
         description=(
-            "Fallback language used by memory extraction when dominant user language "
-            "cannot be confidently detected"
+            "Fallback language used by memory extraction and semantic processing when dominant "
+            "user language cannot be confidently detected"
         ),
     )
 
@@ -148,6 +150,14 @@ class OpenVikingConfig(BaseModel):
 
     memory: MemoryConfig = Field(
         default_factory=lambda: MemoryConfig(), description="Memory configuration"
+    )
+
+    telemetry: "TelemetryConfig" = Field(
+        default_factory=lambda: TelemetryConfig(), description="Telemetry configuration"
+    )
+    prompts: PromptsConfig = Field(
+        default_factory=lambda: PromptsConfig(),
+        description="Prompt template configuration",
     )
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
@@ -374,16 +384,6 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
     # Validate account identifier
     if not config.default_account or not config.default_account.strip():
         errors.append("Default account identifier cannot be empty")
-
-    # Validate service mode vs embedded mode consistency
-    is_service_mode = config.storage.vectordb.backend == "http"
-    is_agfs_local = config.storage.agfs.backend == "local"
-
-    if is_service_mode and is_agfs_local and not config.storage.agfs.url:
-        errors.append(
-            "Service mode (VectorDB backend='http') with local AGFS backend requires 'agfs.url' to be set. "
-            "Consider using AGFS backend='s3' or provide remote AGFS URL."
-        )
 
     if errors:
         error_message = "Invalid OpenViking configuration:\n" + "\n".join(
