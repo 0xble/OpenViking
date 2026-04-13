@@ -20,7 +20,6 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 REINDEX_TASK_TYPE = "resource_reindex"
-MEMORY_REINDEX_TASK_TYPE = "memory_reindex"
 
 
 class ReindexRequest(BaseModel):
