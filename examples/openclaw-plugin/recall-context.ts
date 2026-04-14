@@ -37,6 +37,7 @@ export type PreparedRecallQuery = {
 export type BuildMemoryLinesOptions = {
   recallPreferAbstract: boolean;
   recallMaxContentChars: number;
+  logger?: RecallLogger;
 }
 
 export type BuildMemoryLinesWithBudgetOptions = BuildMemoryLinesOptions & {
@@ -101,7 +102,10 @@ async function resolveMemoryContent(
         fullContent && typeof fullContent === "string" && fullContent.trim()
           ? fullContent.trim()
           : (item.abstract?.trim() || item.uri);
-    } catch {
+    } catch (err) {
+      options.logger?.warn?.(
+        `openviking: memory read failed for ${item.uri}: ${String(err)}`,
+      );
       content = item.abstract?.trim() || item.uri;
     }
   } else {
@@ -248,6 +252,7 @@ export async function buildRecallPromptSection(
             recallPreferAbstract: cfg.recallPreferAbstract,
             recallMaxContentChars: cfg.recallMaxContentChars,
             recallTokenBudget: cfg.recallTokenBudget,
+            logger,
           },
         );
 
