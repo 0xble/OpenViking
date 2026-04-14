@@ -17,6 +17,7 @@ function makeEngine(opts?: {
   commitTokenThreshold?: number;
   getSession?: Record<string, unknown>;
   addSessionMessageError?: Error;
+  hangingAddSessionMessage?: boolean;
   cfgOverrides?: Record<string, unknown>;
   quickPrecheck?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
 }) {
@@ -34,7 +35,9 @@ function makeEngine(opts?: {
 
   const addSessionMessage = opts?.addSessionMessageError
     ? vi.fn().mockRejectedValue(opts.addSessionMessageError)
-    : vi.fn().mockResolvedValue(undefined);
+    : opts?.hangingAddSessionMessage
+      ? vi.fn(() => new Promise(() => {}))
+      : vi.fn().mockResolvedValue(undefined);
 
   const client = {
     addSessionMessage,
@@ -320,6 +323,35 @@ describe("context-engine afterTurn()", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("afterTurn failed"),
     );
+  });
+
+  it("fails open when capture work exceeds the afterTurn timeout budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const { engine, client, logger } = makeEngine({
+        hangingAddSessionMessage: true,
+        cfgOverrides: {
+          timeoutMs: 1_500,
+        },
+      });
+
+      const runPromise = engine.afterTurn!({
+        sessionId: "s1",
+        sessionFile: "",
+        messages: [{ role: "user", content: "this capture hangs" }],
+        prePromptMessageCount: 0,
+      });
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      await expect(runPromise).resolves.toBeUndefined();
+
+      expect(client.getSession).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("afterTurn timeout after 1500ms"),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("commit uses OV session ID derived from sessionId", async () => {

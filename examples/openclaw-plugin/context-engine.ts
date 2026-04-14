@@ -104,6 +104,8 @@ export type ContextEngineWithCommit = ContextEngine & {
   commitOVSession: (sessionId: string, sessionKey?: string) => Promise<boolean>;
 };
 
+const AFTER_TURN_MAX_TIMEOUT_MS = 5_000;
+
 type Logger = {
   info: (msg: string) => void;
   warn?: (msg: string) => void;
@@ -962,85 +964,88 @@ export function createMemoryOpenVikingContextEngine(params: {
         }))) {
           return;
         }
-        const client = await getClient();
-        const createdAt = pickLatestCreatedAt(turnMessages);
+        const afterTurnTimeoutMs = Math.max(1_000, Math.min(cfg.timeoutMs, AFTER_TURN_MAX_TIMEOUT_MS));
+        await withTimeout((async () => {
+          const client = await getClient();
+          const createdAt = pickLatestCreatedAt(turnMessages);
 
-        // Group by OV role (user|assistant), merge adjacent same-role
-        const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
-        const groups: Array<{ role: "user" | "assistant"; texts: string[] }> = [];
-        for (const msg of turnMessages) {
-          const text = extractSingleMessageText(msg);
-          if (!text) continue;
-          if (HEARTBEAT_RE.test(text)) continue;
-          const role = (msg as Record<string, unknown>).role as string;
-          const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";
-          const content = ovRole === "user"
-            ? text.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ").replace(/\s+/g, " ").trim()
-            : text;
-          if (!content) continue;
-          const last = groups[groups.length - 1];
-          if (last && last.role === ovRole) {
-            last.texts.push(content);
-          } else {
-            groups.push({ role: ovRole, texts: [content] });
+          // Group by OV role (user|assistant), merge adjacent same-role
+          const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
+          const groups: Array<{ role: "user" | "assistant"; texts: string[] }> = [];
+          for (const msg of turnMessages) {
+            const text = extractSingleMessageText(msg);
+            if (!text) continue;
+            if (HEARTBEAT_RE.test(text)) continue;
+            const role = (msg as Record<string, unknown>).role as string;
+            const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";
+            const content = ovRole === "user"
+              ? text.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ").replace(/\s+/g, " ").trim()
+              : text;
+            if (!content) continue;
+            const last = groups[groups.length - 1];
+            if (last && last.role === ovRole) {
+              last.texts.push(content);
+            } else {
+              groups.push({ role: ovRole, texts: [content] });
+            }
           }
-        }
 
-        if (groups.length === 0) {
-          diag("afterTurn_skip", OVSessionId, { reason: "sanitized_empty" });
-          return;
-        }
+          if (groups.length === 0) {
+            diag("afterTurn_skip", OVSessionId, { reason: "sanitized_empty" });
+            return;
+          }
 
-        for (const group of groups) {
-          await client.addSessionMessage(OVSessionId, group.role, group.texts.join("\n"), agentId, createdAt);
-        }
+          for (const group of groups) {
+            await client.addSessionMessage(OVSessionId, group.role, group.texts.join("\n"), agentId, createdAt);
+          }
 
-        const session = await client.getSession(OVSessionId, agentId);
-        const pendingTokens = session.pending_tokens ?? 0;
+          const session = await client.getSession(OVSessionId, agentId);
+          const pendingTokens = session.pending_tokens ?? 0;
 
-        if (pendingTokens < cfg.commitTokenThreshold) {
-          diag("afterTurn_skip", OVSessionId, {
-            reason: "below_threshold",
+          if (pendingTokens < cfg.commitTokenThreshold) {
+            diag("afterTurn_skip", OVSessionId, {
+              reason: "below_threshold",
+              pendingTokens,
+              commitTokenThreshold: cfg.commitTokenThreshold,
+            });
+            return;
+          }
+
+          const commitResult = await client.commitSession(OVSessionId, { wait: false, agentId });
+          const allTexts = groups.flatMap((g) => g.texts).join("\n");
+          const commitExtra = cfg.logFindRequests
+            ? ` ${toJsonLog({ captured: [trimForLog(allTexts, 260)] })}`
+            : "";
+          logger.info(
+            `openviking: committed session=${OVSessionId}, ` +
+              `status=${commitResult.status}, archived=${commitResult.archived ?? false}, ` +
+              `task_id=${commitResult.task_id ?? "none"}${commitExtra}`,
+          );
+
+          diag("afterTurn_commit", OVSessionId, {
             pendingTokens,
             commitTokenThreshold: cfg.commitTokenThreshold,
+            status: commitResult.status,
+            archived: commitResult.archived ?? false,
+            taskId: commitResult.task_id ?? null,
+            extractedMemories: totalExtractedMemories(commitResult.memories_extracted),
           });
-          return;
-        }
-
-        const commitResult = await client.commitSession(OVSessionId, { wait: false, agentId });
-        const allTexts = groups.flatMap((g) => g.texts).join("\n");
-        const commitExtra = cfg.logFindRequests
-          ? ` ${toJsonLog({ captured: [trimForLog(allTexts, 260)] })}`
-          : "";
-        logger.info(
-          `openviking: committed session=${OVSessionId}, ` +
-            `status=${commitResult.status}, archived=${commitResult.archived ?? false}, ` +
-            `task_id=${commitResult.task_id ?? "none"}${commitExtra}`,
-        );
-
-        diag("afterTurn_commit", OVSessionId, {
-          pendingTokens,
-          commitTokenThreshold: cfg.commitTokenThreshold,
-          status: commitResult.status,
-          archived: commitResult.archived ?? false,
-          taskId: commitResult.task_id ?? null,
-          extractedMemories: totalExtractedMemories(commitResult.memories_extracted),
-        });
-        if (commitResult.task_id && cfg.logFindRequests) {
-          logger.info(
-            `openviking: Phase2 memory extraction runs asynchronously on the server (task_id=${commitResult.task_id}). ` +
-              "memories_extracted appears only after that task completes — not in this immediate response.",
-          );
-          if (cfg.logFindRequests) {
-            void pollPhase2ExtractionOutcome(
-              getClient,
-              commitResult.task_id,
-              agentId,
-              logger,
-              OVSessionId,
+          if (commitResult.task_id && cfg.logFindRequests) {
+            logger.info(
+              `openviking: Phase2 memory extraction runs asynchronously on the server (task_id=${commitResult.task_id}). ` +
+                "memories_extracted appears only after that task completes — not in this immediate response.",
             );
+            if (cfg.logFindRequests) {
+              void pollPhase2ExtractionOutcome(
+                getClient,
+                commitResult.task_id,
+                agentId,
+                logger,
+                OVSessionId,
+              );
+            }
           }
-        }
+        })(), afterTurnTimeoutMs, `openviking: afterTurn timeout after ${afterTurnTimeoutMs}ms`);
       } catch (err) {
         warnOrInfo(logger, `openviking: afterTurn failed: ${String(err)}`);
         diag("afterTurn_error", afterTurnParams.sessionId ?? "(unknown)", {
