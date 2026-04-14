@@ -122,7 +122,7 @@ async def test_find_combines_existing_filter_with_time_range(
             {
                 "op": "time_range",
                 "field": "created_at",
-                "gte": "2026-03-10T00:00:00.000",
+                "gte": "2026-03-10T00:00:00.000Z",
             },
         ],
     }
@@ -132,6 +132,16 @@ async def test_find_with_invalid_time_returns_422(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/search/find",
         json={"query": "sample", "since": "not-a-time"},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"]
+
+
+async def test_find_with_invalid_time_field_returns_422(client: httpx.AsyncClient):
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "time_field": "published_at", "since": "2h"},
     )
 
     assert resp.status_code == 422
@@ -275,7 +285,7 @@ async def test_search_with_until_compiles_time_range(
     assert captured["filter"] == {
         "op": "time_range",
         "field": "created_at",
-        "lte": "2026-03-11T23:59:59.999",
+        "lte": "2026-03-11T23:59:59.999Z",
     }
 
 

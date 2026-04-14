@@ -302,15 +302,18 @@ class LocalClient(BaseClient):
         time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
+        resolved_filter = merge_time_filter(
+            filter,
+            since=since,
+            until=until,
+            time_field=time_field,
+        )
 
         async def _search():
             session = None
             if session_id:
                 session = self._service.sessions.session(self._ctx, session_id)
                 await session.load()
-            resolved_filter = merge_time_filter(
-                filter, since=since, until=until, time_field=time_field
-            )
             return await self._service.search.search(
                 query=query,
                 ctx=self._ctx,

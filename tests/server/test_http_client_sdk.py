@@ -6,15 +6,7 @@
 import asyncio
 import io
 import zipfile
-<<<<<<< HEAD
 from datetime import datetime, timezone
-
-||||||| parent of 9aabed3 (feat(ov): cut over retrieval filters)
-import asyncio
-from datetime import datetime, timezone
-import pytest_asyncio
-=======
->>>>>>> 9aabed3 (feat(ov): cut over retrieval filters)
 import pytest
 import pytest_asyncio
 

@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, time, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
 _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _RELATIVE_RE = re.compile(r"^(?P<value>\d+)(?P<unit>[smhdw])$")
+TimeField = Literal["updated_at", "created_at"]
+VALID_TIME_FIELDS = {"updated_at", "created_at"}
 
 
 def merge_time_filter(
     existing_filter: Optional[Dict[str, Any]],
     since: Optional[str] = None,
     until: Optional[str] = None,
-    time_field: Optional[str] = None,
+    time_field: Optional[TimeField] = None,
     now: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
     """Merge relative or absolute time bounds into an existing metadata filter tree."""
@@ -24,7 +26,7 @@ def merge_time_filter(
 
     time_filter: Dict[str, Any] = {
         "op": "time_range",
-        "field": (time_field or "updated_at").strip() or "updated_at",
+        "field": normalize_time_field(time_field),
     }
 
     if since_dt is not None:
@@ -35,6 +37,15 @@ def merge_time_filter(
     if not existing_filter:
         return time_filter
     return {"op": "and", "conds": [existing_filter, time_filter]}
+
+
+def normalize_time_field(time_field: Optional[str]) -> str:
+    normalized = (time_field or "updated_at").strip() or "updated_at"
+    if normalized not in VALID_TIME_FIELDS:
+        raise ValueError("time_field must be one of: updated_at, created_at")
+    return normalized
+
+
 def resolve_time_bounds(
     since: Optional[str] = None,
     until: Optional[str] = None,
@@ -60,9 +71,7 @@ def resolve_time_bounds(
     if since_dt and until_dt and normalize_datetime_for_comparison(
         since_dt
     ) > normalize_datetime_for_comparison(until_dt):
-        raise ValueError(
-            f"--{lower_label} must be earlier than or equal to --{upper_label}"
-        )
+        raise ValueError(f"{lower_label} must be earlier than or equal to {upper_label}")
 
     return (since_dt, until_dt)
 
@@ -100,8 +109,12 @@ def _parse_time_value(value: str, now: datetime, *, is_upper_bound: bool) -> dat
     if _DATE_ONLY_RE.fullmatch(value):
         parsed_date = datetime.strptime(value, "%Y-%m-%d").date()
         if is_upper_bound:
-            return datetime.combine(parsed_date, time.max)
-        return datetime.combine(parsed_date, time.min)
+            combined = datetime.combine(parsed_date, time.max)
+        else:
+            combined = datetime.combine(parsed_date, time.min)
+        if now.tzinfo is not None:
+            return combined.replace(tzinfo=now.tzinfo)
+        return combined
 
     return parse_iso_datetime(value)
 

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: AGPL-3.0
+# SPDX-License-Identifier: Apache-2.0
 
 from datetime import datetime, timedelta, timezone
 
@@ -8,30 +8,14 @@ from openviking.utils.time_utils import format_iso8601
 from openviking_cli.session.user_id import UserIdentifier
 
 
-async def _seed_find_time_filter_records(svc, query: str) -> dict[str, str]:
+async def _seed_time_filter_records(
+    svc,
+    query: str,
+    records: dict[str, dict[str, str]],
+) -> dict[str, str]:
     embedder = svc.vikingdb_manager.get_embedder()
     vector = embedder.embed(query).dense_vector
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-    now = datetime.now(timezone.utc)
-    recent_time = format_iso8601(now - timedelta(hours=1))
-    old_time = format_iso8601(now - timedelta(days=10))
-
-    records = {
-        "recent_email": {
-            "uri": "viking://resources/email/recent-invoice.md",
-            "parent_uri": "viking://resources/email",
-            "abstract": "Recent invoice follow-up thread",
-            "created_at": recent_time,
-            "updated_at": recent_time,
-        },
-        "old_email": {
-            "uri": "viking://resources/email/old-invoice.md",
-            "parent_uri": "viking://resources/email",
-            "abstract": "Older invoice follow-up thread",
-            "created_at": old_time,
-            "updated_at": old_time,
-        },
-    }
 
     for record in records.values():
         await svc.vikingdb_manager.upsert(
@@ -56,56 +40,54 @@ async def _seed_find_time_filter_records(svc, query: str) -> dict[str, str]:
         )
 
     return {name: record["uri"] for name, record in records.items()}
+
+
+async def _seed_find_time_filter_records(svc, query: str) -> dict[str, str]:
+    now = datetime.now(timezone.utc)
+    return await _seed_time_filter_records(
+        svc,
+        query,
+        {
+            "recent_email": {
+                "uri": "viking://resources/email/recent-invoice.md",
+                "parent_uri": "viking://resources/email",
+                "abstract": "Recent invoice follow-up thread",
+                "created_at": format_iso8601(now - timedelta(hours=1)),
+                "updated_at": format_iso8601(now - timedelta(hours=1)),
+            },
+            "old_email": {
+                "uri": "viking://resources/email/old-invoice.md",
+                "parent_uri": "viking://resources/email",
+                "abstract": "Older invoice follow-up thread",
+                "created_at": format_iso8601(now - timedelta(days=10)),
+                "updated_at": format_iso8601(now - timedelta(days=10)),
+            },
+        },
+    )
 
 
 async def _seed_search_time_filter_records(svc, query: str) -> dict[str, str]:
-    embedder = svc.vikingdb_manager.get_embedder()
-    vector = embedder.embed(query).dense_vector
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     now = datetime.now(timezone.utc)
-    recent_time = format_iso8601(now - timedelta(minutes=30))
-    old_time = format_iso8601(now - timedelta(days=30))
-
-    records = {
-        "recent_note": {
-            "uri": "viking://resources/watch-schedule/recent-search-time-filter.md",
-            "parent_uri": "viking://resources/watch-schedule",
-            "abstract": "Recent watch vs scheduled discussion",
-            "created_at": recent_time,
-            "updated_at": recent_time,
-        },
-        "old_note": {
-            "uri": "viking://resources/watch-schedule/old-search-time-filter.md",
-            "parent_uri": "viking://resources/watch-schedule",
-            "abstract": "Old watch vs scheduled discussion",
-            "created_at": old_time,
-            "updated_at": old_time,
-        },
-    }
-
-    for record in records.values():
-        await svc.vikingdb_manager.upsert(
-            {
-                "uri": record["uri"],
-                "parent_uri": record["parent_uri"],
-                "is_leaf": True,
-                "abstract": record["abstract"],
-                "context_type": "resource",
-                "category": "",
-                "created_at": record["created_at"],
-                "updated_at": record["updated_at"],
-                "active_count": 0,
-                "vector": vector,
-                "meta": {},
-                "related_uri": [],
-                "account_id": "default",
-                "owner_space": "",
-                "level": 2,
+    return await _seed_time_filter_records(
+        svc,
+        query,
+        {
+            "recent_note": {
+                "uri": "viking://resources/watch-schedule/recent-search-time-filter.md",
+                "parent_uri": "viking://resources/watch-schedule",
+                "abstract": "Recent watch vs scheduled discussion",
+                "created_at": format_iso8601(now - timedelta(minutes=30)),
+                "updated_at": format_iso8601(now - timedelta(minutes=30)),
             },
-            ctx=ctx,
-        )
-
-    return {name: record["uri"] for name, record in records.items()}
+            "old_note": {
+                "uri": "viking://resources/watch-schedule/old-search-time-filter.md",
+                "parent_uri": "viking://resources/watch-schedule",
+                "abstract": "Old watch vs scheduled discussion",
+                "created_at": format_iso8601(now - timedelta(days=30)),
+                "updated_at": format_iso8601(now - timedelta(days=30)),
+            },
+        },
+    )
 
 
 async def test_sdk_find_respects_since_and_time_field(http_client):
@@ -138,7 +120,7 @@ async def test_sdk_search_respects_since_default_updated_at(http_client):
     old_result = await client.search(
         query="watch vs scheduled",
         target_uri="viking://resources/watch-schedule",
-        until="2000-01-01",
+        until="7d",
         limit=10,
     )
 
@@ -147,4 +129,5 @@ async def test_sdk_search_respects_since_default_updated_at(http_client):
 
     assert uris["recent_note"] in recent_uris
     assert uris["old_note"] not in recent_uris
+    assert uris["old_note"] in old_uris
     assert uris["recent_note"] not in old_uris

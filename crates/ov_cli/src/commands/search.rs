@@ -8,8 +8,9 @@ pub async fn find(
     uri: &str,
     node_limit: i32,
     threshold: Option<f64>,
-    after: Option<&str>,
-    before: Option<&str>,
+    since: Option<&str>,
+    until: Option<&str>,
+    time_field: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -19,8 +20,9 @@ pub async fn find(
             uri.to_string(),
             node_limit,
             threshold,
-            after.map(|s| s.to_string()),
-            before.map(|s| s.to_string()),
+            since.map(|s| s.to_string()),
+            until.map(|s| s.to_string()),
+            time_field.map(|s| s.to_string()),
         )
         .await?;
     output_success(&result, output_format, compact);
@@ -34,8 +36,9 @@ pub async fn search(
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
-    after: Option<&str>,
-    before: Option<&str>,
+    since: Option<&str>,
+    until: Option<&str>,
+    time_field: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -46,8 +49,9 @@ pub async fn search(
             session_id,
             node_limit,
             threshold,
-            after.map(|s| s.to_string()),
-            before.map(|s| s.to_string()),
+            since.map(|s| s.to_string()),
+            until.map(|s| s.to_string()),
+            time_field.map(|s| s.to_string()),
         )
         .await?;
     output_success(&result, output_format, compact);

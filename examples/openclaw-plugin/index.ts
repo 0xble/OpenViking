@@ -1290,8 +1290,8 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
         }
         rememberSessionAgentId(ctx);
         const archiveId = String((params as { archiveId?: string }).archiveId ?? "").trim();
-        const activeSessionId = ctx.sessionId ?? "";
-        api.logger.info?.(`openviking: ov_archive_expand invoked (archiveId=${archiveId || "(empty)"}, sessionId=${activeSessionId || "(empty)"})`);
+        const sessionId = ctx.sessionId ?? "";
+        api.logger.info?.(`openviking: ov_archive_expand invoked (archiveId=${archiveId || "(empty)"}, sessionId=${sessionId || "(empty)"})`);
 
         if (!archiveId) {
           api.logger.warn?.(`openviking: ov_archive_expand missing archiveId`);
@@ -1302,7 +1302,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
         }
 
         const sessionKey = ctx.sessionKey ?? "";
-        if (!activeSessionId && !sessionKey) {
+        if (!sessionId && !sessionKey) {
           return {
             content: [{ type: "text", text: "Error: no active session." }],
             details: { error: "no_session" },
@@ -1333,23 +1333,23 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
             .map((m: OVMessage) => formatMessageFaithful(m))
             .join("\n\n");
 
-          api.logger.info?.(`openviking: ov_archive_expand expanded ${detail.archive_id}, messages=${detail.messages.length}, chars=${body.length}, sessionId=${activeSessionId}`);
+          api.logger.info?.(`openviking: ov_archive_expand expanded ${detail.archive_id}, messages=${detail.messages.length}, chars=${body.length}, sessionId=${sessionId}`);
           return {
             content: [{ type: "text", text: `${header}\n${body}` }],
             details: {
               action: "expanded",
               archiveId: detail.archive_id,
               messageCount: detail.messages.length,
-              sessionId: activeSessionId,
+              sessionId,
               ovSessionId,
             },
           };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          api.logger.warn?.(`openviking: ov_archive_expand failed (archiveId=${archiveId}, sessionId=${activeSessionId}): ${msg}`);
+          api.logger.warn?.(`openviking: ov_archive_expand failed (archiveId=${archiveId}, sessionId=${sessionId}): ${msg}`);
           return {
             content: [{ type: "text", text: `Failed to expand ${archiveId}: ${msg}` }],
-            details: { error: msg, archiveId, sessionId: activeSessionId, ovSessionId },
+            details: { error: msg, archiveId, sessionId, ovSessionId },
           };
         }
       },
@@ -1489,17 +1489,6 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                 const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
 
                 if (memories.length > 0) {
-                  const recalledUris = memories
-                    .map((memory) => memory.uri)
-                    .filter((uri): uri is string => typeof uri === "string" && uri.length > 0);
-                  const ovSessionId = openClawSessionToOvStorageId(
-                    ctx?.sessionId,
-                    ctx?.sessionKey,
-                  );
-                  void client.sessionUsed(ovSessionId, recalledUris, agentId).catch((err) => {
-                    api.logger.warn(`openviking: sessionUsed failed: ${String(err)}`);
-                  });
-
                   const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
                     memories,
                     (uri) => client.read(uri, agentId),

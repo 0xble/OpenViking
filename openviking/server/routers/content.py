@@ -230,42 +230,12 @@ async def _do_reindex(
     ctx: RequestContext,
 ) -> dict:
     """Execute reindex within a lock scope."""
-    from openviking.core.directories import get_context_type_for_uri
-    from openviking.storage.queuefs import SemanticMsg, get_queue_manager
     from openviking.storage.transaction import LockContext, get_lock_manager
 
     viking_fs = service.viking_fs
     path = viking_fs._uri_to_path(uri, ctx=ctx)
-    context_type = get_context_type_for_uri(uri)
 
     async with LockContext(get_lock_manager(), [path], lock_mode="point"):
-        if context_type == "memory":
-            queue_manager = get_queue_manager()
-            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-            msg = SemanticMsg(
-                uri=uri,
-                context_type="memory",
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                agent_id=ctx.user.agent_id,
-                role=ctx.role.value,
-                skip_vectorization=False,
-            )
-            await semantic_queue.enqueue(msg)
-            if regenerate:
-                return {
-                    "status": "success",
-                    "message": "Queued memory reindex with summary regeneration",
-                    "uri": uri,
-                    "context_type": "memory",
-                }
-            return {
-                "status": "success",
-                "message": "Queued memory reindex",
-                "uri": uri,
-                "context_type": "memory",
-            }
-
         if regenerate:
             return await service.resources.summarize([uri], ctx=ctx)
         else:

@@ -3,7 +3,7 @@
 """Search endpoints for OpenViking HTTP Server."""
 
 import math
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -31,6 +31,28 @@ def _sanitize_floats(obj: Any) -> Any:
 
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
+TimeField = Literal["updated_at", "created_at"]
+
+
+def _resolve_search_limit(limit: int, node_limit: Optional[int]) -> int:
+    return node_limit if node_limit is not None else limit
+
+
+def _resolve_search_filter(
+    request_filter: Optional[Dict[str, Any]],
+    since: Optional[str],
+    until: Optional[str],
+    time_field: Optional[TimeField],
+) -> Optional[Dict[str, Any]]:
+    try:
+        return merge_time_filter(
+            request_filter,
+            since=since,
+            until=until,
+            time_field=time_field,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 class FindRequest(BaseModel):
@@ -44,11 +66,9 @@ class FindRequest(BaseModel):
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
 
-    after: Optional[str] = None
-    before: Optional[str] = None
     since: Optional[str] = None
     until: Optional[str] = None
-    time_field: Optional[str] = None
+    time_field: Optional[TimeField] = None
     telemetry: TelemetryRequest = False
 
 
@@ -64,11 +84,9 @@ class SearchRequest(BaseModel):
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
 
-    after: Optional[str] = None
-    before: Optional[str] = None
     since: Optional[str] = None
     until: Optional[str] = None
-    time_field: Optional[str] = None
+    time_field: Optional[TimeField] = None
     telemetry: TelemetryRequest = False
 
 
@@ -98,16 +116,13 @@ async def find(
 ):
     """Semantic search without session context."""
     service = get_service()
-    actual_limit = request.node_limit if request.node_limit is not None else request.limit
-    try:
-        effective_filter = merge_time_filter(
-            request.filter,
-            since=request.after or request.since,
-            until=request.before or request.until,
-            time_field=request.time_field,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    actual_limit = _resolve_search_limit(request.limit, request.node_limit)
+    effective_filter = _resolve_search_filter(
+        request.filter,
+        request.since,
+        request.until,
+        request.time_field,
+    )
     execution = await run_operation(
         operation="search.find",
         telemetry=request.telemetry,
@@ -138,22 +153,19 @@ async def search(
 ):
     """Semantic search with optional session context."""
     service = get_service()
-    try:
-        effective_filter = merge_time_filter(
-            request.filter,
-            since=request.after or request.since,
-            until=request.before or request.until,
-            time_field=request.time_field,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    actual_limit = _resolve_search_limit(request.limit, request.node_limit)
+    effective_filter = _resolve_search_filter(
+        request.filter,
+        request.since,
+        request.until,
+        request.time_field,
+    )
 
     async def _search():
         session = None
         if request.session_id:
             session = service.sessions.session(_ctx, request.session_id)
             await session.load()
-        actual_limit = request.node_limit if request.node_limit is not None else request.limit
         return await service.search.search(
             query=request.query,
             ctx=_ctx,

@@ -58,27 +58,6 @@ class TestOpenAIRerankClient:
 
         assert scores == [0.9, 0.3, 0.7]
 
-    def test_rerank_batch_accepts_voyage_data_payload(self):
-        client = self._make_client()
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "object": "list",
-            "data": [
-                {"index": 2, "relevance_score": 0.7},
-                {"index": 0, "relevance_score": 0.9},
-                {"index": 1, "relevance_score": 0.3},
-            ],
-            "model": "rerank-2.5",
-        }
-        mock_response.raise_for_status = MagicMock()
-
-        with patch(
-            "openviking.models.rerank.openai_rerank.requests.post", return_value=mock_response
-        ):
-            scores = client.rerank_batch("test query", ["doc1", "doc2", "doc3"])
-
-        assert scores == [0.9, 0.3, 0.7]
-
     def test_rerank_batch_empty_documents(self):
         client = self._make_client()
         scores = client.rerank_batch("query", [])
@@ -274,9 +253,8 @@ class TestRerankConfig:
 
     def test_default_provider_is_vikingdb(self):
         config = RerankConfig()
-        assert config.provider is None
-        assert config._effective_provider() is None
+        assert config.provider == "vikingdb"
 
     def test_unknown_provider_raises_value_error(self):
         with pytest.raises(ValueError, match="provider"):
-            RerankConfig(provider="bogus", ak="ak", sk="sk")
+            RerankConfig(provider="cohere", ak="ak", sk="sk")

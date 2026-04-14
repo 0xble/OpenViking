@@ -37,8 +37,8 @@ def test_merge_time_filter_merges_with_existing_filter():
             {
                 "op": "time_range",
                 "field": "created_at",
-                "gte": "2026-03-10T00:00:00.000",
-                "lte": "2026-03-11T23:59:59.999",
+                "gte": "2026-03-10T00:00:00.000Z",
+                "lte": "2026-03-11T23:59:59.999Z",
             },
         ],
     }
@@ -60,12 +60,12 @@ def test_merge_time_filter_treats_empty_filter_as_missing():
     assert result == {
         "op": "time_range",
         "field": "updated_at",
-        "gte": "2026-03-11T00:00:00.000",
+        "gte": "2026-03-11T00:00:00.000Z",
     }
 
 
 def test_merge_time_filter_rejects_inverted_range():
-    with pytest.raises(ValueError, match="--since must be earlier than or equal to --until"):
+    with pytest.raises(ValueError, match="since must be earlier than or equal to until"):
         merge_time_filter(None, since="2026-03-12", until="2026-03-11")
 
 
@@ -78,14 +78,14 @@ def test_merge_time_filter_handles_mixed_aware_and_naive_bounds():
         "op": "time_range",
         "field": "updated_at",
         "gte": "2026-03-11T16:00:00.000Z",
-        "lte": "2099-01-01T23:59:59.999",
+        "lte": "2099-01-01T23:59:59.999Z",
     }
 
 
 def test_merge_time_filter_rejects_inverted_mixed_range():
     now = datetime(2026, 3, 11, 18, 0, tzinfo=timezone.utc)
 
-    with pytest.raises(ValueError, match="--since must be earlier than or equal to --until"):
+    with pytest.raises(ValueError, match="since must be earlier than or equal to until"):
         merge_time_filter(None, since="2099-01-01", until="2h", now=now)
 
 
@@ -94,10 +94,25 @@ def test_merge_time_filter_rejects_invalid_time_value():
         merge_time_filter(None, since="not-a-time")
 
 
+def test_merge_time_filter_rejects_invalid_time_field():
+    with pytest.raises(ValueError, match="time_field must be one of"):
+        merge_time_filter(None, since="2h", time_field="published_at")
+
+
 def test_merge_time_filter_output_preserves_timezone_semantics():
     now = datetime(2026, 3, 11, 18, 0, tzinfo=timezone.utc)
 
     result = merge_time_filter(None, since="30m", until="2026-03-11", now=now)
 
     assert parse_iso_datetime(result["gte"]).tzinfo is not None
-    assert parse_iso_datetime(result["lte"]).tzinfo is None
+    assert parse_iso_datetime(result["lte"]).tzinfo is not None
+
+
+def test_merge_time_filter_date_only_uses_now_timezone():
+    local_tz = timezone.utc
+    now = datetime(2026, 3, 11, 18, 0, tzinfo=local_tz)
+
+    result = merge_time_filter(None, since="2026-03-11", until="2026-03-12", now=now)
+
+    assert result["gte"].endswith("Z")
+    assert result["lte"].endswith("Z")

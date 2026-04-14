@@ -10,8 +10,8 @@ import os
 from datetime import datetime
 from typing import Dict, Optional
 
-from openviking.core.directories import get_context_type_for_uri
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
+from openviking.core.directories import get_context_type_for_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
@@ -354,10 +354,7 @@ async def index_resource(
 
     if abstract or overview:
         await vectorize_directory_meta(
-            uri,
-            abstract,
-            overview, context_type=context_type,
-            ctx=ctx,
+            uri, abstract, overview, context_type=context_type, ctx=ctx
         )
 
     # 2. Index Files
