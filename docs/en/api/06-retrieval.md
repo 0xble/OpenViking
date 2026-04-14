@@ -27,6 +27,9 @@ Basic vector similarity search.
 | limit | int | No | 10 | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
+| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--last 7d` maps to `since="7d"` |
+| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time |
+| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until`. CLI `--time-field updated|created` maps to `updated_at|created_at` |
 
 **FindResult Structure**
 
@@ -59,6 +62,13 @@ class MatchedContext:
 ```python
 results = client.find("how to authenticate users")
 
+recent_emails = client.find(
+    "invoice",
+    target_uri="viking://resources/email/",
+    since="7d",
+    time_field="created_at",
+)
+
 for ctx in results.resources:
     print(f"URI: {ctx.uri}")
     print(f"Score: {ctx.score:.3f}")
@@ -87,7 +97,11 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 ```bash
 openviking find "how to authenticate users" [--uri viking://resources/] [--limit 10]
+openviking find "invoice" --time-field created --last 7d
 ```
+
+`--time-field created` maps to API `time_field="created_at"` and `--time-field updated`
+maps to `time_field="updated_at"`. `--last 7d` is CLI sugar for `--since 7d`.
 
 **Response**
 
@@ -184,6 +198,9 @@ Search with session context and intent analysis.
 | limit | int | No | 10 | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
+| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--last 7d` maps to `since="7d"` |
+| until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time |
+| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until`. CLI `--time-field updated|created` maps to `updated_at|created_at` |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -202,7 +219,8 @@ session.add_message("assistant", [
 # Search understands the conversation context
 results = client.search(
     "best practices",
-    session=session
+    session=session,
+    since="2h"
 )
 
 for ctx in results.resources:
@@ -223,6 +241,8 @@ curl -X POST http://localhost:1933/api/v1/search/search \
   -d '{
     "query": "best practices",
     "session_id": "abc123",
+    "since": "2h",
+    "time_field": "updated_at",
     "limit": 10
   }'
 ```
@@ -231,7 +251,12 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```bash
 openviking search "best practices" [--session-id abc123] [--limit 10]
+openviking search "watch vs scheduled" --time-field created --on 2026-03-15
 ```
+
+`--time-field created` maps to API `time_field="created_at"` and `--time-field updated`
+maps to `time_field="updated_at"`. `--last 7d` is CLI sugar for `--since 7d`.
+`--on 2026-03-15` is CLI sugar for `since="2026-03-15"` plus `until="2026-03-15"`.
 
 **Response**
 

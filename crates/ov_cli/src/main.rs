@@ -6,7 +6,7 @@ mod output;
 mod tui;
 mod utils;
 
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use config::{Config, merge_csv_options};
 use error::{Error, Result};
 use output::OutputFormat;
@@ -71,6 +71,28 @@ impl CliContext {
             self.config.user.clone(),
             self.config.timeout,
         )
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum RetrievalTimeField {
+    Updated,
+    Created,
+}
+
+impl RetrievalTimeField {
+    fn api_value(self) -> &'static str {
+        match self {
+            Self::Updated => "updated_at",
+            Self::Created => "created_at",
+        }
+    }
+
+    fn cli_value(self) -> &'static str {
+        match self {
+            Self::Updated => "updated",
+            Self::Created => "created",
+        }
     }
 }
 
@@ -377,6 +399,21 @@ enum Commands {
         /// Score threshold
         #[arg(short, long)]
         threshold: Option<f64>,
+        /// Only include results on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
+        #[arg(long)]
+        since: Option<String>,
+        /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
+        #[arg(long)]
+        until: Option<String>,
+        /// Time field to filter on
+        #[arg(long, value_enum, default_value = "updated")]
+        time_field: RetrievalTimeField,
+        /// Only include results from the last duration (e.g. 48h, 7d, 2w)
+        #[arg(long, conflicts_with = "since")]
+        last: Option<String>,
+        /// Results from a single day (e.g. 2026-03-15)
+        #[arg(long, conflicts_with_all = ["since", "until", "last"])]
+        on: Option<String>,
     },
     /// Run context-aware retrieval
     Search {
@@ -399,6 +436,21 @@ enum Commands {
         /// Score threshold
         #[arg(short, long)]
         threshold: Option<f64>,
+        /// Only include results on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
+        #[arg(long)]
+        since: Option<String>,
+        /// Only include results on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
+        #[arg(long)]
+        until: Option<String>,
+        /// Time field to filter on
+        #[arg(long, value_enum, default_value = "updated")]
+        time_field: RetrievalTimeField,
+        /// Only include results from the last duration (e.g. 48h, 7d, 2w)
+        #[arg(long, conflicts_with = "since")]
+        last: Option<String>,
+        /// Results from a single day (e.g. 2026-03-15)
+        #[arg(long, conflicts_with_all = ["since", "until", "last"])]
+        on: Option<String>,
     },
     /// Run content pattern search
     Grep {
@@ -796,14 +848,35 @@ async fn main() {
             uri,
             node_limit,
             threshold,
-        } => handle_find(query, uri, node_limit, threshold, ctx).await,
+            since,
+            until,
+            time_field,
+            last,
+            on,
+        } => {
+            handle_find(
+                query, uri, node_limit, threshold, since, until, time_field, last, on, ctx,
+            )
+            .await
+        }
         Commands::Search {
             query,
             uri,
             session_id,
             node_limit,
             threshold,
-        } => handle_search(query, uri, session_id, node_limit, threshold, ctx).await,
+            since,
+            until,
+            time_field,
+            last,
+            on,
+        } => {
+            handle_search(
+                query, uri, session_id, node_limit, threshold, since, until, time_field, last, on,
+                ctx,
+            )
+            .await
+        }
         Commands::Grep {
             uri,
             exclude_uri,
@@ -1294,14 +1367,21 @@ async fn handle_find(
     uri: String,
     node_limit: i32,
     threshold: Option<f64>,
+    since: Option<String>,
+    until: Option<String>,
+    time_field: RetrievalTimeField,
+    last: Option<String>,
+    on: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
+    append_time_filter_params(&mut params, time_field, &since, &until, &last, &on);
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
+    let (since, until) = resolve_time_flags(since, until, last, on);
     let client = ctx.get_client();
     commands::search::find(
         &client,
@@ -1309,6 +1389,9 @@ async fn handle_find(
         &uri,
         node_limit,
         threshold,
+        since.as_deref(),
+        until.as_deref(),
+        Some(time_field.api_value()),
         ctx.output_format,
         ctx.compact,
     )
@@ -1321,6 +1404,11 @@ async fn handle_search(
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
+    since: Option<String>,
+    until: Option<String>,
+    time_field: RetrievalTimeField,
+    last: Option<String>,
+    on: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
@@ -1330,8 +1418,10 @@ async fn handle_search(
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
+    append_time_filter_params(&mut params, time_field, &since, &until, &last, &on);
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
+    let (since, until) = resolve_time_flags(since, until, last, on);
     let client = ctx.get_client();
     commands::search::search(
         &client,
@@ -1340,10 +1430,50 @@ async fn handle_search(
         session_id,
         node_limit,
         threshold,
+        since.as_deref(),
+        until.as_deref(),
+        Some(time_field.api_value()),
         ctx.output_format,
         ctx.compact,
     )
     .await
+}
+
+fn append_time_filter_params(
+    params: &mut Vec<String>,
+    time_field: RetrievalTimeField,
+    since: &Option<String>,
+    until: &Option<String>,
+    last: &Option<String>,
+    on: &Option<String>,
+) {
+    params.push(format!("--time-field {}", time_field.cli_value()));
+    if let Some(day) = on {
+        params.push(format!("--on {}", day));
+        return;
+    }
+    if let Some(value) = last {
+        params.push(format!("--last {}", value));
+    } else if let Some(value) = since {
+        params.push(format!("--since {}", value));
+    }
+    if let Some(value) = until {
+        params.push(format!("--until {}", value));
+    }
+}
+
+/// Resolve --since/--until/--last/--on into canonical API bounds.
+fn resolve_time_flags(
+    since: Option<String>,
+    until: Option<String>,
+    last: Option<String>,
+    on: Option<String>,
+) -> (Option<String>, Option<String>) {
+    if let Some(date) = on {
+        return (Some(date.clone()), Some(date));
+    }
+    let resolved_since = last.or(since);
+    (resolved_since, until)
 }
 
 /// Print command with specified parameters for debugging
@@ -1601,5 +1731,37 @@ mod tests {
         ]);
 
         assert!(result.is_err(), "removed write flags should not parse");
+    }
+
+    #[test]
+    fn resolve_time_flags_prefers_last_for_since() {
+        let (since, until) = super::resolve_time_flags(
+            Some("2026-03-10".to_string()),
+            Some("2026-03-12".to_string()),
+            Some("7d".to_string()),
+            None,
+        );
+
+        assert_eq!(since.as_deref(), Some("7d"));
+        assert_eq!(until.as_deref(), Some("2026-03-12"));
+    }
+
+    #[test]
+    fn resolve_time_flags_expands_on_to_both_bounds() {
+        let (since, until) = super::resolve_time_flags(
+            None,
+            None,
+            Some("7d".to_string()),
+            Some("2026-03-15".to_string()),
+        );
+
+        assert_eq!(since.as_deref(), Some("2026-03-15"));
+        assert_eq!(until.as_deref(), Some("2026-03-15"));
+    }
+
+    #[test]
+    fn retrieval_time_field_maps_to_api_values() {
+        assert_eq!(super::RetrievalTimeField::Updated.api_value(), "updated_at");
+        assert_eq!(super::RetrievalTimeField::Created.api_value(), "created_at");
     }
 }
