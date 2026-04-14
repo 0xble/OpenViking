@@ -2117,6 +2117,16 @@ async function configureOpenClawPlugin({
     await oc(["config", "set", `plugins.entries.${pluginId}.config.autoRecall`, "true", "--json"]);
     await oc(["config", "set", `plugins.entries.${pluginId}.config.autoCapture`, "true", "--json"]);
   }
+  if (pluginId === "openviking" && resolvedPluginKind === "context-engine") {
+    await oc(["config", "set", `plugins.entries.${pluginId}.config.recallPath`, "assemble"]);
+    await oc([
+      "config",
+      "set",
+      `plugins.entries.${pluginId}.hooks.allowPromptInjection`,
+      "false",
+      "--json",
+    ]);
+  }
 
   info(tr("OpenClaw plugin configured", "OpenClaw 插件配置完成"));
 }
