@@ -1377,91 +1377,90 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
     api.on("session_end", async (_event: unknown, ctx?: HookAgentContext) => {
       rememberSessionAgentId(ctx ?? {});
     });
-    api.on("before_prompt_build", async (event: unknown, ctx?: HookAgentContext) => {
-      rememberSessionAgentId(ctx ?? {});
+    if (cfg.recallPath === "hook") {
+      api.on("before_prompt_build", async (event: unknown, ctx?: HookAgentContext) => {
+        rememberSessionAgentId(ctx ?? {});
 
-      if (cfg.logFindRequests) {
-        api.logger.info(
-          `openviking: hook before_prompt_build ctx=${JSON.stringify({
-            sessionId: ctx?.sessionId,
-            sessionKey: ctx?.sessionKey,
-            agentId: ctx?.agentId,
-          })}`,
-        );
-      }
-      if (isBypassedSession(ctx)) {
-        verboseRoutingInfo(
-          `openviking: bypassing before_prompt_build due to session pattern match (sessionKey=${ctx?.sessionKey ?? "none"}, sessionId=${ctx?.sessionId ?? "none"})`,
-        );
-        return;
-      }
-      if (cfg.recallPath !== "hook") {
-        return;
-      }
-
-      const eventObj = (event ?? {}) as { messages?: unknown[]; prompt?: string };
-      const latestUserText = extractLatestUserText(eventObj.messages);
-      const rawRecallQuery =
-        latestUserText ||
-        (typeof eventObj.prompt === "string" ? eventObj.prompt.trim() : "");
-      const recallQuery = prepareRecallQuery(rawRecallQuery);
-      const queryText = recallQuery.query;
-      if (!queryText) {
-        return;
-      }
-      if (recallQuery.truncated) {
-        verboseRoutingInfo(
-          `openviking: recall query truncated (` +
-            `chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
-        );
-      }
-
-      const prependContextParts: string[] = [];
-
-      if (cfg.autoRecall && queryText.length >= 5) {
-        const agentId = resolveAgentId(ctx?.sessionId, ctx?.sessionKey);
-        let client: OpenVikingClient | undefined;
-        try {
-          client = await withTimeout(
-            getClient(),
-            5000,
-            "openviking: client initialization timeout (OpenViking service not ready yet)",
+        if (cfg.logFindRequests) {
+          api.logger.info(
+            `openviking: hook before_prompt_build ctx=${JSON.stringify({
+              sessionId: ctx?.sessionId,
+              sessionKey: ctx?.sessionKey,
+              agentId: ctx?.agentId,
+            })}`,
           );
-        } catch (err) {
-          api.logger.warn?.(`openviking: failed to get client: ${String(err)}`);
+        }
+        if (isBypassedSession(ctx)) {
+          verboseRoutingInfo(
+            `openviking: bypassing before_prompt_build due to session pattern match (sessionKey=${ctx?.sessionKey ?? "none"}, sessionId=${ctx?.sessionId ?? "none"})`,
+          );
+          return;
         }
 
-        if (client) {
-          const recallPrompt = await buildRecallPromptSection({
-            cfg,
-            client,
-            logger: api.logger,
-            queryText,
-            agentId,
-            precheck: () => quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess),
-            verboseLog: verboseRoutingInfo,
-          });
-          if (recallPrompt.section) {
-            prependContextParts.push(recallPrompt.section);
+        const eventObj = (event ?? {}) as { messages?: unknown[]; prompt?: string };
+        const latestUserText = extractLatestUserText(eventObj.messages);
+        const rawRecallQuery =
+          latestUserText ||
+          (typeof eventObj.prompt === "string" ? eventObj.prompt.trim() : "");
+        const recallQuery = prepareRecallQuery(rawRecallQuery);
+        const queryText = recallQuery.query;
+        if (!queryText) {
+          return;
+        }
+        if (recallQuery.truncated) {
+          verboseRoutingInfo(
+            `openviking: recall query truncated (` +
+              `chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
+          );
+        }
+
+        const prependContextParts: string[] = [];
+
+        if (cfg.autoRecall && queryText.length >= 5) {
+          const agentId = resolveAgentId(ctx?.sessionId, ctx?.sessionKey);
+          let client: OpenVikingClient;
+          try {
+            client = await withTimeout(
+              getClient(),
+              5000,
+              "openviking: client initialization timeout (OpenViking service not ready yet)",
+            );
+          } catch (err) {
+            api.logger.warn?.(`openviking: failed to get client: ${String(err)}`);
+          }
+
+          if (client) {
+            const recallPrompt = await buildRecallPromptSection({
+              cfg,
+              client,
+              logger: api.logger,
+              queryText,
+              agentId,
+              precheck: () => quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess),
+              verboseLog: verboseRoutingInfo,
+            });
+            if (recallPrompt.section) {
+              prependContextParts.push(recallPrompt.section);
+            }
           }
         }
-      }
 
-      const ingestReplyAssist = buildIngestReplyAssistSection(
-        queryText,
-        cfg,
-        verboseRoutingInfo,
-      );
-      if (ingestReplyAssist) {
-        prependContextParts.push(ingestReplyAssist);
-      }
+        const ingestReplyAssist = buildIngestReplyAssistSection(
+          queryText,
+          cfg,
+          verboseRoutingInfo,
+        );
+        if (ingestReplyAssist) {
+          prependContextParts.push(ingestReplyAssist);
+        }
 
-      if (prependContextParts.length > 0) {
-        return {
-          prependContext: prependContextParts.join("\n\n"),
-        };
-      }
-    });
+        if (prependContextParts.length > 0) {
+          return {
+            prependContext: prependContextParts.join("\n\n"),
+          };
+        }
+      });
+    }
     api.on("agent_end", async (_event: unknown, ctx?: HookAgentContext) => {
       rememberSessionAgentId(ctx ?? {});
     });

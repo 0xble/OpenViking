@@ -11,7 +11,7 @@ describe("local OpenViking startup failure", () => {
     vi.resetModules();
   });
 
-  it("fails fast when the child exits before health is ready", async () => {
+  it("fails fast when the child exits before health is ready in hook mode", async () => {
     class FakeChild extends EventEmitter {
       stderr = new EventEmitter();
       killed = false;
@@ -99,6 +99,7 @@ describe("local OpenViking startup failure", () => {
           logFindRequests: false,
           mode: "local",
           port: 19433,
+          recallPath: "hook",
         },
         registerContextEngine: vi.fn(),
         registerService: (entry) => {
@@ -136,7 +137,6 @@ describe("local OpenViking startup failure", () => {
       ]);
 
       expect(hookOutcome.kind).toBe("returned");
-      expect(logs.some((entry) => entry.message.includes("failed to get client"))).toBe(false);
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(unhandled).toEqual([]);
     } finally {

@@ -219,13 +219,7 @@ describe("plugin normal flow with healthy backend", () => {
     await service!.start();
 
     const beforePromptBuild = handlers.get("before_prompt_build");
-    expect(beforePromptBuild).toBeTruthy();
-    const hookResult = await beforePromptBuild!(
-      { messages: [{ role: "user", content: "what backend language should we use?" }] },
-      { agentId: "main", sessionId: "session-normal", sessionKey: "agent:main:normal" },
-    );
-
-    expect(hookResult).toBeUndefined();
+    expect(beforePromptBuild).toBeUndefined();
 
     const contextEngine = contextEngineFactory!() as {
       assemble: (params: {
