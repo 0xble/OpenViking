@@ -657,16 +657,27 @@ describe("Plugin registration", () => {
     );
   });
 
-  it("registers hooks: session_start, session_end, before_prompt_build, agent_end, before_reset, after_compaction", () => {
+  it("registers assemble-mode lifecycle hooks without before_prompt_build", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
     const hookNames = api.on.mock.calls.map((c: unknown[]) => c[0]);
     expect(hookNames).toContain("session_start");
     expect(hookNames).toContain("session_end");
-    expect(hookNames).toContain("before_prompt_build");
     expect(hookNames).toContain("agent_end");
     expect(hookNames).toContain("before_reset");
     expect(hookNames).toContain("after_compaction");
+    expect(hookNames).not.toContain("before_prompt_build");
+  });
+
+  it("registers before_prompt_build when recallPath=hook", () => {
+    const { api } = setupPlugin();
+    api.pluginConfig = {
+      ...api.pluginConfig,
+      recallPath: "hook",
+    };
+    contextEnginePlugin.register(api as any);
+    const hookNames = api.on.mock.calls.map((c: unknown[]) => c[0]);
+    expect(hookNames).toContain("before_prompt_build");
   });
 
   it("plugin has correct metadata", () => {

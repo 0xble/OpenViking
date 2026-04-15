@@ -20,6 +20,17 @@ function errorResponse(message: string, code = "INVALID_ARGUMENT"): Response {
   });
 }
 
+function makeClient(timeoutMs = 5000): OpenVikingClient {
+  return new OpenVikingClient(
+    "http://127.0.0.1:1933",
+    "",
+    "agent",
+    timeoutMs,
+    "acct",
+    "alice",
+  );
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -72,13 +83,76 @@ describe("isMemoryUri", () => {
 });
 
 describe("OpenVikingClient resource and skill import", () => {
+  it("sends configured tenant headers and resolves user memory roots to that user", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "alice" });
+      }
+      if (url.includes("/api/v1/fs/ls")) {
+        return okResponse([
+          { name: "default", isDir: true },
+          { name: "alice", isDir: true },
+        ]);
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = makeClient();
+    await client.find("preference", {
+      targetUri: "viking://user/memories",
+      limit: 3,
+    });
+
+    const [, init] = fetchMock.mock.calls.find((call) =>
+      String(call[0]).endsWith("/api/v1/search/find"),
+    ) as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-OpenViking-Account")).toBe("acct");
+    expect(headers.get("X-OpenViking-User")).toBe("alice");
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      target_uri: "viking://user/alice/memories",
+    });
+  });
+
+  it("refuses tenant-scoped requests without a configured user namespace", async () => {
+    const fetchMock = vi.fn(async () => okResponse({ user: "default" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+
+    await expect(client.find("preference", {
+      targetUri: "viking://user/memories",
+      limit: 3,
+    })).rejects.toThrow("refusing to use the implicit default tenant");
+  });
+
+  it("refuses the literal default tenant namespace", async () => {
+    const client = new OpenVikingClient(
+      "http://127.0.0.1:1933",
+      "",
+      "agent",
+      5000,
+      "default",
+      "default",
+    );
+
+    await expect(client.find("preference", {
+      targetUri: "viking://user/memories",
+      limit: 3,
+    })).rejects.toThrow("cannot be 'default'");
+  });
+
   it("addResource posts remote URL as path", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       okResponse({ root_uri: "viking://resources/site", status: "success" }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    const client = makeClient();
     const result = await client.addResource({
       pathOrUrl: "https://example.com/docs",
       to: "viking://resources/site",
@@ -109,7 +183,7 @@ describe("OpenVikingClient resource and skill import", () => {
       }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    const client = makeClient();
     const result = await client.addResource({ pathOrUrl: filePath, wait: true });
 
     expect(result.queue_status).toEqual({ completed: true });
@@ -135,7 +209,7 @@ describe("OpenVikingClient resource and skill import", () => {
       .mockResolvedValueOnce(okResponse({ root_uri: "viking://resources/resource-dir" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    const client = makeClient();
     await client.addResource({ pathOrUrl: dirPath });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -158,7 +232,7 @@ describe("OpenVikingClient resource and skill import", () => {
       .mockResolvedValueOnce(okResponse({ uri: "viking://agent/skills/demo", name: "demo" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    const client = makeClient();
     const result = await client.addSkill({ path: filePath, wait: true });
 
     expect(result.uri).toBe("viking://agent/skills/demo");
@@ -181,7 +255,7 @@ describe("OpenVikingClient resource and skill import", () => {
       .mockResolvedValueOnce(okResponse({ uri: "viking://agent/skills/demo", name: "demo" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    const client = makeClient();
     await client.addSkill({ path: dirPath, wait: true });
 
     expect(JSON.parse(String((fetchMock.mock.calls[1]![1] as RequestInit).body))).toMatchObject({
@@ -199,7 +273,7 @@ describe("OpenVikingClient resource and skill import", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    const client = makeClient();
     await client.addSkill({ data });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -220,7 +294,7 @@ describe("OpenVikingClient resource and skill import", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    const client = makeClient();
     await client.addSkill({ data });
 
     expect(JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body))).toMatchObject({
@@ -232,7 +306,7 @@ describe("OpenVikingClient resource and skill import", () => {
     const fetchMock = vi.fn().mockResolvedValue(errorResponse("bad import"));
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    const client = makeClient();
     await expect(client.addResource({ pathOrUrl: "https://example.com/bad" })).rejects.toThrow(
       "OpenViking request failed [INVALID_ARGUMENT]: bad import",
     );
@@ -248,7 +322,7 @@ describe("OpenVikingClient resource and skill import", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 15_000);
+    const client = makeClient(15_000);
     const pending = client.addResource({
       pathOrUrl: "https://example.com/docs",
       wait: true,
@@ -273,7 +347,7 @@ describe("OpenVikingClient resource and skill import", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 15_000);
+    const client = makeClient(15_000);
     const pending = client.addResource({
       pathOrUrl: "https://example.com/docs",
       wait: false,

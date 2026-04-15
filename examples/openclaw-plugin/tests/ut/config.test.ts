@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { homedir } from "node:os";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
 
 import { memoryOpenVikingConfigSchema } from "../../config.js";
@@ -38,6 +39,51 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
     });
     expect(cfg.mode).toBe("remote");
     expect(cfg.baseUrl).toBe("http://example.com:9000");
+  });
+
+  it("loads tenant identity from ov.conf", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "ov-plugin-config-"));
+    const configPath = join(tempDir, "ov.conf");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        default_account: "acct",
+        default_user: "alice",
+        default_agent: "main",
+      }),
+      "utf8",
+    );
+
+    const cfg = memoryOpenVikingConfigSchema.parse({ configPath });
+
+    expect(cfg.account).toBe("acct");
+    expect(cfg.user).toBe("alice");
+    expect(cfg.agentId).toBe("default");
+  });
+
+  it("lets explicit tenant config override ov.conf", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "ov-plugin-config-"));
+    const configPath = join(tempDir, "ov.conf");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        default_account: "acct",
+        default_user: "alice",
+        default_agent: "main",
+      }),
+      "utf8",
+    );
+
+    const cfg = memoryOpenVikingConfigSchema.parse({
+      account: "override-acct",
+      user: "bob",
+      agentId: "worker",
+      configPath,
+    });
+
+    expect(cfg.account).toBe("override-acct");
+    expect(cfg.user).toBe("bob");
+    expect(cfg.agentId).toBe("worker");
   });
 
   it("throws on unknown config keys", () => {

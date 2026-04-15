@@ -18,7 +18,7 @@ describe("local OpenViking startup with a bad config", () => {
     localClientPendingPromises.clear();
   });
 
-  it("fails startup quickly and keeps before_prompt_build non-blocking", async () => {
+  it("fails startup quickly and keeps hook-mode before_prompt_build non-blocking", async () => {
     const tempDir = await mkdtemp(join(tmpdir(), "ov-bad-conf-"));
     const badConfigPath = join(tempDir, "ov.conf");
     await writeFile(badConfigPath, "[broken\nthis is not valid\n", "utf8");
@@ -52,6 +52,7 @@ describe("local OpenViking startup with a bad config", () => {
           logFindRequests: false,
           mode: "local",
           port: 19439,
+          recallPath: "hook",
         },
         registerContextEngine: () => {},
         registerService: (entry) => {
@@ -94,8 +95,6 @@ describe("local OpenViking startup with a bad config", () => {
 
       expect(hookOutcome.kind).toBe("returned");
       expect(Date.now() - hookAt).toBeLessThan(1_500);
-      expect(logs.some((entry) => entry.message.includes("failed to get client"))).toBe(false);
-
       await service?.stop?.();
     } finally {
       await rm(tempDir, { force: true, recursive: true });

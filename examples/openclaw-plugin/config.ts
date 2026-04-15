@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { resolve as resolvePath } from "node:path";
@@ -10,6 +11,8 @@ export type MemoryOpenVikingConfig = {
   /** Port for local server when mode is "local". Ignored when mode is "remote". */
   port?: number;
   baseUrl?: string;
+  account?: string;
+  user?: string;
   agentId?: string;
   apiKey?: string;
   targetUri?: string;
@@ -75,6 +78,33 @@ const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = false;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
 const DEFAULT_AGENT_ID = "default";
+
+type OpenVikingConfigIdentity = {
+  account?: string;
+  user?: string;
+  agent?: string;
+};
+
+function toNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readOpenVikingConfigIdentity(configPath: string): OpenVikingConfigIdentity {
+  try {
+    const raw = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    return {
+      account: toNonEmptyString(raw.default_account),
+      user: toNonEmptyString(raw.default_user),
+      agent: toNonEmptyString(raw.default_agent),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function resolveIdentityField(configured: unknown, envValue: unknown, fileValue?: string): string {
+  return toNonEmptyString(configured) ?? toNonEmptyString(envValue) ?? fileValue ?? "";
+}
 
 function resolveAgentId(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
@@ -176,6 +206,8 @@ export const memoryOpenVikingConfigSchema = {
         "configPath",
         "port",
         "baseUrl",
+        "account",
+        "user",
         "agentId",
         "apiKey",
         "targetUri",
@@ -218,6 +250,7 @@ export const memoryOpenVikingConfigSchema = {
     const configPath = resolvePath(
       resolveEnvVars(rawConfigPath).replace(/^~/, homedir()),
     );
+    const configIdentity = readOpenVikingConfigIdentity(configPath);
 
     const localBaseUrl = `http://127.0.0.1:${port}`;
     const rawBaseUrl =
@@ -246,6 +279,16 @@ export const memoryOpenVikingConfigSchema = {
       configPath,
       port,
       baseUrl: resolvedBaseUrl,
+      account: resolveIdentityField(
+        cfg.account,
+        process.env.OPENVIKING_ACCOUNT ?? process.env.OPENVIKING_ACCOUNT_ID,
+        configIdentity.account,
+      ),
+      user: resolveIdentityField(
+        cfg.user,
+        process.env.OPENVIKING_USER ?? process.env.OPENVIKING_USER_ID,
+        configIdentity.user,
+      ),
       agentId: resolveAgentId(cfg.agentId),
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
@@ -354,6 +397,16 @@ export const memoryOpenVikingConfigSchema = {
       label: "OpenViking Base URL (remote)",
       placeholder: DEFAULT_BASE_URL,
       help: "HTTP URL when mode is remote (or use ${OPENVIKING_BASE_URL})",
+    },
+    account: {
+      label: "OpenViking Account",
+      placeholder: "from ov.conf default_account",
+      help: "Tenant account sent as X-OpenViking-Account. Defaults to ov.conf default_account or OPENVIKING_ACCOUNT.",
+    },
+    user: {
+      label: "OpenViking User",
+      placeholder: "from ov.conf default_user",
+      help: "Tenant user sent as X-OpenViking-User. Defaults to ov.conf default_user or OPENVIKING_USER.",
     },
     agentId: {
       label: "Agent ID",

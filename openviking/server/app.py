@@ -71,6 +71,7 @@ def create_app(
             logger.info("OpenVikingService initialized")
 
         set_service(service)
+        app.state.default_user = service.user
 
         # Initialize APIKeyManager after service (needs VikingFS)
         if config.auth_mode == "api_key" and config.root_api_key:
@@ -87,7 +88,7 @@ def create_app(
         elif config.auth_mode == "trusted":
             app.state.api_key_manager = None
             if config.root_api_key:
-                logger.info(
+                logger.warning(
                     "Trusted mode enabled: authentication trusts X-OpenViking-Account/User/Agent "
                     "headers and requires the configured server API key on each request. "
                     "Only expose this server behind a trusted network boundary or "
@@ -148,6 +149,8 @@ def create_app(
     )
 
     app.state.config = config
+    if service is not None:
+        app.state.default_user = service.user
 
     # Add CORS middleware
     app.add_middleware(

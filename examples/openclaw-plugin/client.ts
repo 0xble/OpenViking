@@ -175,6 +175,16 @@ const MEMORY_URI_PATTERNS = [
 const USER_STRUCTURE_DIRS = new Set(["memories"]);
 const AGENT_STRUCTURE_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
 const REMOTE_RESOURCE_PREFIXES = ["http://", "https://", "git@", "ssh://", "git://"];
+const IMPLICIT_TENANT_PATHS = new Set([
+  "/health",
+  "/api/v1/system/status",
+  "/api/v1/system/wait",
+  "/api/v1/debug/health",
+]);
+const IMPLICIT_TENANT_PREFIXES = [
+  "/api/v1/admin",
+  "/api/v1/observer",
+];
 
 function md5Short(input: string): string {
   return createHash("md5").update(input).digest("hex").slice(0, 12);
@@ -198,6 +208,17 @@ function resolveWaitRequestTimeoutMs(defaultTimeoutMs: number, waitTimeoutSecond
       ? Math.ceil(waitTimeoutSeconds * 1000) + WAIT_REQUEST_TIMEOUT_BUFFER_MS
       : DEFAULT_WAIT_REQUEST_TIMEOUT_MS;
   return Math.max(defaultTimeoutMs, requestedMs);
+}
+
+function requiresTenantIdentity(path: string): boolean {
+  const pathname = path.split("?", 1)[0] ?? path;
+  if (IMPLICIT_TENANT_PATHS.has(pathname)) {
+    return false;
+  }
+  if (IMPLICIT_TENANT_PREFIXES.some((prefix) => pathname.startsWith(prefix))) {
+    return false;
+  }
+  return pathname.startsWith("/api/v1/");
 }
 
 async function cleanupUploadTempPath(path?: string): Promise<void> {
@@ -228,6 +249,25 @@ export class OpenVikingClient {
     return this.defaultAgentId;
   }
 
+  private resolvedTenantIdentity(path: string): { accountId: string; userId: string } | null {
+    const accountId = this.accountId.trim();
+    const userId = this.userId.trim();
+    if (!accountId && !userId && !requiresTenantIdentity(path)) {
+      return null;
+    }
+    if (!accountId || !userId) {
+      throw new Error(
+        "OpenViking account/user is not configured; refusing to use the implicit default tenant.",
+      );
+    }
+    if (accountId === "default" || userId === "default") {
+      throw new Error(
+        "OpenViking account/user cannot be 'default'; configure a real OpenViking tenant identity.",
+      );
+    }
+    return { accountId, userId };
+  }
+
   private async emitRoutingDebug(
     label: string,
     detail: Record<string, unknown>,
@@ -238,13 +278,14 @@ export class OpenVikingClient {
     }
     const effectiveAgentId = agentId ?? this.defaultAgentId;
     const identity = await this.getRuntimeIdentity(agentId);
+    const tenant = this.resolvedTenantIdentity("/api/v1/system/status");
     this.routingDebugLog(
       `openviking: ${label} ` +
         JSON.stringify({
           ...detail,
           X_OpenViking_Agent: effectiveAgentId,
-          X_OpenViking_Account: this.accountId.trim() || "default",
-          X_OpenViking_User: this.userId.trim() || "default",
+          X_OpenViking_Account: tenant?.accountId ?? null,
+          X_OpenViking_User: tenant?.userId ?? null,
           resolved_user_id: identity.userId,
           session_vfs_hint: detail.sessionId
             ? `viking://session/${identity.userId}/${String(detail.sessionId)}`
@@ -267,8 +308,11 @@ export class OpenVikingClient {
       if (this.apiKey) {
         headers.set("X-API-Key", this.apiKey);
       }
-      headers.set("X-OpenViking-Account", this.accountId.trim() || "default");
-      headers.set("X-OpenViking-User", this.userId.trim() || "default");
+      const tenant = this.resolvedTenantIdentity(path);
+      if (tenant) {
+        headers.set("X-OpenViking-Account", tenant.accountId);
+        headers.set("X-OpenViking-User", tenant.userId);
+      }
       if (effectiveAgentId) {
         headers.set("X-OpenViking-Agent", effectiveAgentId);
       }
@@ -318,11 +362,15 @@ export class OpenVikingClient {
     if (cached) {
       return cached;
     }
-    const fallback: RuntimeIdentity = { userId: "default", agentId: effectiveAgentId || "default" };
+    const tenant = this.resolvedTenantIdentity("/api/v1/system/status");
+    const fallback: RuntimeIdentity = {
+      userId: tenant?.userId ?? "unknown",
+      agentId: effectiveAgentId || "default",
+    };
     try {
       const status = await this.request<{ user?: unknown }>("/api/v1/system/status", {}, agentId);
       const userId =
-        typeof status.user === "string" && status.user.trim() ? status.user.trim() : "default";
+        typeof status.user === "string" && status.user.trim() ? status.user.trim() : fallback.userId;
       const identity: RuntimeIdentity = { userId, agentId: effectiveAgentId || "default" };
       this.identityCache.set(effectiveAgentId, identity);
       return identity;
@@ -365,11 +413,7 @@ export class OpenVikingClient {
           saveSpace(preferredSpace);
           return preferredSpace;
         }
-        if (scope === "user" && spaces.includes("default")) {
-          saveSpace("default");
-          return "default";
-        }
-        if (spaces.length === 1) {
+        if (spaces.length === 1 && !(scope === "user" && spaces[0] === "default")) {
           saveSpace(spaces[0]!);
           return spaces[0]!;
         }
@@ -425,12 +469,13 @@ export class OpenVikingClient {
     };
     const effectiveAgentId = agentId ?? this.defaultAgentId;
     const identity = await this.getRuntimeIdentity(agentId);
+    const tenant = this.resolvedTenantIdentity("/api/v1/search/find");
     this.routingDebugLog?.(
       `openviking: find POST ${this.baseUrl}/api/v1/search/find ` +
         JSON.stringify({
           X_OpenViking_Agent: effectiveAgentId,
-          X_OpenViking_Account: this.accountId.trim() || "default",
-          X_OpenViking_User: this.userId.trim() || "default",
+          X_OpenViking_Account: tenant?.accountId ?? null,
+          X_OpenViking_User: tenant?.userId ?? null,
           resolved_user_id: identity.userId,
           target_uri: normalizedTargetUri,
           target_uri_input: options.targetUri,

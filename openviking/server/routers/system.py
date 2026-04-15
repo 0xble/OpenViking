@@ -37,8 +37,10 @@ async def health_check(request: Request):
         # Check if we have auth or in dev mode
         api_key_manager = getattr(request.app.state, "api_key_manager", None)
         if api_key_manager is None:
-            # Dev mode - use default user
-            result["user_id"] = x_openviking_user or "default"
+            # Dev mode - report the configured service user when available.
+            configured_user = getattr(request.app.state, "default_user", None)
+            configured_user_id = getattr(configured_user, "user_id", None)
+            result["user_id"] = x_openviking_user or configured_user_id or "unknown"
         elif x_api_key or authorization:
             # Try to resolve identity
             try:

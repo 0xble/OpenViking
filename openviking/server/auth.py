@@ -45,6 +45,17 @@ def _root_request_requires_explicit_tenant(path: str) -> bool:
     return True
 
 
+def _default_request_user(request: Request) -> UserIdentifier:
+    configured = getattr(request.app.state, "default_user", None)
+    if isinstance(configured, UserIdentifier):
+        return configured
+    return UserIdentifier.the_default_user()
+
+
+def _is_default_namespace(account_id: Optional[str], user_id: Optional[str]) -> bool:
+    return account_id == "default" or user_id == "default"
+
+
 def _configured_root_api_key(request: Request) -> Optional[str]:
     config = getattr(request.app.state, "config", None)
     return getattr(config, "root_api_key", None)
@@ -59,6 +70,12 @@ def _extract_api_key(x_api_key: Optional[str], authorization: Optional[str]) -> 
         return x_api_key
     if authorization and authorization.startswith("Bearer "):
         return authorization[7:]
+    return None
+
+
+def _header_value(value: Optional[str]) -> Optional[str]:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     return None
 
 
@@ -80,6 +97,9 @@ async def resolve_identity(
     auth_mode = _auth_mode(request)
     api_key_manager = getattr(request.app.state, "api_key_manager", None)
     api_key = _extract_api_key(x_api_key, authorization)
+    x_openviking_account = _header_value(x_openviking_account)
+    x_openviking_user = _header_value(x_openviking_user)
+    x_openviking_agent = _header_value(x_openviking_agent)
 
     if auth_mode == "trusted":
         configured_root_api_key = _configured_root_api_key(request)
@@ -100,11 +120,12 @@ async def resolve_identity(
         )
 
     if api_key_manager is None:
+        default_user = _default_request_user(request)
         return ResolvedIdentity(
             role=Role.ROOT,
-            account_id=x_openviking_account or "default",
-            user_id=x_openviking_user or "default",
-            agent_id=x_openviking_agent or "default",
+            account_id=x_openviking_account or default_user.account_id,
+            user_id=x_openviking_user or default_user.user_id,
+            agent_id=x_openviking_agent or default_user.agent_id,
         )
 
     if not api_key:
@@ -139,6 +160,13 @@ async def get_request_context(
                 "ROOT requests to tenant-scoped APIs must include X-OpenViking-Account "
                 "and X-OpenViking-User headers. Use a user key for regular data access."
             )
+    if _root_request_requires_explicit_tenant(path) and _is_default_namespace(
+        identity.account_id, identity.user_id
+    ):
+        raise InvalidArgumentError(
+            "The literal default OpenViking namespace is disabled for tenant-scoped APIs. "
+            "Configure a real X-OpenViking-Account and X-OpenViking-User."
+        )
 
     if auth_mode == "trusted" and not identity.account_id:
         raise InvalidArgumentError("Trusted mode requests must include X-OpenViking-Account.")

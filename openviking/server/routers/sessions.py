@@ -3,7 +3,6 @@
 """Sessions endpoints for OpenViking HTTP Server."""
 
 import logging
-from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Path, Query
@@ -139,16 +138,8 @@ async def get_session(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get session details."""
-    from openviking_cli.exceptions import NotFoundError
-
     service = get_service()
-    try:
-        session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
-    except NotFoundError:
-        return Response(
-            status="error",
-            error=ErrorInfo(code="NOT_FOUND", message=f"Session {session_id} not found"),
-        )
+    session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
     pending_tokens = sum(len(m.content) // 4 for m in session.messages)

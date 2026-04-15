@@ -230,7 +230,7 @@ class Session:
     async def exists(self) -> bool:
         """Check whether this session already exists in storage."""
         try:
-            await self._viking_fs.stat(self._session_uri, ctx=self.ctx)
+            await self._viking_fs.read_file(f"{self._session_uri}/messages.jsonl", ctx=self.ctx)
             return True
         except Exception:
             return False
@@ -473,7 +473,6 @@ class Session:
             "archived": True,
             "trace_id": trace_id,
         }
-
 
     async def _run_commit_pipeline(
         self,
@@ -794,13 +793,7 @@ class Session:
         usage_records: List["Usage"],
     ) -> bool:
         """Return whether post-archive detached work is required."""
-        return bool(
-            messages
-            and (
-                self._session_compressor is not None
-                or bool(usage_records)
-            )
-        )
+        return bool(messages and (self._session_compressor is not None or bool(usage_records)))
 
     def _update_active_counts(self) -> int:
         """Update active_count for used contexts/skills."""
