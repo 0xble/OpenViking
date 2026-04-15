@@ -1418,7 +1418,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
 
         if (cfg.autoRecall && queryText.length >= 5) {
           const agentId = resolveAgentId(ctx?.sessionId, ctx?.sessionKey);
-          let client: OpenVikingClient;
+          let client: OpenVikingClient | undefined;
           try {
             client = await withTimeout(
               getClient(),
