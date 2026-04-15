@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
 from __future__ import annotations
 
 import re
@@ -68,9 +71,12 @@ def resolve_time_bounds(
     if normalized_until:
         until_dt = _parse_time_value(normalized_until, current_time, is_upper_bound=True)
 
-    if since_dt and until_dt and normalize_datetime_for_comparison(
+    if (
         since_dt
-    ) > normalize_datetime_for_comparison(until_dt):
+        and until_dt
+        and normalize_datetime_for_comparison(since_dt)
+        > normalize_datetime_for_comparison(until_dt)
+    ):
         raise ValueError(f"{lower_label} must be earlier than or equal to {upper_label}")
 
     return (since_dt, until_dt)

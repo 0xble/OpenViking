@@ -1337,19 +1337,7 @@ async fn handle_find(
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
-    params.push(format!("--time-field {}", time_field.cli_value()));
-    if let Some(day) = &on {
-        params.push(format!("--on {}", day));
-    } else {
-        if let Some(s) = &last {
-            params.push(format!("--last {}", s));
-        } else if let Some(s) = &since {
-            params.push(format!("--since {}", s));
-        }
-        if let Some(u) = &until {
-            params.push(format!("--until {}", u));
-        }
-    }
+    append_time_filter_params(&mut params, time_field, &since, &until, &last, &on);
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let (since, until) = resolve_time_flags(since, until, last, on);
@@ -1389,19 +1377,7 @@ async fn handle_search(
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
-    params.push(format!("--time-field {}", time_field.cli_value()));
-    if let Some(day) = &on {
-        params.push(format!("--on {}", day));
-    } else {
-        if let Some(s) = &last {
-            params.push(format!("--last {}", s));
-        } else if let Some(s) = &since {
-            params.push(format!("--since {}", s));
-        }
-        if let Some(u) = &until {
-            params.push(format!("--until {}", u));
-        }
-    }
+    append_time_filter_params(&mut params, time_field, &since, &until, &last, &on);
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let (since, until) = resolve_time_flags(since, until, last, on);
@@ -1420,6 +1396,29 @@ async fn handle_search(
         ctx.compact,
     )
     .await
+}
+
+fn append_time_filter_params(
+    params: &mut Vec<String>,
+    time_field: RetrievalTimeField,
+    since: &Option<String>,
+    until: &Option<String>,
+    last: &Option<String>,
+    on: &Option<String>,
+) {
+    params.push(format!("--time-field {}", time_field.cli_value()));
+    if let Some(day) = on {
+        params.push(format!("--on {}", day));
+        return;
+    }
+    if let Some(value) = last {
+        params.push(format!("--last {}", value));
+    } else if let Some(value) = since {
+        params.push(format!("--since {}", value));
+    }
+    if let Some(value) = until {
+        params.push(format!("--until {}", value));
+    }
 }
 
 /// Resolve --since/--until/--last/--on into canonical API bounds.

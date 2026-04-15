@@ -423,9 +423,7 @@ async def index_resource(
             overview = content.decode("utf-8")
 
     if abstract or overview:
-        await vectorize_directory_meta(
-            uri, abstract, overview, context_type=context_type, ctx=ctx
-        )
+        await vectorize_directory_meta(uri, abstract, overview, context_type=context_type, ctx=ctx)
 
     # 2. Index Files
     try:

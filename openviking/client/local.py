@@ -32,6 +32,21 @@ def _to_jsonable(value: Any) -> Any:
     return value
 
 
+def _resolve_search_filter(
+    filter: Optional[Dict[str, Any]],
+    since: Optional[str],
+    until: Optional[str],
+    time_field: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Merge optional retrieval time bounds into the metadata filter."""
+    return merge_time_filter(
+        filter,
+        since=since,
+        until=until,
+        time_field=time_field,
+    )
+
+
 class LocalClient(BaseClient):
     """Local Client for OpenViking (embedded mode).
 
@@ -270,7 +285,7 @@ class LocalClient(BaseClient):
         time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search without session context."""
-        resolved_filter = merge_time_filter(filter, since=since, until=until, time_field=time_field)
+        resolved_filter = _resolve_search_filter(filter, since, until, time_field)
         execution = await run_with_telemetry(
             operation="search.find",
             telemetry=telemetry,
@@ -302,12 +317,7 @@ class LocalClient(BaseClient):
         time_field: Optional[str] = None,
     ) -> Any:
         """Semantic search with optional session context."""
-        resolved_filter = merge_time_filter(
-            filter,
-            since=since,
-            until=until,
-            time_field=time_field,
-        )
+        resolved_filter = _resolve_search_filter(filter, since, until, time_field)
 
         async def _search():
             session = None
@@ -457,8 +467,6 @@ class LocalClient(BaseClient):
 
         If both content and parts are provided, parts takes precedence.
         """
-        from datetime import datetime, timezone
-
         from openviking.message.part import Part, TextPart, part_from_dict
 
         session = self._service.sessions.session(self._ctx, session_id)
