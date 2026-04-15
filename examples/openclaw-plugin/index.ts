@@ -1420,7 +1420,7 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
 
       if (cfg.autoRecall && queryText.length >= 5) {
         const agentId = resolveAgentId(ctx?.sessionId, ctx?.sessionKey);
-        let client: OpenVikingClient;
+        let client: OpenVikingClient | undefined;
         try {
           client = await withTimeout(
             getClient(),
@@ -1429,20 +1429,21 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
           );
         } catch (err) {
           api.logger.warn?.(`openviking: failed to get client: ${String(err)}`);
-          return;
         }
 
-        const recallPrompt = await buildRecallPromptSection({
-          cfg,
-          client,
-          logger: api.logger,
-          queryText,
-          agentId,
-          precheck: () => quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess),
-          verboseLog: verboseRoutingInfo,
-        });
-        if (recallPrompt.section) {
-          prependContextParts.push(recallPrompt.section);
+        if (client) {
+          const recallPrompt = await buildRecallPromptSection({
+            cfg,
+            client,
+            logger: api.logger,
+            queryText,
+            agentId,
+            precheck: () => quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess),
+            verboseLog: verboseRoutingInfo,
+          });
+          if (recallPrompt.section) {
+            prependContextParts.push(recallPrompt.section);
+          }
         }
       }
 
