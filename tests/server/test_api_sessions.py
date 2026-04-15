@@ -379,11 +379,18 @@ async def test_commit_endpoint_rejects_after_failed_archive(
     create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
-    async def failing_extract(*args, **kwargs):
+    async def failing_summary(*args, **kwargs):
         del args, kwargs
-        raise RuntimeError("synthetic extraction failure")
+        raise RuntimeError("synthetic summary failure")
 
-    service.sessions._session_compressor.extract_long_term_memories = failing_extract
+    original_session = service.sessions.session
+
+    def session_with_failing_summary(*args, **kwargs):
+        session = original_session(*args, **kwargs)
+        session._generate_archive_summary_async = failing_summary
+        return session
+
+    service.sessions.session = session_with_failing_summary
 
     await client.post(
         f"/api/v1/sessions/{session_id}/messages",

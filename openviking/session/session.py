@@ -455,8 +455,8 @@ class Session:
         )
 
         asyncio.create_task(
-            self._run_memory_extraction(
-                task_id=task.task_id,
+            self._run_commit_pipeline(
+                commit_task_id=task.task_id,
                 archive_uri=archive_uri,
                 messages=messages_to_archive,
                 usage_records=usage_snapshot,
@@ -475,29 +475,25 @@ class Session:
         }
 
 
-    async def _run_memory_extraction(
+    async def _run_commit_pipeline(
         self,
-        task_id: str,
+        commit_task_id: str,
         archive_uri: str,
         messages: List[Message],
         usage_records: List["Usage"],
         first_message_id: str,
         last_message_id: str,
     ) -> None:
-        """Phase 2: Extract memories, write relations, enqueue — runs in background."""
-        import uuid
+        """Finalize the archive, then optionally spawn detached follow-up work."""
 
         from openviking.service.task_tracker import get_task_tracker
-        from openviking.storage.transaction import get_lock_manager
         from openviking.telemetry import OperationTelemetry, bind_telemetry
 
         tracker = get_task_tracker()
-
-        memories_extracted: Dict[str, int] = {}
-        active_count_updated = 0
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
         archive_index = self._archive_index_from_uri(archive_uri)
-        redo_task_id: Optional[str] = None
+        memory_task_id: Optional[str] = None
+        followup_required = self._should_run_memory_followup(messages, usage_records)
 
         try:
             if not await self._wait_for_previous_archive_done(archive_index):
@@ -511,34 +507,18 @@ class Session:
                     blocked_by=f"archive_{archive_index - 1:03d}",
                 )
                 tracker.fail(
-                    task_id,
+                    commit_task_id,
                     f"Previous archive archive_{archive_index - 1:03d} failed; "
                     "cannot continue session commit",
                 )
                 return
 
-            tracker.start(task_id)
+            tracker.start(commit_task_id)
             with bind_telemetry(telemetry):
-                # redo-log protection
-                redo_task_id = str(uuid.uuid4())
-                redo_log = get_lock_manager().redo_log
-                redo_log.write_pending(
-                    redo_task_id,
-                    {
-                        "archive_uri": archive_uri,
-                        "session_uri": self._session_uri,
-                        "account_id": self.ctx.account_id,
-                        "user_id": self.ctx.user.user_id,
-                        "agent_id": self.ctx.user.agent_id,
-                        "role": self.ctx.role.value,
-                    },
-                )
-
                 latest_archive_overview = await self._get_latest_completed_archive_overview(
                     exclude_archive_uri=archive_uri
                 )
 
-                # Generate summary and write L0/L1 to archive
                 summary = await self._generate_archive_summary_async(
                     messages,
                     latest_archive_overview=latest_archive_overview,
@@ -566,7 +546,106 @@ class Session:
                         ctx=self.ctx,
                     )
 
-                # Memory extraction
+            snapshot = telemetry.finish("ok")
+            await self._merge_and_save_commit_meta(
+                archive_index=archive_index,
+                telemetry_snapshot=snapshot,
+                memories_extracted={},
+            )
+
+            if followup_required:
+                memory_task = tracker.create(
+                    "session_memory_extract",
+                    resource_id=self.session_id,
+                    owner_account_id=self.ctx.account_id,
+                    owner_user_id=self.ctx.user.user_id,
+                )
+                memory_task_id = memory_task.task_id
+
+            await self._write_done_file(archive_uri, first_message_id, last_message_id)
+
+            commit_result = {
+                "session_id": self.session_id,
+                "archive_uri": archive_uri,
+                "archive_ready": True,
+                "memories_extracted": {},
+                "active_count_updated": 0,
+                "memory_task_id": memory_task_id,
+                "memory_status": "queued" if memory_task_id else "completed",
+                "token_usage": {
+                    "llm": dict(self._meta.llm_token_usage),
+                    "embedding": dict(self._meta.embedding_token_usage),
+                    "total": {
+                        "total_tokens": self._meta.llm_token_usage["total_tokens"]
+                        + self._meta.embedding_token_usage["total_tokens"]
+                    },
+                },
+            }
+            tracker.complete(commit_task_id, commit_result)
+            logger.info(f"Session {self.session_id} archive finalization completed")
+
+            if memory_task_id:
+                asyncio.create_task(
+                    self._run_memory_followup(
+                        task_id=memory_task_id,
+                        archive_uri=archive_uri,
+                        messages=messages,
+                        usage_records=usage_records,
+                        latest_archive_overview=latest_archive_overview,
+                    )
+                )
+        except Exception as e:
+            if memory_task_id:
+                tracker.fail(
+                    memory_task_id,
+                    "Commit failed before detached memory follow-up could start",
+                )
+            await self._write_failed_marker(
+                archive_uri,
+                stage="archive_finalize",
+                error=str(e),
+            )
+            tracker.fail(commit_task_id, str(e))
+            logger.exception(f"Archive finalization failed for session {self.session_id}")
+
+    async def _run_memory_followup(
+        self,
+        task_id: str,
+        archive_uri: str,
+        messages: List[Message],
+        usage_records: List["Usage"],
+        latest_archive_overview: str,
+    ) -> None:
+        """Run detached post-archive memory extraction and usage bookkeeping."""
+        import uuid
+
+        from openviking.service.task_tracker import get_task_tracker
+        from openviking.storage.transaction import get_lock_manager
+        from openviking.telemetry import OperationTelemetry, bind_telemetry
+
+        tracker = get_task_tracker()
+        memories_extracted: Dict[str, int] = {}
+        active_count_updated = 0
+        telemetry = OperationTelemetry(operation="session_memory_extract", enabled=True)
+        redo_task_id: Optional[str] = None
+
+        try:
+            tracker.start(task_id)
+            with bind_telemetry(telemetry):
+                redo_task_id = str(uuid.uuid4())
+                redo_log = get_lock_manager().redo_log
+                redo_log.write_pending(
+                    redo_task_id,
+                    {
+                        "archive_uri": archive_uri,
+                        "session_uri": self._session_uri,
+                        "account_id": self.ctx.account_id,
+                        "user_id": self.ctx.user.user_id,
+                        "agent_id": self.ctx.user.agent_id,
+                        "role": self.ctx.role.value,
+                    },
+                )
+
                 if self._session_compressor:
                     logger.info(
                         f"Starting memory extraction from {len(messages)} archived messages"
@@ -585,7 +664,6 @@ class Session:
                     self._stats.memories_extracted += len(extracted)
                     get_current_telemetry().set("memory.extracted", len(extracted))
 
-                # Write relations (using snapshot, not self._usage_records)
                 if self._viking_fs:
                     for usage in usage_records:
                         try:
@@ -595,7 +673,6 @@ class Session:
 
                 redo_log.mark_done(redo_task_id)
 
-                # Update active_count (using snapshot, not self._usage_records)
                 if self._vikingdb_manager:
                     uris = [u.uri for u in usage_records if u.uri]
                     try:
@@ -609,16 +686,13 @@ class Session:
                             f"Updated active_count for {active_count_updated} contexts/skills"
                         )
 
-            # Phase 2 complete — update meta with telemetry and commit info
             snapshot = telemetry.finish("ok")
             await self._merge_and_save_commit_meta(
-                archive_index=archive_index,
+                archive_index=0,
                 memories_extracted=memories_extracted,
                 telemetry_snapshot=snapshot,
+                update_commit_fields=False,
             )
-
-            # Write .done file last — signals that all state is finalized
-            await self._write_done_file(archive_uri, first_message_id, last_message_id)
 
             tracker.complete(
                 task_id,
@@ -637,17 +711,17 @@ class Session:
                     },
                 },
             )
-            logger.info(f"Session {self.session_id} memory extraction completed")
+            logger.info(f"Session {self.session_id} detached memory follow-up completed")
         except Exception as e:
             if redo_task_id:
                 get_lock_manager().redo_log.mark_done(redo_task_id)
-            await self._write_failed_marker(
+            await self._write_memory_failed_marker(
                 archive_uri,
                 stage="memory_extraction",
                 error=str(e),
             )
             tracker.fail(task_id, str(e))
-            logger.exception(f"Memory extraction failed for session {self.session_id}")
+            logger.exception(f"Detached memory follow-up failed for session {self.session_id}")
 
     async def _write_done_file(
         self,
@@ -692,6 +766,40 @@ class Session:
             uri=f"{archive_uri}/.failed.json",
             content=json.dumps(payload, ensure_ascii=False),
             ctx=self.ctx,
+        )
+
+    async def _write_memory_failed_marker(
+        self,
+        archive_uri: str,
+        stage: str,
+        error: str,
+    ) -> None:
+        """Persist a non-blocking extraction failure marker for the archive."""
+        if not self._viking_fs:
+            return
+        payload = {
+            "stage": stage,
+            "error": error,
+            "failed_at": get_current_timestamp(),
+        }
+        await self._viking_fs.write_file(
+            uri=f"{archive_uri}/.memory.failed.json",
+            content=json.dumps(payload, ensure_ascii=False),
+            ctx=self.ctx,
+        )
+
+    def _should_run_memory_followup(
+        self,
+        messages: List[Message],
+        usage_records: List["Usage"],
+    ) -> bool:
+        """Return whether post-archive detached work is required."""
+        return bool(
+            messages
+            and (
+                self._session_compressor is not None
+                or bool(usage_records)
+            )
         )
 
     def _update_active_counts(self) -> int:
@@ -1070,6 +1178,8 @@ class Session:
         archive_index: int,
         memories_extracted: Dict[str, int],
         telemetry_snapshot: Any,
+        *,
+        update_commit_fields: bool = True,
     ) -> None:
         """Reload and merge latest meta state before persisting commit results."""
         latest_meta = self._meta
@@ -1090,13 +1200,15 @@ class Session:
             embedding = telemetry_snapshot.summary.get("tokens", {}).get("embedding", {})
             latest_meta.embedding_token_usage["total_tokens"] += embedding.get("total", 0)
 
-        latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
+        if update_commit_fields:
+            latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
         for cat, count in memories_extracted.items():
             latest_meta.memories_extracted[cat] = latest_meta.memories_extracted.get(cat, 0) + count
             latest_meta.memories_extracted["total"] = (
                 latest_meta.memories_extracted.get("total", 0) + count
             )
-        latest_meta.last_commit_at = get_current_timestamp()
+        if update_commit_fields:
+            latest_meta.last_commit_at = get_current_timestamp()
         latest_meta.message_count = await self._read_live_message_count()
         self._meta = latest_meta
         await self._save_meta()

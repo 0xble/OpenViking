@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+from typing import Optional
 from unittest.mock import patch
 
 import pytest
@@ -109,6 +110,13 @@ async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
             return task.to_dict()
         await asyncio.sleep(0.1)
     raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
+
+
+async def _wait_for_memory_task(commit_task: dict, timeout: float = 30.0) -> Optional[dict]:
+    memory_task_id = ((commit_task.get("result") or {}).get("memory_task_id"))
+    if not memory_task_id:
+        return None
+    return await _wait_for_task(memory_task_id, timeout=timeout)
 
 
 class TestGetContextForSearch:
@@ -315,8 +323,10 @@ class TestGetContextForSearch:
         ]
 
         second_gate.set()
-        await _wait_for_task(result1["task_id"])
-        await _wait_for_task(result2["task_id"])
+        commit_task1 = await _wait_for_task(result1["task_id"])
+        commit_task2 = await _wait_for_task(result2["task_id"])
+        await _wait_for_memory_task(commit_task1)
+        await _wait_for_memory_task(commit_task2)
 
         second_overview = await session._viking_fs.read_file(
             f"{result2['archive_uri']}/.overview.md",
