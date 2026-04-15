@@ -1731,6 +1731,11 @@ class VikingFS:
             except AGFSHTTPError as e:
                 if e.status_code != 404:
                     raise
+            except FileNotFoundError:
+                pass
+            except RuntimeError as e:
+                if "not found" not in str(e).lower():
+                    raise
             except AGFSClientError:
                 raise
 

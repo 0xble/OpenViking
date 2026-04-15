@@ -35,11 +35,28 @@ async def _wait_for_memory_task(commit_task: dict, timeout: float = 30.0) -> Opt
     return await _wait_for_task(memory_task_id, timeout=timeout)
 
 
+async def _no_memories(*args, **kwargs):
+    del args, kwargs
+    return []
+
+
+async def _fast_summary(messages, latest_archive_overview=""):
+    del latest_archive_overview
+    return f"# Session Summary\n\n**Overview**: {len(messages)} messages"
+
+
+def _use_fast_commit_pipeline(session: Session, extract=_no_memories) -> None:
+    session._generate_archive_summary_async = _fast_summary
+    session._session_compressor.extract_long_term_memories = extract
+
+
 class TestCommit:
     """Test commit"""
 
     async def test_commit_success(self, session_with_messages: Session):
         """Test successful commit returns accepted with task_id"""
+        _use_fast_commit_pipeline(session_with_messages)
+
         result = await session_with_messages.commit_async()
 
         assert isinstance(result, dict)
@@ -52,6 +69,8 @@ class TestCommit:
         self, session_with_messages: Session, client: AsyncOpenViking
     ):
         """Test commit spawns detached memory extraction."""
+        _use_fast_commit_pipeline(session_with_messages)
+
         result = await session_with_messages.commit_async()
         commit_task = await _wait_for_task(result["task_id"])
         assert commit_task["status"] == "completed"
@@ -70,6 +89,8 @@ class TestCommit:
 
     async def test_commit_archives_messages(self, session_with_messages: Session):
         """Test commit archives messages"""
+        _use_fast_commit_pipeline(session_with_messages)
+
         initial_message_count = len(session_with_messages.messages)
         assert initial_message_count > 0
 
@@ -90,6 +111,8 @@ class TestCommit:
     async def test_commit_multiple_times(self, client: AsyncOpenViking):
         """Test multiple commits"""
         session = client.session(session_id="multi_commit_test")
+
+        _use_fast_commit_pipeline(session)
 
         # First round of conversation
         session.add_message("user", [TextPart("First round message")])
@@ -116,6 +139,8 @@ class TestCommit:
 
         session.add_message("user", [TextPart("First round message")])
         session.add_message("assistant", [TextPart("First round response")])
+
+        _use_fast_commit_pipeline(session)
         result1 = await session.commit_async()
         await _wait_for_task(result1["task_id"])
 
@@ -125,13 +150,9 @@ class TestCommit:
         )
         seen: dict[str, str] = {}
 
-        original_generate = session._generate_archive_summary_async
-
         async def capture_generate(messages, latest_archive_overview=""):
             seen["summary"] = latest_archive_overview
-            return await original_generate(
-                messages, latest_archive_overview=latest_archive_overview
-            )
+            return await _fast_summary(messages, latest_archive_overview=latest_archive_overview)
 
         async def capture_extract(*args, **kwargs):
             seen["extract"] = kwargs.get("latest_archive_overview", "")
@@ -155,6 +176,7 @@ class TestCommit:
     async def test_commit_with_usage_records(self, client: AsyncOpenViking):
         """Test commit with usage records"""
         session = client.session(session_id="usage_commit_test")
+        _use_fast_commit_pipeline(session)
 
         session.add_message("user", [TextPart("Test message")])
         session.used(contexts=["viking://user/test/resources/doc.md"])
@@ -204,6 +226,7 @@ class TestCommit:
 
         # Mark as used and commit
         session = client.session(session_id="active_count_regression_test")
+        _use_fast_commit_pipeline(session)
         session.add_message("user", [TextPart("Query")])
         session.used(contexts=[uri])
         session.add_message("assistant", [TextPart("Answer")])
@@ -240,7 +263,7 @@ class TestCommit:
             await extraction_gate.wait()
             return []
 
-        session._session_compressor.extract_long_term_memories = gated_extract
+        _use_fast_commit_pipeline(session, gated_extract)
 
         session.add_message("user", [TextPart("First round message")])
         result = await session.commit_async()
@@ -271,7 +294,7 @@ class TestCommit:
             del args, kwargs
             raise RuntimeError("synthetic extraction failure")
 
-        session._session_compressor.extract_long_term_memories = failing_extract
+        _use_fast_commit_pipeline(session, failing_extract)
 
         session.add_message("user", [TextPart("First round message")])
         result = await session.commit_async()

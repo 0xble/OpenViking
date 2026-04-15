@@ -58,7 +58,7 @@ def _write_test_config(tmp_path):
             {
                 "storage": {
                     "workspace": str(tmp_path / "workspace"),
-                    "agfs": {"backend": "local", "mode": "binding-client"},
+                    "agfs": {"backend": "local"},
                     "vectordb": {"backend": "local"},
                 },
                 "embedding": {
@@ -279,17 +279,21 @@ class TestGetContextForSearch:
         second_gate = asyncio.Event()
         second_started = asyncio.Event()
 
-        async def gated_extract(messages, **kwargs):
-            del kwargs
+        async def gated_generate(messages, latest_archive_overview=""):
             contents = " ".join(m.content for m in messages)
             if "First round" in contents:
                 await first_gate.wait()
-                return []
+                return f"# Session Summary\n\n**Overview**: {contents}"
             second_started.set()
             await second_gate.wait()
+            return f"# Session Summary\n\n**Overview**: {contents}"
+
+        async def fast_extract(*args, **kwargs):
+            del args, kwargs
             return []
 
-        session._session_compressor.extract_long_term_memories = gated_extract
+        session._generate_archive_summary_async = gated_generate
+        session._session_compressor.extract_long_term_memories = fast_extract
 
         session.add_message("user", [TextPart("First round user")])
         session.add_message("assistant", [TextPart("First round assistant")])
