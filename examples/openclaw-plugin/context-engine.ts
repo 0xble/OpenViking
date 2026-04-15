@@ -130,6 +130,19 @@ type RecallRefreshRequest = {
   sessionId: string;
 };
 
+const MAX_RECALL_CACHE_ENTRIES = 256;
+const MAX_SESSION_RECALL_ENTRIES = 128;
+
+function pruneOldestEntries<K, V>(map: Map<K, V>, maxEntries: number): void {
+  while (map.size > maxEntries) {
+    const oldestKey = map.keys().next().value;
+    if (oldestKey === undefined) {
+      return;
+    }
+    map.delete(oldestKey);
+  }
+}
+
 function estimateTokens(messages: AgentMessage[]): number {
   return Math.max(1, messages.length * 80);
 }
@@ -604,8 +617,10 @@ export function createMemoryOpenVikingContextEngine(params: {
       createdAt: Date.now(),
     };
     recallCache.set(request.cacheKey, entry);
+    pruneOldestEntries(recallCache, MAX_RECALL_CACHE_ENTRIES);
     if (value.memories.length > 0 || value.section) {
       latestRecallBySession.set(request.sessionCacheKey, entry);
+      pruneOldestEntries(latestRecallBySession, MAX_SESSION_RECALL_ENTRIES);
     }
     return entry;
   }

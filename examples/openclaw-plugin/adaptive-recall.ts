@@ -81,7 +81,7 @@ export function isFreshRecallCacheEntry<T>(
   ttlMs: number,
   now = Date.now(),
 ): entry is RecallCacheEntry<T> {
-  return !!entry && now - entry.createdAt <= ttlMs;
+  return !!entry && ttlMs > 0 && now - entry.createdAt <= ttlMs;
 }
 
 function matchesOverride(patterns: string[], text: string): boolean {

@@ -93,5 +93,6 @@ describe("adaptive recall tiering", () => {
 
     expect(isFreshRecallCacheEntry(entry, 10_000, 5_000)).toBe(true);
     expect(isFreshRecallCacheEntry(entry, 1_000, 5_000)).toBe(false);
+    expect(isFreshRecallCacheEntry(entry, 0, 1_000)).toBe(false);
   });
 });
