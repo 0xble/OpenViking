@@ -99,6 +99,12 @@ class TestCommit:
         assert result.get("archived") is True
         # Current message list should be cleared after commit
         assert len(session_with_messages.messages) == 0
+        live_messages = await session_with_messages._viking_fs.read_file(
+            f"viking://session/{session_with_messages.user.user_space_name()}/"
+            f"{session_with_messages.session_id}/messages.jsonl",
+            ctx=session_with_messages.ctx,
+        )
+        assert live_messages.strip() == ""
 
     async def test_commit_empty_session(self, session: Session):
         """Test committing empty session"""

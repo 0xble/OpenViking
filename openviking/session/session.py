@@ -248,7 +248,7 @@ class Session:
         if await self.exists():
             return
         await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
-        await self._viking_fs.write_file(f"{self._session_uri}/messages.jsonl", "", ctx=self.ctx)
+        await self._viking_fs.write_file(f"{self._session_uri}/messages.jsonl", "\n", ctx=self.ctx)
         await self._save_meta()
 
     async def _save_meta(self) -> None:
@@ -1446,21 +1446,17 @@ class Session:
             return
 
         viking_fs = self._viking_fs
+        messages_uri = f"{self._session_uri}/messages.jsonl"
         turn_count = len([m for m in messages if m.role == "user"])
 
         abstract = self._generate_abstract()
         overview = self._generate_overview(turn_count)
 
         lines = [m.to_jsonl() for m in messages]
-        content = "\n".join(lines) + "\n" if lines else ""
+        content = "\n".join(lines) + "\n" if lines else "\n"
 
-        run_async(
-            viking_fs.write_file(
-                uri=f"{self._session_uri}/messages.jsonl",
-                content=content,
-                ctx=self.ctx,
-            )
-        )
+        write_messages = viking_fs.replace_file if not lines else viking_fs.write_file
+        run_async(write_messages(uri=messages_uri, content=content, ctx=self.ctx))
 
         # Update L0/L1
         run_async(
@@ -1484,19 +1480,17 @@ class Session:
             return
 
         viking_fs = self._viking_fs
+        messages_uri = f"{self._session_uri}/messages.jsonl"
         turn_count = len([m for m in messages if m.role == "user"])
 
         abstract = self._generate_abstract()
         overview = self._generate_overview(turn_count)
 
         lines = [m.to_jsonl() for m in messages]
-        content = "\n".join(lines) + "\n" if lines else ""
+        content = "\n".join(lines) + "\n" if lines else "\n"
 
-        await viking_fs.write_file(
-            uri=f"{self._session_uri}/messages.jsonl",
-            content=content,
-            ctx=self.ctx,
-        )
+        write_messages = viking_fs.replace_file if not lines else viking_fs.write_file
+        await write_messages(uri=messages_uri, content=content, ctx=self.ctx)
         await viking_fs.write_file(
             uri=f"{self._session_uri}/.abstract.md",
             content=abstract,
@@ -1526,14 +1520,9 @@ class Session:
             return
 
         lines = [m.to_jsonl() for m in self._messages]
-        content = "\n".join(lines) + "\n"
-        run_async(
-            self._viking_fs.write_file(
-                f"{self._session_uri}/messages.jsonl",
-                content,
-                ctx=self.ctx,
-            )
-        )
+        content = "\n".join(lines) + "\n" if lines else "\n"
+        write_messages = self._viking_fs.replace_file if not lines else self._viking_fs.write_file
+        run_async(write_messages(f"{self._session_uri}/messages.jsonl", content, ctx=self.ctx))
 
     def _save_tool_result(
         self,
