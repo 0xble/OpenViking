@@ -39,6 +39,8 @@ def merge_time_filter(
 
     if not existing_filter:
         return time_filter
+    # Preserve any caller-supplied metadata predicates by AND-ing the time range
+    # into the existing filter tree instead of replacing it.
     return {"op": "and", "conds": [existing_filter, time_filter]}
 
 
