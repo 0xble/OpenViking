@@ -125,7 +125,7 @@ describe("context-engine assemble()", () => {
 
     expect(resolveAgentId).toHaveBeenCalledWith("session-1", undefined, "session-1");
     expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
-    expect(result.estimatedTokens).toBe(321);
+    expect(result.estimatedTokens).toBe(roughEstimate(result.messages));
     expect(result.systemPromptAddition).toContain("Session Context Guide");
     expect(result.messages[0]).toEqual({
       role: "user",
@@ -155,6 +155,43 @@ describe("context-engine assemble()", () => {
       content: [{ type: "text", text: "export const value = 1;" }],
       isError: false,
     });
+  });
+
+  it("does not log assembled content by default", async () => {
+    const { engine, logger } = makeEngine({
+      latest_archive_overview: "SECRET_ARCHIVE_SUMMARY",
+      pre_archive_abstracts: [
+        {
+          archive_id: "archive_001",
+          abstract: "SECRET_ARCHIVE_ABSTRACT",
+        },
+      ],
+      messages: [
+        {
+          id: "msg_1",
+          role: "assistant",
+          created_at: "2026-03-24T00:00:00Z",
+          parts: [{ type: "text", text: "SECRET_ACTIVE_MESSAGE" }],
+        },
+      ],
+      estimatedTokens: 321,
+      stats: {
+        ...makeStats(),
+        activeTokens: 281,
+        archiveTokens: 40,
+      },
+    });
+
+    await engine.assemble({
+      sessionId: "session-logs",
+      messages: [{ role: "user", content: "fallback live message" }],
+      tokenBudget: 4096,
+    });
+
+    const infoLogs = logger.info.mock.calls.flat().join("\n");
+    expect(infoLogs).not.toContain("SECRET_ARCHIVE_SUMMARY");
+    expect(infoLogs).not.toContain("SECRET_ARCHIVE_ABSTRACT");
+    expect(infoLogs).not.toContain("SECRET_ACTIVE_MESSAGE");
   });
 
   it("passes through live messages when the session matches bypassSessionPatterns", async () => {
