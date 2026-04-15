@@ -796,7 +796,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       const recallQuery = prepareRecallQuery(latestUserText);
 
       const originalTokens = roughEstimate(messages);
-      const passthroughEstimatedTokens = roughEstimate(messages);
+      const passthroughEstimatedTokens = originalTokens;
 
       const OVSessionId = openClawSessionToOvStorageId(assembleParams.sessionId, sessionKey);
       rememberSessionAgentId?.({
