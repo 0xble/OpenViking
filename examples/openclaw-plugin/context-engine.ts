@@ -796,7 +796,6 @@ export function createMemoryOpenVikingContextEngine(params: {
       const recallQuery = prepareRecallQuery(latestUserText);
 
       const originalTokens = roughEstimate(messages);
-      const passthroughEstimatedTokens = originalTokens;
 
       const OVSessionId = openClawSessionToOvStorageId(assembleParams.sessionId, sessionKey);
       rememberSessionAgentId?.({
@@ -821,7 +820,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         if (!(await runLocalPrecheck("assemble", OVSessionId, {
           tokenBudget,
         }))) {
-          return { messages, estimatedTokens: passthroughEstimatedTokens };
+          return { messages, estimatedTokens: originalTokens };
         }
         const client = await withTimeout(
           getClient(),
@@ -897,7 +896,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         ]);
         const passthroughResult = (): AssembleResult => ({
           messages,
-          estimatedTokens: passthroughEstimatedTokens,
+          estimatedTokens: originalTokens,
           ...(passthroughSystemPrompt
             ? { systemPromptAddition: passthroughSystemPrompt }
             : {}),
@@ -978,7 +977,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           tokenBudget,
           agentId: resolveAgentId(OVSessionId),
         });
-        return { messages, estimatedTokens: passthroughEstimatedTokens };
+        return { messages, estimatedTokens: originalTokens };
       }
     },
 

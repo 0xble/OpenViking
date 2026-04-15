@@ -563,7 +563,7 @@ export function extractNewTurnMessages(
     // toolResult -> type: "tool"
     if (role === "toolResult") {
       const toolName = typeof msg.toolName === "string" ? msg.toolName : "tool";
-      const output = formatToolResultContent(msg.content) || "";
+      const output = formatToolResultContent(msg.content);
       // Try multiple field names for tool call ID
       const toolCallId = (msg.toolCallId as string) || (msg.toolUseId as string) || (msg.tool_call_id as string);
       const toolInput = toolCallId && toolUseInputs[toolCallId]
