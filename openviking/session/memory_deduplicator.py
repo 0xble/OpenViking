@@ -102,11 +102,15 @@ class MemoryDeduplicator:
         ctx: RequestContext,
         *,
         batch_memories: list[tuple[list[float], Context]] | None = None,
+        strict_errors: bool = False,
     ) -> DedupResult:
         """Decide how to handle a candidate memory."""
         # Step 1: Vector pre-filtering - find similar memories in same category
         similar_memories, query_vector = await self._find_similar_memories(
-            candidate, ctx=ctx, batch_memories=batch_memories
+            candidate,
+            ctx=ctx,
+            batch_memories=batch_memories,
+            strict_errors=strict_errors,
         )
 
         if not similar_memories:
@@ -138,6 +142,7 @@ class MemoryDeduplicator:
         ctx: RequestContext,
         *,
         batch_memories: list[tuple[list[float], Context]] | None = None,
+        strict_errors: bool = False,
     ) -> tuple[list[Context], list[float]]:
         """Find similar existing memories using vector search.
 
@@ -147,7 +152,14 @@ class MemoryDeduplicator:
         telemetry = get_current_telemetry()
         query_vector: list[float] = []  # Initialize early for safe returns
 
+        if self.vikingdb is None:
+            if strict_errors:
+                raise RuntimeError("Memory dedup requires VikingDBManager")
+            return [], query_vector
+
         if not self.embedder:
+            if strict_errors:
+                raise RuntimeError("Memory dedup requires an embedder")
             return [], query_vector
 
         # Generate embedding for candidate
@@ -224,6 +236,8 @@ class MemoryDeduplicator:
             logger.warning(f"Vector search cancelled during dedup prefilter: {e}")
             return [], query_vector
         except Exception as e:
+            if strict_errors:
+                raise RuntimeError(f"Memory dedup vector search failed: {e}") from e
             logger.warning(f"Vector search failed: {e}")
             return [], query_vector
 

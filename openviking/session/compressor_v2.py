@@ -88,6 +88,7 @@ class SessionCompressorV2:
         session_id: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
         strict_extract_errors: bool = False,
+        strict_dedup_errors: bool = False,
         latest_archive_overview: str = "",
     ) -> List[Context]:
         """Extract long-term memories from messages using v2 templating system.
@@ -102,6 +103,9 @@ class SessionCompressorV2:
         if not ctx:
             logger.warning("No RequestContext provided, skipping memory extraction")
             return []
+
+        if strict_dedup_errors and self.vikingdb is None:
+            raise RuntimeError("Memory extraction requires VikingDBManager in strict dedup mode")
 
         tracer.info("Starting v2 memory extraction from conversation")
         tracer.info(f"messages={JsonUtils.dumps(messages)}")
@@ -130,7 +134,7 @@ class SessionCompressorV2:
         lock_manager = None
         transaction_handle = None
         if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
-            init_lock_manager(viking_fs.agfs)
+            init_lock_manager(viking_fs.agfs, vikingdb=self.vikingdb)
             lock_manager = get_lock_manager()
             transaction_handle = lock_manager.create_handle()
         else:
