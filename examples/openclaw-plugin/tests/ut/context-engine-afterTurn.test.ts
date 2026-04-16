@@ -468,15 +468,15 @@ describe("context-engine afterTurn()", () => {
     expect(client.getSession).toHaveBeenCalled();
   });
 
-  it("maps toolResult to user role", async () => {
+  it("stores matching toolResult on the assistant tool part", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
       { role: "assistant", content: [
         { type: "text", text: "running tool" },
-        { type: "toolUse", name: "bash", input: { cmd: "ls" } },
+        { type: "toolUse", id: "call_bash", name: "bash", input: { cmd: "ls" } },
       ] },
-      { role: "toolResult", toolName: "bash", content: "file1.txt\nfile2.txt" },
+      { role: "toolResult", toolCallId: "call_bash", toolName: "bash", content: "file1.txt\nfile2.txt" },
       { role: "assistant", content: "done" },
     ];
 
@@ -487,13 +487,19 @@ describe("context-engine afterTurn()", () => {
       prePromptMessageCount: 0,
     });
 
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
-    // assistant → user(toolResult) → assistant
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
-    expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
-    expect(client.addSessionMessage.mock.calls[1][2][0].tool_output).toContain("[bash result]:");
-    expect(client.addSessionMessage.mock.calls[1][2][0].tool_output).toContain("file1.txt");
-    expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[0][2][1]).toMatchObject({
+      type: "tool",
+      tool_id: "call_bash",
+      tool_name: "bash",
+      tool_input: { cmd: "ls" },
+      tool_status: "completed",
+    });
+    expect(client.addSessionMessage.mock.calls[0][2][1].tool_output).toContain("[bash result]:");
+    expect(client.addSessionMessage.mock.calls[0][2][1].tool_output).toContain("file1.txt");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
+    expect(client.addSessionMessage.mock.calls[1][2][0].text).toContain("done");
   });
 
   it("merges adjacent same-role messages", async () => {
@@ -544,9 +550,9 @@ describe("context-engine afterTurn()", () => {
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
     // Two toolResults merged into one user call
     expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
-    const toolParts = (client.addSessionMessage.mock.calls[1][2] as Array<{ tool_output?: string }>).filter(p => p.tool_output);
-    expect(toolParts.map(p => p.tool_output).join(" ")).toContain("[read result]:");
-    expect(toolParts.map(p => p.tool_output).join(" ")).toContain("[write result]:");
+    const toolTexts = (client.addSessionMessage.mock.calls[1][2] as Array<{ text?: string }>).map(p => p.text).join(" ");
+    expect(toolTexts).toContain("[read result]:");
+    expect(toolTexts).toContain("[write result]:");
     expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
   });
 

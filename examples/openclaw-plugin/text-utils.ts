@@ -496,16 +496,39 @@ export type ExtractedMessage = {
   }>;
 };
 
+type ToolResultSnapshot = {
+  toolName: string;
+  output: string;
+};
+
+function extractToolCallId(value: Record<string, unknown>): string {
+  return String(value.toolCallId ?? value.toolUseId ?? value.tool_call_id ?? value.id ?? "");
+}
+
+function extractToolName(value: Record<string, unknown>, fallback = "tool"): string {
+  return String(value.toolName ?? value.name ?? value.tool_name ?? fallback);
+}
+
+function extractToolInput(value: Record<string, unknown>): Record<string, unknown> | undefined {
+  const input = value.arguments ?? value.input ?? value.toolInput ?? value.tool_input;
+  return input && typeof input === "object" ? input as Record<string, unknown> : undefined;
+}
+
+function isToolUseBlock(value: Record<string, unknown>): boolean {
+  return value.type === "toolCall" || value.type === "toolUse" || value.type === "tool_call";
+}
+
 function appendExtractedMessage(
   messages: ExtractedMessage[],
   role: "user" | "assistant",
   parts: ExtractedMessage["parts"],
+  forceNew = false,
 ): void {
   if (parts.length === 0) {
     return;
   }
   const last = messages[messages.length - 1];
-  if (last && last.role === role) {
+  if (!forceNew && last && last.role === role) {
     last.parts.push(...parts);
     return;
   }
@@ -526,31 +549,25 @@ export function extractNewTurnMessages(
   const result: ExtractedMessage[] = [];
   let count = 0;
 
-  // First pass: collect toolUse inputs indexed by toolCallId/toolUseId
-  // Scan all messages (including after startIndex) to find toolUse before each toolResult
-  const toolUseInputs: Record<string, Record<string, unknown>> = {};
+  // First pass: collect tool results so assistant toolUse blocks can carry
+  // their matching result when the pair is captured in the same afterTurn.
+  const toolResultsById = new Map<string, ToolResultSnapshot>();
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i] as Record<string, unknown>;
     if (!msg || typeof msg !== "object") continue;
     const role = msg.role as string;
-    if (role === "assistant") {
-      const content = msg.content;
-      if (Array.isArray(content)) {
-        for (const block of content) {
-          const b = block as Record<string, unknown>;
-          // Handle toolCall, toolUse, tool_call types
-          if (b?.type === "toolCall" || b?.type === "toolUse" || b?.type === "tool_call") {
-            const id = (b.id as string) || (b.toolUseId as string) || (b.toolCallId as string);
-            // Try multiple field names for tool input: arguments, input, toolInput
-            const input = b.arguments ?? b.input ?? b.toolInput;
-            if (id && input && typeof input === "object") {
-              toolUseInputs[id] = input as Record<string, unknown>;
-            }
-          }
-        }
+    if (role === "toolResult") {
+      const toolCallId = extractToolCallId(msg);
+      const output = formatToolResultContent(msg.content);
+      if (toolCallId && output) {
+        const toolName = extractToolName(msg);
+        toolResultsById.set(toolCallId, { toolName, output });
       }
     }
   }
+
+  const attachedToolResultIds = new Set<string>();
+  let shouldSeparateNextMessage = false;
 
   for (let i = startIndex; i < messages.length; i++) {
     const msg = messages[i] as Record<string, unknown>;
@@ -561,25 +578,55 @@ export function extractNewTurnMessages(
 
     count++;
 
-    // toolResult -> type: "tool"
-    if (role === "toolResult") {
-      const toolName = typeof msg.toolName === "string" ? msg.toolName : "tool";
-      const output = formatToolResultContent(msg.content);
-      // Try multiple field names for tool call ID
-      const toolCallId = (msg.toolCallId as string) || (msg.toolUseId as string) || (msg.tool_call_id as string);
-      const toolInput = toolCallId && toolUseInputs[toolCallId]
-        ? toolUseInputs[toolCallId]
-        : (typeof msg.toolInput === "object" && msg.toolInput !== null
-          ? msg.toolInput as Record<string, unknown>
-          : undefined);
-      if (output) {
-        appendExtractedMessage(result, "user", [{
+    if (role === "assistant" && Array.isArray(msg.content)) {
+      const parts: ExtractedMessage["parts"] = [];
+      for (const block of msg.content) {
+        const b = block as Record<string, unknown>;
+        if (b?.type === "text" && typeof b.text === "string") {
+          const text = b.text.trim();
+          if (text && !HEARTBEAT_RE.test(text)) {
+            parts.push({ type: "text", text });
+          }
+          continue;
+        }
+        if (!isToolUseBlock(b)) {
+          continue;
+        }
+
+        const toolCallId = extractToolCallId(b);
+        const matchedResult = toolCallId ? toolResultsById.get(toolCallId) : undefined;
+        if (toolCallId && matchedResult) {
+          attachedToolResultIds.add(toolCallId);
+        }
+        const toolName = extractToolName(b, matchedResult?.toolName ?? "tool");
+        parts.push({
           type: "tool",
           toolCallId: toolCallId || undefined,
           toolName,
-          toolInput,
-          toolOutput: `[${toolName} result]: ${output}`,
-          toolStatus: "completed",
+          toolInput: extractToolInput(b),
+          toolOutput: matchedResult ? `[${toolName} result]: ${matchedResult.output}` : "",
+          toolStatus: matchedResult ? "completed" : "running",
+        });
+      }
+      appendExtractedMessage(result, "assistant", parts, shouldSeparateNextMessage);
+      shouldSeparateNextMessage = false;
+      continue;
+    }
+
+    // Orphan toolResult -> user text. Matching assistant toolUse pairs are
+    // already attached to their assistant message above.
+    if (role === "toolResult") {
+      const toolName = extractToolName(msg);
+      const output = formatToolResultContent(msg.content);
+      const toolCallId = extractToolCallId(msg);
+      if (toolCallId && attachedToolResultIds.has(toolCallId)) {
+        shouldSeparateNextMessage = true;
+        continue;
+      }
+      if (output) {
+        appendExtractedMessage(result, "user", [{
+          type: "text",
+          text: `[${toolName} result]: ${output}`,
         }]);
       }
       continue;
@@ -606,7 +653,8 @@ export function extractNewTurnMessages(
         appendExtractedMessage(result, ovRole, [{
           type: "text",
           text: cleanedText,
-        }]);
+        }], shouldSeparateNextMessage);
+        shouldSeparateNextMessage = false;
       }
     }
   }
