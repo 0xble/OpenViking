@@ -791,9 +791,7 @@ class TestSessionCompressorDedupActions:
 
         call_count = 0
 
-        async def _deduplicate(
-            candidate, ctx, *, batch_memories=None, strict_errors=False
-        ):
+        async def _deduplicate(candidate, ctx, *, batch_memories=None, strict_errors=False):
             nonlocal call_count
             call_count += 1
             assert strict_errors is False
