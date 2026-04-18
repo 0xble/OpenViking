@@ -11,7 +11,7 @@ Layer 5: Validation Tolerance - TypeAdapter(strict=False) + list item filtering
 """
 
 import json
-from dataclasses import is_dataclass, asdict
+from dataclasses import asdict, is_dataclass
 from types import UnionType
 from typing import (
     Any,
@@ -26,8 +26,7 @@ from typing import (
 )
 
 import json_repair
-from pydantic import TypeAdapter, BaseModel, parse_obj_as
-
+from pydantic import BaseModel, TypeAdapter
 
 from openviking_cli.utils import get_logger
 
@@ -169,7 +168,7 @@ def _get_origin_type(annotation) -> Type:
     if origin is Union or origin is UnionType:
         args = get_args(annotation)
         # Handle Optional[T] which is Union[T, None]
-        if len(args) == 2 and args[1] == type(None):
+        if len(args) == 2 and args[1] is type(None):
             return _get_origin_type(args[0])
     elif origin is list:
         return list
@@ -191,7 +190,7 @@ def _get_arg_type(annotation) -> Optional[Type]:
     origin = get_origin(annotation)
     if origin is Union or origin is UnionType:
         args = get_args(annotation)
-        if len(args) == 2 and args[1] == type(None):
+        if len(args) == 2 and args[1] is type(None):
             return _get_arg_type(args[0])
     elif origin is list:
         args = get_args(annotation)
