@@ -48,23 +48,17 @@ __all__ = [
 ]
 
 
-
-
 class PydanticEncoder(json.JSONEncoder):
     def default(self, obj):
-        if isinstance(obj, BaseModel) :
+        if isinstance(obj, BaseModel):
             # 保存类名和属性值
-            return {
-                **obj.model_dump(mode='python')
-            }
+            return {**obj.model_dump(mode="python")}
         elif is_dataclass(obj):
             return asdict(obj)
         return super().default(obj)
 
 
-
 class JsonUtils:
-
     @staticmethod
     def dumps(obj, indent=4, ensure_ascii=False):
         if obj is None:
@@ -477,5 +471,3 @@ def parse_json_with_stability(
             return model_class.model_validate(tolerant_data), None
         except Exception as e2:
             return None, f"Model validation failed even after tolerance: {e} (fallback: {e2})"
-
-
