@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { DEFAULT_PHASE2_POLL_TIMEOUT_MS } from "./client.js";
 import type { OpenVikingClient, OVMessage } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
+import { RECALL_PATHS } from "./config.js";
 import {
   compileSessionPatterns,
   extractLatestUserText,
@@ -104,6 +105,7 @@ export type ContextEngineWithCommit = ContextEngine & {
   commitOVSession: (sessionId: string, sessionKey?: string) => Promise<boolean>;
 };
 
+// Cap afterTurn so slow OV writes don't hold OpenClaw open post-reply; floor at 1s for tiny configs.
 const AFTER_TURN_MAX_TIMEOUT_MS = 5_000;
 
 type Logger = {
@@ -882,7 +884,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             cfg.timeoutMs,
             "openviking: session context timeout",
           ),
-          cfg.recallPath === "assemble"
+          cfg.recallPath === RECALL_PATHS.assemble
             ? buildRecallPromptSection({
                 cfg,
                 client,
@@ -1099,7 +1101,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           const client = await getClient();
           const createdAt = pickLatestCreatedAt(turnMessages);
 
-          // 保持 OpenClaw 的 tool-use/tool-result 结构，避免把工具输出压平为 assistant 文本。
+          // Preserve OpenClaw's tool-use/tool-result structure; never flatten tool output into assistant text.
           for (const msg of extractedMessages) {
             const ovParts = msg.parts.map((part) => {
               if (part.type === "text") {
