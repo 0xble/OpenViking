@@ -344,7 +344,9 @@ def parse_value_with_tolerance(value, annotation):
         else:
             parsed_value = value
     elif origin_type is list:
-        if isinstance(value, str):
+        if value is None:
+            parsed_value = []
+        elif isinstance(value, str):
             parsed_value = [value]
         elif isinstance(value, dict):
             parsed_value = [value]
