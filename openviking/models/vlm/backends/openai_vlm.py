@@ -79,7 +79,7 @@ class OpenAIVLM(VLMBase):
         self._sync_client = None
         self._async_client = None
         self.api_version = config.get("api_version")
-        self.reasoning_effort = config.get("reasoning_effort", "minimal")
+        self.reasoning_effort = config.get("reasoning_effort", "low")
 
     def get_client(self):
         """Get sync client"""
