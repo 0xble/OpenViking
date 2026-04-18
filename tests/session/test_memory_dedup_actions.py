@@ -614,7 +614,9 @@ class TestSessionCompressorDedupActions:
                 ctx=request_ctx,
             )
 
-        compressor._rollback_created_memory.assert_awaited_once_with(new_memory, request_ctx)
+        compressor._rollback_created_memory.assert_awaited_once_with(
+            new_memory, request_ctx, chunk_uris=[]
+        )
 
     async def test_create_with_merge_is_executed_as_none(self):
         candidate = _make_candidate()

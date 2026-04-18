@@ -305,9 +305,7 @@ class LockManager:
         except Exception as e:
             logger.warning(f"Cannot read archive for redo: {agfs_path}: {e}")
 
-        # 3. Re-extract memories. Redo recovery must use the normal compressor
-        # dependencies; otherwise dedup can fail open and replay can create
-        # duplicate memory files after indexing fails.
+        # Redo requires a real VikingDBManager so strict-dedup is honored.
         if messages:
             session_id = session_uri.rstrip("/").rsplit("/", 1)[-1]
             if self._vikingdb is None:

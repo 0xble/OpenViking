@@ -107,6 +107,12 @@ class SessionCompressorV2:
         if strict_dedup_errors and self.vikingdb is None:
             raise RuntimeError("Memory extraction requires VikingDBManager in strict dedup mode")
 
+        # TODO: Thread strict_dedup_errors into updater.apply_operations so v2
+        # honors strict dedup the same way v1 does. Redo recovery still calls
+        # into v1 via create_session_compressor, so this only matters once v2
+        # is reachable from the redo path.
+        assert not strict_dedup_errors or self.vikingdb is not None
+
         tracer.info("Starting v2 memory extraction from conversation")
         tracer.info(f"messages={JsonUtils.dumps(messages)}")
         config = get_openviking_config()
