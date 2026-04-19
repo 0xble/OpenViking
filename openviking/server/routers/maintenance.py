@@ -4,10 +4,10 @@
 
 import asyncio
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, Body
 from pydantic import BaseModel
 
-from openviking.server.auth import get_request_context, require_role
+from openviking.server.auth import require_role
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ErrorInfo, Response
