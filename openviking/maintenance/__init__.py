@@ -8,9 +8,30 @@ a request. First inhabitant: MemoryConsolidator (the dream-style janitor
 pass).
 """
 
+from openviking.maintenance.consolidation_scheduler import (
+    DEFAULT_CHECK_INTERVAL_SECONDS,
+    DEFAULT_MAX_CONCURRENCY,
+    DEFAULT_SCAN_INTERVAL_SECONDS,
+    MemoryConsolidationScheduler,
+    SchedulerGates,
+    ScopeStatus,
+)
 from openviking.maintenance.memory_consolidator import (
+    Canary,
+    CanaryResult,
     ConsolidationResult,
     MemoryConsolidator,
 )
 
-__all__ = ["ConsolidationResult", "MemoryConsolidator"]
+__all__ = [
+    "Canary",
+    "CanaryResult",
+    "ConsolidationResult",
+    "DEFAULT_CHECK_INTERVAL_SECONDS",
+    "DEFAULT_MAX_CONCURRENCY",
+    "DEFAULT_SCAN_INTERVAL_SECONDS",
+    "MemoryConsolidationScheduler",
+    "MemoryConsolidator",
+    "SchedulerGates",
+    "ScopeStatus",
+]

@@ -54,6 +54,35 @@ DEFAULT_TOP_K = 5
 # the OV alignment audit -- there is no sanctioned maintenance:// scope.
 AUDIT_PATH_FRAGMENT = "maintenance/consolidation_runs"
 
+# Default top-N for canary recall checks.
+DEFAULT_CANARY_LIMIT = 5
+
+
+@dataclass
+class Canary:
+    """User-defined recall canary: 'this query should still find this URI.'"""
+
+    query: str
+    expected_top_uri: str
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Canary":
+        return cls(
+            query=str(data.get("query", "")),
+            expected_top_uri=str(data.get("expected_top_uri", "")),
+        )
+
+
+@dataclass
+class CanaryResult:
+    """Outcome of one canary check (pre or post)."""
+
+    query: str
+    expected_top_uri: str
+    found_top_uri: str = ""
+    found_in_top_n: bool = False
+    found_position: int = -1
+
 
 @dataclass
 class ConsolidationResult:
@@ -73,6 +102,9 @@ class ConsolidationResult:
     applied_uris: List[str] = field(default_factory=list)
     cluster_decisions: List[Dict[str, Any]] = field(default_factory=list)
     audit_uri: str = ""
+    canaries_pre: List[Dict[str, Any]] = field(default_factory=list)
+    canaries_post: List[Dict[str, Any]] = field(default_factory=list)
+    canary_failed: bool = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), indent=2, sort_keys=True, default=str)
@@ -124,6 +156,7 @@ class MemoryConsolidator:
         ctx: RequestContext,
         *,
         dry_run: bool = False,
+        canaries: Optional[List[Canary]] = None,
     ) -> ConsolidationResult:
         """Execute the full consolidation pass for one scope.
 
@@ -154,12 +187,23 @@ class MemoryConsolidator:
                 clusters, archive_candidates = await self._gather(scope_uri, ctx, result)
 
                 if not dry_run:
+                    if canaries:
+                        result.canaries_pre = await self._run_canaries(
+                            scope_uri, canaries, ctx
+                        )
                     await self._consolidate(
                         clusters, scope_uri, overview, ctx, result, lock_handle
                     )
                     await self._archive(archive_candidates, ctx, result)
                     if self._has_writes(result):
                         await self._reindex(scope_uri, ctx, result)
+                    if canaries:
+                        result.canaries_post = await self._run_canaries(
+                            scope_uri, canaries, ctx
+                        )
+                        result.canary_failed = self._canary_regressed(
+                            result.canaries_pre, result.canaries_post
+                        )
                 else:
                     result.candidates["merge_clusters"] = len(clusters)
                     result.candidates["archive"] = len(archive_candidates)
@@ -531,6 +575,95 @@ class MemoryConsolidator:
             # Reindex failure does not abort the run; next pass retries.
         result.phase_durations["reindex"] = time.perf_counter() - t0
 
+    async def _run_canaries(
+        self,
+        scope_uri: str,
+        canaries: List[Canary],
+        ctx: RequestContext,
+        limit: int = DEFAULT_CANARY_LIMIT,
+    ) -> List[Dict[str, Any]]:
+        """Run each canary query against the scope; record top-N hits.
+
+        Returns a list of CanaryResult-as-dict entries suitable for
+        embedding directly in the audit record.
+        """
+        results: List[Dict[str, Any]] = []
+        for canary in canaries:
+            result = CanaryResult(
+                query=canary.query,
+                expected_top_uri=canary.expected_top_uri,
+            )
+            try:
+                hits = await self._search_top_uris(scope_uri, canary.query, ctx, limit)
+                if hits:
+                    result.found_top_uri = hits[0]
+                    if canary.expected_top_uri in hits:
+                        result.found_in_top_n = True
+                        result.found_position = hits.index(canary.expected_top_uri)
+            except Exception as e:
+                logger.debug(
+                    f"[MemoryConsolidator] canary query failed: {canary.query!r}: {e}"
+                )
+            results.append(asdict(result))
+        return results
+
+    async def _search_top_uris(
+        self,
+        scope_uri: str,
+        query: str,
+        ctx: RequestContext,
+        limit: int,
+    ) -> List[str]:
+        """Run a search query scoped to scope_uri; return top URIs in order."""
+        if self.service is None:
+            return []
+        try:
+            search_result = await self.service.search.search(
+                query=query,
+                ctx=ctx,
+                target_uri=scope_uri,
+                limit=limit,
+            )
+        except Exception as e:
+            logger.debug(f"[MemoryConsolidator] search.search failed: {e}")
+            return []
+
+        items: List[Any] = []
+        if isinstance(search_result, dict):
+            items = (
+                search_result.get("memories")
+                or search_result.get("results")
+                or search_result.get("items")
+                or []
+            )
+        elif isinstance(search_result, list):
+            items = search_result
+
+        uris: List[str] = []
+        for item in items:
+            if isinstance(item, dict):
+                uri = item.get("uri") or item.get("URI") or ""
+            else:
+                uri = getattr(item, "uri", "")
+            if uri:
+                uris.append(uri)
+        return uris[:limit]
+
+    @staticmethod
+    def _canary_regressed(
+        pre: List[Dict[str, Any]],
+        post: List[Dict[str, Any]],
+    ) -> bool:
+        """Hard regression: a canary that was satisfied pre-run failed post."""
+        pre_by_query = {r["query"]: r for r in pre}
+        for post_r in post:
+            pre_r = pre_by_query.get(post_r["query"])
+            if pre_r is None:
+                continue
+            if pre_r.get("found_in_top_n") and not post_r.get("found_in_top_n"):
+                return True
+        return False
+
     async def _record(
         self,
         result: ConsolidationResult,
@@ -538,12 +671,11 @@ class MemoryConsolidator:
     ) -> None:
         """Phase 6: write audit record to viking://agent/<acct>/maintenance/..."""
         t0 = time.perf_counter()
-        scope_hash = self._scope_hash(result.scope_uri)
         # Strip ":" and ".+0000" timezone tail for filesystem-safe filename.
         ts = result.completed_at.split(".")[0].replace(":", "").replace("-", "")
-        audit_uri = self._build_audit_uri(ctx, scope_hash, ts)
+        parent_uri = self.audit_dir_for(ctx, result.scope_uri)
+        audit_uri = f"{parent_uri}/{ts}.json"
         result.audit_uri = audit_uri
-        parent_uri = audit_uri.rsplit("/", 1)[0]
         try:
             await self.viking_fs.mkdir(parent_uri, ctx=ctx, exist_ok=True)
         except Exception as e:
@@ -555,12 +687,21 @@ class MemoryConsolidator:
         result.phase_durations["record"] = time.perf_counter() - t0
 
     @staticmethod
-    def _build_audit_uri(ctx: RequestContext, scope_hash: str, timestamp: str) -> str:
-        """Build account-scoped audit URI per the OV alignment audit."""
+    def audit_dir_for(ctx: RequestContext, scope_uri: str) -> str:
+        """Build the parent audit dir URI for a scope. Public so HTTP
+        endpoints (list_consolidate_runs) can reuse the same path
+        construction as _build_audit_uri without duplicating the literal.
+        """
         account = getattr(ctx, "account_id", None) or "default"
         return (
-            f"viking://agent/{account}/{AUDIT_PATH_FRAGMENT}/{scope_hash}/{timestamp}.json"
+            f"viking://agent/{account}/{AUDIT_PATH_FRAGMENT}/"
+            f"{MemoryConsolidator._scope_hash(scope_uri)}"
         )
+
+    @classmethod
+    def _build_audit_uri(cls, ctx: RequestContext, scope_uri: str, timestamp: str) -> str:
+        """Build the audit record URI for one run."""
+        return f"{cls.audit_dir_for(ctx, scope_uri)}/{timestamp}.json"
 
     @staticmethod
     def _scope_hash(scope_uri: str) -> str:

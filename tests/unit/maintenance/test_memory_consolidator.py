@@ -3,7 +3,6 @@
 """Tests for MemoryConsolidator orchestrator."""
 
 import json
-from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,67 +12,25 @@ from openviking.maintenance.memory_consolidator import (
     ConsolidationResult,
     MemoryConsolidator,
 )
-from openviking.session.memory_archiver import ArchivalResult
 from openviking.session.memory_deduplicator import (
     ClusterDecision,
     ClusterDecisionType,
 )
 from tests.unit.conftest import make_test_context as _ctx
+from tests.unit.maintenance.conftest import (
+    make_consolidator,
+    make_request_ctx,
+    noop_lock,
+)
 
 
-@asynccontextmanager
-async def _noop_lock(*args, **kwargs):
-    yield
+# Local aliases keep the existing test bodies untouched.
+def _make_consolidator(**kwargs):
+    return make_consolidator(with_service=False, **kwargs)
 
 
-def _make_request_ctx(account_id: str = "test-account") -> MagicMock:
-    ctx = MagicMock()
-    ctx.account_id = account_id
-    return ctx
-
-
-def _make_consolidator(
-    *,
-    archive_candidates: list = None,
-    cluster_decision: ClusterDecision = None,
-    write_succeeds: bool = True,
-    delete_succeeds: bool = True,
-):
-    """Build a MemoryConsolidator with all dependencies mocked."""
-    vikingdb = MagicMock()
-    viking_fs = MagicMock()
-    viking_fs._uri_to_path = MagicMock(return_value="/fake/path")
-    viking_fs.exists = AsyncMock(return_value=False)
-    viking_fs.read = AsyncMock(return_value="memory body")
-    viking_fs.write = AsyncMock() if write_succeeds else AsyncMock(side_effect=RuntimeError("write boom"))
-    viking_fs.rm = AsyncMock() if delete_succeeds else AsyncMock(side_effect=RuntimeError("del boom"))
-
-    dedup = MagicMock()
-    dedup.consolidate_cluster = AsyncMock(
-        return_value=cluster_decision
-        or ClusterDecision(
-            decision=ClusterDecisionType.KEEP_ALL,
-            cluster=[],
-            reason="test default",
-        )
-    )
-
-    archiver = MagicMock()
-    archiver.scan = AsyncMock(return_value=archive_candidates or [])
-    archiver.archive = AsyncMock(
-        return_value=ArchivalResult(scanned=0, archived=0, skipped=0, errors=0)
-    )
-
-    consolidator = MemoryConsolidator(
-        vikingdb=vikingdb,
-        viking_fs=viking_fs,
-        dedup=dedup,
-        archiver=archiver,
-        service=None,
-    )
-    # Default: no clusters from scope. Tests override _cluster_scope when needed.
-    consolidator._cluster_scope = AsyncMock(return_value=[])
-    return consolidator
+_make_request_ctx = make_request_ctx
+_noop_lock = noop_lock
 
 
 class TestRunHappyPath:
