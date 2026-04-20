@@ -4,9 +4,8 @@ import type { MemoryOpenVikingConfig } from "./config.js";
 import {
   compileSessionPatterns,
   extractLatestUserText,
+  extractNewTurnMessages,
   getCaptureDecision,
-  extractNewTurnTexts,
-  extractSingleMessageText,
   shouldBypassSession,
 } from "./text-utils.js";
 import {
@@ -1167,9 +1166,9 @@ export function createMemoryOpenVikingContextEngine(params: {
             ? afterTurnParams.prePromptMessageCount
             : 0;
 
-        const { texts: newTexts, newCount } = extractNewTurnTexts(messages, start);
+        const { messages: extractedMessages, newCount } = extractNewTurnMessages(messages, start);
 
-        if (newTexts.length === 0) {
+        if (extractedMessages.length === 0) {
           diag("afterTurn_skip", OVSessionId, {
             reason: "no_new_turn_messages",
             totalMessages: messages.length,
@@ -1209,24 +1208,50 @@ export function createMemoryOpenVikingContextEngine(params: {
         );
         const createdAt = pickLatestCreatedAt(turnMessages);
 
-        // Group by OV role (user|assistant), merge adjacent same-role
         const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
-        const groups: Array<{ role: "user" | "assistant"; texts: string[] }> = [];
-        for (const msg of turnMessages) {
-          const text = extractSingleMessageText(msg);
-          if (!text) continue;
-          if (HEARTBEAT_RE.test(text)) continue;
-          const role = (msg as Record<string, unknown>).role as string;
-          const ovRole: "user" | "assistant" = role === "assistant" ? "assistant" : "user";
-          const content = ovRole === "user"
-            ? text.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ").replace(/\s+/g, " ").trim()
-            : text;
-          if (!content) continue;
+        type OvPart =
+          | { type: "text"; text: string }
+          | {
+              type: "tool";
+              tool_id?: string;
+              tool_name: string;
+              tool_input?: Record<string, unknown>;
+              tool_output: string;
+              tool_status: string;
+            };
+        const capturedTextsForLog: string[] = [];
+        const groups: Array<{ role: "user" | "assistant"; parts: OvPart[] }> = [];
+
+        for (const msg of extractedMessages) {
+          const msgParts: OvPart[] = [];
+          for (const part of msg.parts) {
+            if (part.type === "text") {
+              const cleaned = msg.role === "user"
+                ? part.text
+                    .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ")
+                    .replace(/\s+/g, " ")
+                    .trim()
+                : part.text;
+              if (!cleaned || HEARTBEAT_RE.test(cleaned)) continue;
+              capturedTextsForLog.push(cleaned);
+              msgParts.push({ type: "text", text: cleaned });
+            } else {
+              msgParts.push({
+                type: "tool",
+                tool_id: part.toolCallId,
+                tool_name: part.toolName,
+                tool_input: part.toolInput,
+                tool_output: `[${part.toolName} result]: ${part.toolOutput}`,
+                tool_status: part.toolStatus,
+              });
+            }
+          }
+          if (msgParts.length === 0) continue;
           const last = groups[groups.length - 1];
-          if (last && last.role === ovRole) {
-            last.texts.push(content);
+          if (last && last.role === msg.role) {
+            last.parts.push(...msgParts);
           } else {
-            groups.push({ role: ovRole, texts: [content] });
+            groups.push({ role: msg.role, parts: msgParts });
           }
         }
 
@@ -1237,13 +1262,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         for (const group of groups) {
           await withTimeout(
-            client.addSessionMessage(
-              OVSessionId,
-              group.role,
-              [{ type: "text", text: group.texts.join("\n") }],
-              agentId,
-              createdAt,
-            ),
+            client.addSessionMessage(OVSessionId, group.role, group.parts, agentId, createdAt),
             captureTimeoutMs,
             "openviking: afterTurn addSessionMessage timeout",
           );
@@ -1270,7 +1289,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           captureTimeoutMs,
           "openviking: afterTurn commitSession timeout",
         );
-        const allTexts = groups.flatMap((g) => g.texts).join("\n");
+        const allTexts = capturedTextsForLog.join("\n");
         const commitExtra = cfg.logFindRequests
           ? ` ${toJsonLog({ captured: [trimForLog(allTexts, 260)] })}`
           : "";
