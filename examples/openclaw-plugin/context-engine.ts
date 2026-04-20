@@ -237,6 +237,24 @@ export function isSessionNotFoundError(err: unknown): boolean {
   return /\[NOT_FOUND\]/.test(String(err));
 }
 
+/**
+ * Turn a thrown commit error into a short category suffix suitable for the
+ * plugin's `reason` string. OpenClaw's Telegram surface renders the reason
+ * verbatim when it doesn't match a known skip phrase, so a category like
+ * "HTTP 422" or "NOT_FOUND" makes `/compact` failures diagnosable without
+ * opening gateway logs.
+ */
+export function categorizeCommitError(err: unknown): string {
+  const text = String(err);
+  const bracketed = text.match(/\[([A-Z_][A-Z0-9_]*)\]/);
+  if (bracketed) return bracketed[1];
+  const http = text.match(/HTTP\s+(\d{3})/i);
+  if (http) return `HTTP ${http[1]}`;
+  if (/timeout/i.test(text)) return "timeout";
+  if (/ECONNREFUSED|network|fetch failed|ENOTFOUND/i.test(text)) return "network_error";
+  return "unknown";
+}
+
 const DORMANT_SESSION_SEED_TEXT =
   "[openviking:dormant-seed] Compact requested on a session with no prior afterTurn capture; placeholder so commit can proceed.";
 
@@ -1560,14 +1578,16 @@ export function createMemoryOpenVikingContextEngine(params: {
           },
         };
       } catch (err) {
+        const category = categorizeCommitError(err);
         warnOrInfo(logger, `openviking: compact commit failed for session=${OVSessionId}: ${String(err)}`);
         diag("compact_error", OVSessionId, {
           error: String(err),
+          category,
         });
         return {
           ok: false,
           compacted: false,
-          reason: "commit_error",
+          reason: category === "unknown" ? "commit_error" : `commit_error: ${category}`,
           result: {
             summary: "",
             firstKeptEntryId: "",
@@ -1575,6 +1595,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             tokensAfter: undefined,
             details: {
               error: String(err),
+              category,
             },
           },
         };
