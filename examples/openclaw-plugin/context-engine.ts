@@ -229,6 +229,18 @@ function validTokenBudget(raw: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * OV throws `OpenViking request failed [NOT_FOUND]: Session not found: <id>` when
+ * commit is called on a session the server has never seen. That happens when
+ * `/compact` runs on a thread that has had no successful afterTurn capture.
+ */
+export function isSessionNotFoundError(err: unknown): boolean {
+  return /\[NOT_FOUND\]/.test(String(err));
+}
+
+const DORMANT_SESSION_SEED_TEXT =
+  "[openviking:dormant-seed] Compact requested on a session with no prior afterTurn capture; placeholder so commit can proceed.";
+
 /** OpenClaw session UUID (path-safe on Windows). */
 const OPENVIKING_OV_SESSION_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1352,7 +1364,25 @@ export function createMemoryOpenVikingContextEngine(params: {
         logger.info(
           `openviking: compact committing session=${OVSessionId} (wait=true, tokenBudget=${tokenBudget})`,
         );
-        const commitResult = await client.commitSession(OVSessionId, { wait: true, agentId });
+        let commitResult: Awaited<ReturnType<typeof client.commitSession>>;
+        try {
+          commitResult = await client.commitSession(OVSessionId, { wait: true, agentId });
+        } catch (commitErr) {
+          if (!isSessionNotFoundError(commitErr)) {
+            throw commitErr;
+          }
+          warnOrInfo(
+            logger,
+            `openviking: compact seeding dormant session=${OVSessionId} after NOT_FOUND, retrying commit`,
+          );
+          await client.addSessionMessage(
+            OVSessionId,
+            "user",
+            [{ type: "text", text: DORMANT_SESSION_SEED_TEXT }],
+            agentId,
+          );
+          commitResult = await client.commitSession(OVSessionId, { wait: true, agentId });
+        }
         const memCount = totalExtractedMemories(commitResult.memories_extracted);
 
         if (commitResult.status === "failed") {
