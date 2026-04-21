@@ -827,12 +827,11 @@ export class OpenVikingClient {
       wait: options?.wait ?? true,
       ...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
     };
-    const resp = await this.request<{ status: string; result: ContentWriteResult }>(
+    return this.request<ContentWriteResult>(
       "/api/v1/content/write",
       { method: "POST", body: JSON.stringify(body) },
       options?.agentId,
     );
-    return resp.result;
   }
 
   /** Poll a background task by ID. */

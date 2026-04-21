@@ -317,11 +317,10 @@ class OpenVikingClient {
      * Creates the file (and missing parent dirs) when it does not yet exist.
      */
     async writeContent(uri, content, mode = "replace") {
-        const resp = await this.request("/api/v1/content/write", {
+        const r = await this.request("/api/v1/content/write", {
             method: "POST",
             body: JSON.stringify({ uri, content, mode, wait: true }),
         });
-        const r = resp.result;
         return {
             uri: String(r.uri),
             created: Boolean(r.created),

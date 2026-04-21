@@ -384,14 +384,13 @@ class OpenVikingClient {
     content: string,
     mode: "replace" | "append" = "replace",
   ): Promise<{ uri: string; created: boolean; mode: string; written_bytes: number }> {
-    const resp = await this.request<{ status: string; result: Record<string, unknown> }>(
+    const r = await this.request<Record<string, unknown>>(
       "/api/v1/content/write",
       {
         method: "POST",
         body: JSON.stringify({ uri, content, mode, wait: true }),
       },
     );
-    const r = resp.result;
     return {
       uri: String(r.uri),
       created: Boolean(r.created),

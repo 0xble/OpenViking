@@ -2212,7 +2212,8 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
           mode: z.enum(["replace", "append"]).optional().describe("replace (default) or append"),
         },
         async execute(args, context) {
-          if (!args.uri.startsWith("viking://") || !args.uri.includes("/memories/")) {
+          const isMemory = /^viking:\/\/(?:user|agent)\/[^/]+\/memories(?:\/|$)/.test(args.uri)
+          if (!isMemory) {
             return `Error: Refusing to write non-memory URI: ${args.uri}`
           }
 

@@ -1402,6 +1402,13 @@ const contextEnginePlugin = {
             );
           }
 
+          if (!isMemoryUri(uri)) {
+            return {
+              content: [{ type: "text", text: `Refusing to write non-memory URI: ${uri}` }],
+              details: { action: "rejected", uri },
+            };
+          }
+
           try {
             const c = await getClient();
             const result = await c.writeContent(uri, content, {
