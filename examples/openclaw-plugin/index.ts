@@ -1365,6 +1365,75 @@ const contextEnginePlugin = {
 
     api.registerTool(
       (ctx: ToolContext) => ({
+        name: "memory_write",
+        label: "Memory Write (OpenViking)",
+        description:
+          "Save text verbatim at a specified memory URI and return the URI. " +
+          "Use for explicit 'remember this fact' saves when you already know the target URI " +
+          "(scope, bucket, filename). Unlike memory_store, does NOT run the extractor — " +
+          "content lands as-is, one file per call. Response includes the written URI so you " +
+          "can verify or reference it downstream without guessing.",
+        parameters: Type.Object({
+          uri: Type.String({
+            description:
+              "Memory URI to write (e.g. viking://user/<id>/memories/preferences/mem_foo.md " +
+              "or viking://agent/<id>/memories/profile.md).",
+          }),
+          content: Type.String({ description: "Content to store verbatim" }),
+          mode: Type.Optional(
+            Type.Union([Type.Literal("replace"), Type.Literal("append")], {
+              description: "replace (default) or append",
+            }),
+          ),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("memory_write");
+          }
+          rememberSessionAgentId(ctx);
+          const writeAgentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+          const { uri, content } = params as { uri: string; content: string };
+          const mode =
+            (params as { mode?: "replace" | "append" }).mode === "append" ? "append" : "replace";
+
+          if (cfg.logFindRequests) {
+            api.logger.info?.(
+              `openviking: memory_write invoked (uri=${uri}, mode=${mode}, contentLength=${content?.length ?? 0})`,
+            );
+          }
+
+          try {
+            const c = await getClient();
+            const result = await c.writeContent(uri, content, {
+              mode,
+              wait: true,
+              agentId: writeAgentId,
+            });
+            const verb = result.created ? "created" : "updated";
+            api.logger.info?.(
+              `openviking: memory_write ${verb} ${result.uri} (${result.written_bytes} bytes)`,
+            );
+            return {
+              content: [{ type: "text", text: `${verb} ${result.uri}` }],
+              details: {
+                action: "stored",
+                uri: result.uri,
+                created: result.created ?? false,
+                mode: result.mode,
+                writtenBytes: result.written_bytes,
+              },
+            };
+          } catch (err) {
+            api.logger.warn(`openviking: memory_write failed: ${String(err)}`);
+            throw err;
+          }
+        },
+      }),
+      { name: "memory_write" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
         name: "memory_forget",
         label: "Memory Forget (OpenViking)",
         description:

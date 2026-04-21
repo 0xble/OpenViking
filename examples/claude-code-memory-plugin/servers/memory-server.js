@@ -312,6 +312,23 @@ class OpenVikingClient {
             method: "DELETE",
         });
     }
+    /**
+     * Write verbatim content to a memory URI via POST /api/v1/content/write.
+     * Creates the file (and missing parent dirs) when it does not yet exist.
+     */
+    async writeContent(uri, content, mode = "replace") {
+        const resp = await this.request("/api/v1/content/write", {
+            method: "POST",
+            body: JSON.stringify({ uri, content, mode, wait: true }),
+        });
+        const r = resp.result;
+        return {
+            uri: String(r.uri),
+            created: Boolean(r.created),
+            mode: String(r.mode),
+            written_bytes: Number(r.written_bytes),
+        };
+    }
 }
 // ---------------------------------------------------------------------------
 // Memory ranking helpers (ported from openclaw-plugin/memory-ranking.ts)
@@ -523,6 +540,38 @@ server.tool("memory_store", "Store information into OpenViking long-term memory.
             await client.deleteSession(sessionId).catch(() => { });
         }
     }
+});
+// -- Tool: memory_write ---------------------------------------------------
+server.tool("memory_write", "Save text verbatim at a specified memory URI and return the URI. Use for explicit 'remember this fact' saves when you already know the target URI (scope, bucket, filename). Unlike memory_store, does NOT run the extractor — content lands as-is, one file per call. Response includes the written URI so you can verify or reference it downstream without guessing.", {
+    uri: z
+        .string()
+        .describe("Memory URI to write (e.g. viking://user/<id>/memories/preferences/mem_foo.md or viking://agent/<id>/memories/profile.md)."),
+    content: z.string().describe("Content to store verbatim"),
+    mode: z
+        .enum(["replace", "append"])
+        .optional()
+        .describe("replace (default) or append"),
+}, async ({ uri, content, mode }) => {
+    if (!isMemoryUri(uri)) {
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Refusing to write non-memory URI: ${uri}`,
+                },
+            ],
+        };
+    }
+    const result = await client.writeContent(uri, content, mode ?? "replace");
+    const verb = result.created ? "created" : "updated";
+    return {
+        content: [
+            {
+                type: "text",
+                text: `${verb} ${result.uri}`,
+            },
+        ],
+    };
 });
 // -- Tool: memory_forget --------------------------------------------------
 server.tool("memory_forget", "Delete a memory from OpenViking. Provide an exact URI for direct deletion, or a search query to find and delete matching memories.", {

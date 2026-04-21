@@ -184,6 +184,18 @@ describe("Tool: memory_store (behavioral)", () => {
   });
 });
 
+describe("Tool: memory_write (behavioral)", () => {
+  it("registers with correct name and description", () => {
+    const { factoryTools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const factory = factoryTools.get("memory_write");
+    expect(factory).toBeDefined();
+    const tool = factory!({ sessionId: "test-session", sessionKey: "sk" });
+    expect(tool.name).toBe("memory_write");
+    expect(tool.description).toContain("verbatim");
+  });
+});
+
 describe("Tool: memory_forget (behavioral)", () => {
   it("registers with correct name and description", () => {
     const { tools, api } = setupPlugin();
@@ -545,10 +557,10 @@ describe("OpenViking search command parsing", () => {
 });
 
 describe("Plugin registration", () => {
-  it("registers all 6 tools", () => {
+  it("registers all 7 tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(6);
+    expect(api.registerTool).toHaveBeenCalledTimes(7);
   });
 
   it("registers import and search commands", () => {

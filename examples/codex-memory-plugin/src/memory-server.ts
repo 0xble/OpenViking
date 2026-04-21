@@ -261,6 +261,27 @@ class OpenVikingClient {
   async deleteUri(uri: string): Promise<void> {
     await this.request(`/api/v1/fs?uri=${encodeURIComponent(uri)}&recursive=false`, { method: "DELETE" })
   }
+
+  async writeContent(
+    uri: string,
+    content: string,
+    mode: "replace" | "append" = "replace",
+  ): Promise<{ uri: string; created: boolean; mode: string; written_bytes: number }> {
+    const resp = await this.request<{ status: string; result: Record<string, unknown> }>(
+      "/api/v1/content/write",
+      {
+        method: "POST",
+        body: JSON.stringify({ uri, content, mode, wait: true }),
+      },
+    )
+    const r = resp.result
+    return {
+      uri: String(r.uri),
+      created: Boolean(r.created),
+      mode: String(r.mode),
+      written_bytes: Number(r.written_bytes),
+    }
+  }
 }
 
 function formatMemoryResults(items: FindResultItem[]): string {
@@ -348,6 +369,28 @@ server.tool(
     } finally {
       if (sessionId) await client.deleteSession(sessionId).catch(() => {})
     }
+  },
+)
+
+server.tool(
+  "openviking_write",
+  "Save text verbatim at a specified memory URI and return the URI. Use for explicit 'remember this fact' saves when you already know the target URI (scope, bucket, filename). Unlike openviking_store, does NOT run the extractor — content lands as-is, one file per call. Response includes the written URI so you can verify or reference it downstream without guessing.",
+  {
+    uri: z
+      .string()
+      .describe(
+        "Memory URI to write (e.g. viking://user/<id>/memories/preferences/mem_foo.md or viking://agent/<id>/memories/profile.md).",
+      ),
+    content: z.string().describe("Content to store verbatim"),
+    mode: z.enum(["replace", "append"]).optional().describe("replace (default) or append"),
+  },
+  async ({ uri, content, mode }) => {
+    if (!isMemoryUri(uri)) {
+      return { content: [{ type: "text" as const, text: `Refusing to write non-memory URI: ${uri}` }] }
+    }
+    const result = await client.writeContent(uri, content, mode ?? "replace")
+    const verb = result.created ? "created" : "updated"
+    return { content: [{ type: "text" as const, text: `${verb} ${result.uri}` }] }
   },
 )
 

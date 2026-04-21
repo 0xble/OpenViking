@@ -55,6 +55,19 @@ export type CommitSessionResult = {
   trace_id?: string;
 };
 
+export type ContentWriteResult = {
+  uri: string;
+  root_uri: string;
+  context_type: string;
+  mode: string;
+  /** true only when /content/write created a new file (memory URIs). */
+  created?: boolean;
+  written_bytes: number;
+  semantic_updated: boolean;
+  vector_updated: boolean;
+  queue_status?: Record<string, unknown> | null;
+};
+
 export type TaskResult = {
   task_id: string;
   task_type: string;
@@ -793,6 +806,33 @@ export class OpenVikingClient {
     }
     result.status = "timeout";
     return result;
+  }
+
+  /**
+   * Write verbatim content to a file via POST /api/v1/content/write.
+   *
+   * For memory URIs (viking://<scope>/<id>/memories/...), creates the file
+   * (and missing parent dirs) when it does not yet exist. Non-memory scopes
+   * still require the target file to exist.
+   */
+  async writeContent(
+    uri: string,
+    content: string,
+    options?: { mode?: "replace" | "append"; wait?: boolean; timeout?: number; agentId?: string },
+  ): Promise<ContentWriteResult> {
+    const body = {
+      uri,
+      content,
+      mode: options?.mode ?? "replace",
+      wait: options?.wait ?? true,
+      ...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
+    };
+    const resp = await this.request<{ status: string; result: ContentWriteResult }>(
+      "/api/v1/content/write",
+      { method: "POST", body: JSON.stringify(body) },
+      options?.agentId,
+    );
+    return resp.result;
   }
 
   /** Poll a background task by ID. */
