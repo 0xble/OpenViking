@@ -420,6 +420,49 @@ async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
     assert all(not uri.startswith("viking://resources/group_a/cache/") for uri in uris)
 
 
+async def test_grep_walks_directories_with_more_than_1000_children(
+    client: httpx.AsyncClient,
+    upload_temp_dir,
+):
+    """Regression: VikingFS.grep used to call the inner ls() without a node_limit,
+    so directories with more than the default 1000 children silently dropped
+    overflow from the recursive walk. A needle in a child at position 1001+ was
+    unreachable from the parent scope even with generous grep -n / -L flags.
+    """
+    total_children = 1005
+    needle_index = 1001
+    needle_child = f"overflow_{needle_index:05d}"
+    needle = "NEEDLE_pos1001_a7f2c9"
+
+    for i in range(total_children):
+        name = f"overflow_{i:05d}.md"
+        (upload_temp_dir / name).write_text(needle if i == needle_index else f"sibling_{i:05d}\n")
+        resp = await client.post(
+            "/api/v1/resources",
+            json={
+                "temp_file_id": name,
+                "to": f"viking://resources/overflow/{name[:-3]}/body.md",
+                "reason": "grep_overflow_regression",
+            },
+        )
+        if i == needle_index:
+            assert resp.status_code == 200, (
+                f"needle upload failed: {resp.status_code} {resp.text[:200]}"
+            )
+
+    resp = await client.post(
+        "/api/v1/search/grep",
+        json={"uri": "viking://resources/overflow", "pattern": needle},
+    )
+
+    assert resp.status_code == 200
+    matches = resp.json()["result"]["matches"]
+    match_uris = {m["uri"] for m in matches}
+    assert any(needle_child in uri for uri in match_uris), (
+        f"grep must reach children past position 1000; got {len(match_uris)} uris"
+    )
+
+
 async def test_glob(client_with_resource):
     client, _ = client_with_resource
     resp = await client.post(
