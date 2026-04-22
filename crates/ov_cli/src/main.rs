@@ -876,14 +876,8 @@ async fn main() {
             wait,
             timeout,
         } => {
-            let effective_mode = if let Some(m) = mode {
-                m
-            } else if append {
-                "append".to_string()
-            } else {
-                "replace".to_string()
-            };
-            handlers::handle_write(uri, content, from_file, effective_mode, wait, timeout, ctx).await
+            let use_append = append || matches!(mode.as_deref(), Some("append"));
+            handle_write(uri, content, from_file, use_append, wait, timeout, ctx).await
         }
         Commands::Reindex {
             uri,
@@ -1366,7 +1360,7 @@ async fn handle_write(
         &client,
         &uri,
         &payload,
-        append,
+        if append { "append" } else { "replace" },
         wait,
         timeout,
         ctx.output_format,

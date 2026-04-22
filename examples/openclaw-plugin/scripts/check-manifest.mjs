@@ -5,8 +5,8 @@
 // the installer manifest is not updated, so fresh installs download a
 // subset that fails to load at runtime.
 
-import { readFile, readdir } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { readFile, readdir, stat } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const pluginDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -14,6 +14,18 @@ const manifestPath = join(pluginDir, "install-manifest.json");
 
 const ignoredSources = new Set([
   "vitest.config.ts",
+]);
+
+const ignoredDirs = new Set([
+  "node_modules",
+  "scripts",
+  "tests",
+  "__tests__",
+  "skills",
+  "setup-helper",
+  "upgrade_scripts",
+  "health_check_tools",
+  "images",
 ]);
 
 const importPattern = /from\s+["'](\.\/[^"']+\.js)["']/g;
@@ -24,19 +36,41 @@ const manifestFiles = new Set([
   ...(manifest.files?.optional ?? []),
 ]);
 
-const entries = await readdir(pluginDir, { withFileTypes: true });
-const sourceFiles = entries
-  .filter((e) => e.isFile() && e.name.endsWith(".ts") && !ignoredSources.has(e.name))
-  .map((e) => e.name);
+async function collectSourceFiles(dir) {
+  const out = [];
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isDirectory()) {
+      if (ignoredDirs.has(entry.name)) continue;
+      const nested = await collectSourceFiles(join(dir, entry.name));
+      out.push(...nested);
+      continue;
+    }
+    if (!entry.isFile()) continue;
+    if (!entry.name.endsWith(".ts")) continue;
+    if (ignoredSources.has(entry.name)) continue;
+    out.push(join(dir, entry.name));
+  }
+  return out;
+}
+
+const sourceFiles = (await collectSourceFiles(pluginDir)).map((abs) =>
+  relative(pluginDir, abs),
+);
 
 const missing = [];
 const referenced = new Set();
 
 for (const file of sourceFiles) {
   const src = await readFile(join(pluginDir, file), "utf8");
+  const importerDir = dirname(file);
   for (const match of src.matchAll(importPattern)) {
     const jsPath = match[1].slice(2);
-    const tsPath = jsPath.replace(/\.js$/, ".ts");
+    const relTs = jsPath.replace(/\.js$/, ".ts");
+    const tsPath = importerDir === "."
+      ? relTs
+      : relative(pluginDir, resolve(pluginDir, importerDir, relTs));
     referenced.add(tsPath);
     if (!manifestFiles.has(tsPath)) {
       missing.push({ importer: file, imports: jsPath, expected: tsPath });
