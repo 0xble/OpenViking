@@ -49,7 +49,10 @@ class TestRunHappyPath:
 
         with (
             patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
+            patch(
+                "openviking.maintenance.memory_consolidator.get_lock_manager",
+                return_value=MagicMock(),
+            ),
         ):
             result = await consolidator.run(
                 "viking://agent/a/memories/patterns/",
@@ -84,7 +87,10 @@ class TestRunHappyPath:
 
         with (
             patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
+            patch(
+                "openviking.maintenance.memory_consolidator.get_lock_manager",
+                return_value=MagicMock(),
+            ),
         ):
             result = await consolidator.run(
                 "viking://agent/a/memories/patterns/",
@@ -123,7 +129,10 @@ class TestRunHappyPath:
 
         with (
             patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
+            patch(
+                "openviking.maintenance.memory_consolidator.get_lock_manager",
+                return_value=MagicMock(),
+            ),
         ):
             result = await consolidator.run(
                 "viking://agent/a/memories/patterns/",
@@ -153,7 +162,10 @@ class TestRunHappyPath:
 
         with (
             patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
+            patch(
+                "openviking.maintenance.memory_consolidator.get_lock_manager",
+                return_value=MagicMock(),
+            ),
         ):
             result = await consolidator.run(
                 "viking://agent/a/memories/preferences/",
@@ -172,7 +184,10 @@ class TestEmptyScope:
 
         with (
             patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
+            patch(
+                "openviking.maintenance.memory_consolidator.get_lock_manager",
+                return_value=MagicMock(),
+            ),
         ):
             result = await consolidator.run(
                 "viking://agent/a/memories/patterns/",
@@ -219,7 +234,10 @@ class TestPartialFailure:
 
         with (
             patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
+            patch(
+                "openviking.maintenance.memory_consolidator.get_lock_manager",
+                return_value=MagicMock(),
+            ),
         ):
             result = await consolidator.run(
                 "viking://agent/a/memories/patterns/",
@@ -239,16 +257,17 @@ class TestAuditRecord:
 
         with (
             patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
+            patch(
+                "openviking.maintenance.memory_consolidator.get_lock_manager",
+                return_value=MagicMock(),
+            ),
         ):
             result = await consolidator.run(
                 "viking://agent/test-account/memories/patterns/",
                 _make_request_ctx("test-account"),
             )
 
-        assert result.audit_uri.startswith(
-            f"viking://agent/test-account/{AUDIT_PATH_FRAGMENT}/"
-        )
+        assert result.audit_uri.startswith(f"viking://agent/test-account/{AUDIT_PATH_FRAGMENT}/")
         assert result.audit_uri.endswith(".json")
         # Last write call is the audit; payload must be valid JSON.
         write_call = consolidator.viking_fs.write.call_args_list[-1]
@@ -265,7 +284,10 @@ class TestAuditRecord:
 
         with (
             patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
+            patch(
+                "openviking.maintenance.memory_consolidator.get_lock_manager",
+                return_value=MagicMock(),
+            ),
         ):
             result = await consolidator.run(
                 "viking://agent/x/memories/patterns/",

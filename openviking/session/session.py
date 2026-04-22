@@ -769,7 +769,6 @@ class Session:
             )
             logger.info(f"Session {self.session_id} detached memory follow-up completed")
         except Exception as e:
-            
             await self._write_memory_failed_marker(
                 archive_uri,
                 stage="memory_extraction",

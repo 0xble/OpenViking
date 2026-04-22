@@ -210,8 +210,7 @@ class SessionCompressorV2:
                         telemetry.set("memory.lock_timeout", False)
                         if retry_count > 0:
                             logger.info(
-                                "Acquired memory locks after retries "
-                                f"(attempts={retry_count + 1})"
+                                f"Acquired memory locks after retries (attempts={retry_count + 1})"
                             )
                         break
                     retry_count += 1

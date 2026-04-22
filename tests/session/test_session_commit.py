@@ -29,7 +29,7 @@ async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
 
 async def _wait_for_memory_task(commit_task: dict, timeout: float = 30.0) -> Optional[dict]:
     """Wait for the detached memory follow-up task when one was spawned."""
-    memory_task_id = ((commit_task.get("result") or {}).get("memory_task_id"))
+    memory_task_id = (commit_task.get("result") or {}).get("memory_task_id")
     if not memory_task_id:
         return None
     return await _wait_for_task(memory_task_id, timeout=timeout)

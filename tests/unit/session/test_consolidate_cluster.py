@@ -31,14 +31,18 @@ class TestConsolidateClusterEdgeCases:
     async def test_single_member_cluster_is_noop(self):
         dedup = _make_dedup()
         cluster = [_ctx("viking://agent/a/memories/patterns/x")]
-        result = await dedup.consolidate_cluster(cluster, scope_uri="viking://agent/a/memories/patterns/")
+        result = await dedup.consolidate_cluster(
+            cluster, scope_uri="viking://agent/a/memories/patterns/"
+        )
         assert result.decision == ClusterDecisionType.KEEP_ALL
         assert "fewer than 2" in result.reason
 
     @pytest.mark.asyncio
     async def test_empty_cluster_is_noop(self):
         dedup = _make_dedup()
-        result = await dedup.consolidate_cluster([], scope_uri="viking://agent/a/memories/patterns/")
+        result = await dedup.consolidate_cluster(
+            [], scope_uri="viking://agent/a/memories/patterns/"
+        )
         assert result.decision == ClusterDecisionType.KEEP_ALL
 
     @pytest.mark.asyncio
@@ -54,7 +58,9 @@ class TestConsolidateClusterEdgeCases:
             "openviking.session.memory_deduplicator.get_openviking_config",
             return_value=config_mock,
         ):
-            result = await dedup.consolidate_cluster(cluster, scope_uri="viking://agent/a/memories/patterns/")
+            result = await dedup.consolidate_cluster(
+                cluster, scope_uri="viking://agent/a/memories/patterns/"
+            )
         assert result.decision == ClusterDecisionType.KEEP_ALL
         assert "LLM not available" in result.reason
 

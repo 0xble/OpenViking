@@ -203,19 +203,13 @@ class MemoryConsolidator:
 
                 if not dry_run:
                     if canaries:
-                        result.canaries_pre = await self._run_canaries(
-                            scope_uri, canaries, ctx
-                        )
-                    await self._consolidate(
-                        clusters, scope_uri, overview, ctx, result, lock_handle
-                    )
+                        result.canaries_pre = await self._run_canaries(scope_uri, canaries, ctx)
+                    await self._consolidate(clusters, scope_uri, overview, ctx, result, lock_handle)
                     await self._archive(archive_candidates, ctx, result)
                     if self._has_writes(result):
                         await self._reindex(scope_uri, ctx, result)
                     if canaries:
-                        result.canaries_post = await self._run_canaries(
-                            scope_uri, canaries, ctx
-                        )
+                        result.canaries_post = await self._run_canaries(scope_uri, canaries, ctx)
                         result.canary_failed = self._canary_regressed(
                             result.canaries_pre, result.canaries_post
                         )
@@ -479,9 +473,7 @@ class MemoryConsolidator:
                     f"for keeper {decision.keeper_uri}; "
                     f"skipping merge to avoid losing sources {decision.merge_into}"
                 )
-                result.errors.append(
-                    f"merge_skipped_empty_content: keeper={decision.keeper_uri}"
-                )
+                result.errors.append(f"merge_skipped_empty_content: keeper={decision.keeper_uri}")
                 result.partial = True
                 result.applied_uris = sorted(applied)
                 return
@@ -612,18 +604,14 @@ class MemoryConsolidator:
                 top_n=canary.top_n,
             )
             try:
-                hits = await self._search_top_uris(
-                    scope_uri, canary.query, ctx, canary.top_n
-                )
+                hits = await self._search_top_uris(scope_uri, canary.query, ctx, canary.top_n)
                 if hits:
                     result.found_top_uri = hits[0]
                     if canary.expected_top_uri in hits:
                         result.found_in_top_n = True
                         result.found_position = hits.index(canary.expected_top_uri)
             except Exception as e:
-                logger.debug(
-                    f"[MemoryConsolidator] canary query failed: {canary.query!r}: {e}"
-                )
+                logger.debug(f"[MemoryConsolidator] canary query failed: {canary.query!r}: {e}")
             results.append(asdict(result))
         return results
 
@@ -761,4 +749,3 @@ class MemoryConsolidator:
             except Exception as e:
                 logger.debug(f"[MemoryConsolidator] read failed for {mem.uri}: {e}")
         return contents
-

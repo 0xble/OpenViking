@@ -85,6 +85,7 @@ async def _run(scope_uri: str, apply: bool, data_path: str, seed: bool = False) 
     finally:
         await client.close()
 
+
 async def _seed(viking_fs, scope_uri: str, ctx) -> list[str]:
     """Write 3 deliberately-similar memory files under the scope.
 

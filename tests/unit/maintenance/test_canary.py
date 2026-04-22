@@ -29,21 +29,15 @@ class TestCanaryStructure:
         assert c.top_n == 5
 
     def test_canary_from_dict_respects_explicit_top_n(self):
-        c = Canary.from_dict(
-            {"query": "q", "expected_top_uri": "viking://x", "top_n": 1}
-        )
+        c = Canary.from_dict({"query": "q", "expected_top_uri": "viking://x", "top_n": 1})
         assert c.top_n == 1
 
     def test_canary_from_dict_clamps_bad_top_n_to_default(self):
-        c = Canary.from_dict(
-            {"query": "q", "expected_top_uri": "viking://x", "top_n": "garbage"}
-        )
+        c = Canary.from_dict({"query": "q", "expected_top_uri": "viking://x", "top_n": "garbage"})
         assert c.top_n == 5
 
     def test_canary_from_dict_clamps_non_positive_top_n(self):
-        c = Canary.from_dict(
-            {"query": "q", "expected_top_uri": "viking://x", "top_n": 0}
-        )
+        c = Canary.from_dict({"query": "q", "expected_top_uri": "viking://x", "top_n": 0})
         assert c.top_n == 1
 
 
@@ -96,18 +90,14 @@ class TestRunCanaries:
             search_results=lambda **_: (_ for _ in ()).throw(RuntimeError("search down"))
         )
         canaries = [Canary(query="x", expected_top_uri="viking://y")]
-        results = await consolidator._run_canaries(
-            "viking://x/", canaries, _make_request_ctx()
-        )
+        results = await consolidator._run_canaries("viking://x/", canaries, _make_request_ctx())
         assert results[0]["found_in_top_n"] is False
 
     @pytest.mark.asyncio
     async def test_no_service_returns_empty_uris(self):
         consolidator = _make_consolidator(with_service=False)
         canaries = [Canary(query="x", expected_top_uri="viking://y")]
-        results = await consolidator._run_canaries(
-            "viking://x/", canaries, _make_request_ctx()
-        )
+        results = await consolidator._run_canaries("viking://x/", canaries, _make_request_ctx())
         assert results[0]["found_in_top_n"] is False
 
     @pytest.mark.asyncio
@@ -124,12 +114,8 @@ class TestRunCanaries:
                 ]
             }
         )
-        canaries = [
-            Canary(query="q", expected_top_uri="viking://x/expected.md", top_n=1)
-        ]
-        results = await consolidator._run_canaries(
-            "viking://x/", canaries, _make_request_ctx()
-        )
+        canaries = [Canary(query="q", expected_top_uri="viking://x/expected.md", top_n=1)]
+        results = await consolidator._run_canaries("viking://x/", canaries, _make_request_ctx())
         consolidator.service.search.search.assert_awaited_once()
         call_kwargs = consolidator.service.search.search.call_args.kwargs
         assert call_kwargs["limit"] == 1
@@ -148,12 +134,8 @@ class TestRunCanaries:
                 ]
             }
         )
-        canaries = [
-            Canary(query="q", expected_top_uri="viking://x/expected.md", top_n=5)
-        ]
-        results = await consolidator._run_canaries(
-            "viking://x/", canaries, _make_request_ctx()
-        )
+        canaries = [Canary(query="q", expected_top_uri="viking://x/expected.md", top_n=5)]
+        results = await consolidator._run_canaries("viking://x/", canaries, _make_request_ctx())
         call_kwargs = consolidator.service.search.search.call_args.kwargs
         assert call_kwargs["limit"] == 5
         assert results[0]["found_in_top_n"] is True
@@ -180,9 +162,7 @@ class TestMultiCanaryOutcomes:
             Canary(query="fail", expected_top_uri="viking://x/missing.md"),
             Canary(query="unknown", expected_top_uri="viking://x/anything.md"),
         ]
-        results = await consolidator._run_canaries(
-            "viking://x/", canaries, _make_request_ctx()
-        )
+        results = await consolidator._run_canaries("viking://x/", canaries, _make_request_ctx())
 
         assert len(results) == 3
         # Per-canary results preserved in insertion order.
@@ -240,9 +220,7 @@ class TestEdgeCaseInputs:
         # explode the run. Result records the miss.
         consolidator = _make_consolidator(search_results={"memories": []})
         canaries = [Canary(query="", expected_top_uri="viking://x/y.md")]
-        results = await consolidator._run_canaries(
-            "viking://x/", canaries, _make_request_ctx()
-        )
+        results = await consolidator._run_canaries("viking://x/", canaries, _make_request_ctx())
         assert len(results) == 1
         assert results[0]["found_in_top_n"] is False
 
