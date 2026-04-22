@@ -5,6 +5,7 @@
  *   - memory_recall  : semantic search across memories
  *   - memory_store   : extract and persist new memories
  *   - memory_forget  : delete memories by URI or query
+ *   - session_recall : substring search across prior session transcripts
  *
  * Ported from the OpenClaw context-engine plugin (openclaw-plugin/).
  * Adapted for Claude Code's MCP server interface (stdio transport).
@@ -372,6 +373,22 @@ class OpenVikingClient {
   async deleteUri(uri: string): Promise<void> {
     await this.request(`/api/v1/fs?uri=${encodeURIComponent(uri)}&recursive=false`, {
       method: "DELETE",
+    });
+  }
+
+  async grep(
+    pattern: string,
+    options: { uri: string; nodeLimit?: number; levelLimit?: number; caseInsensitive?: boolean },
+  ): Promise<{ matches: Array<{ uri: string; line: number; content: string }> }> {
+    return this.request("/api/v1/search/grep", {
+      method: "POST",
+      body: JSON.stringify({
+        uri: options.uri,
+        pattern,
+        case_insensitive: options.caseInsensitive ?? false,
+        node_limit: options.nodeLimit,
+        level_limit: options.levelLimit,
+      }),
     });
   }
 
@@ -751,6 +768,89 @@ server.tool(
       content: [{
         type: "text" as const,
         text: `Found ${candidates.length} candidate memories. Please specify the exact URI to delete:\n\n${list}`,
+      }],
+    };
+  },
+);
+
+// -- Tool: session_recall -------------------------------------------------
+
+const SESSION_RECALL_NODE_LIMIT = 300;
+const SESSION_RECALL_LEVEL_LIMIT = 5;
+const SESSION_RECALL_SNIPPET_WIDTH = 200;
+
+function extractSessionId(uri: string): string | null {
+  const match = uri.match(/^viking:\/\/session\/([^/]+)/);
+  return match ? match[1]! : null;
+}
+
+function snippetFromContent(content: string, pattern: string, width = SESSION_RECALL_SNIPPET_WIDTH): string {
+  const lower = content.toLowerCase();
+  const idx = lower.indexOf(pattern.toLowerCase());
+  if (idx < 0) return content.slice(0, width);
+  const start = Math.max(0, idx - Math.floor(width / 3));
+  const end = Math.min(content.length, start + width);
+  const prefix = start > 0 ? "..." : "";
+  const suffix = end < content.length ? "..." : "";
+  return `${prefix}${content.slice(start, end).replace(/\s+/g, " ").trim()}${suffix}`;
+}
+
+server.tool(
+  "session_recall",
+  "Find prior sessions whose transcript contains the given query. Substring (not semantic) match over session message bodies. Use when you need to recall an earlier conversation where a specific string, error, or topic was discussed.",
+  {
+    query: z.string().describe("Literal text to grep across session transcripts"),
+    limit: z.number().optional().describe("Max sessions to return (default: 10)"),
+    scope_uri: z.string().optional().describe("Session scope URI (default: viking://session)"),
+    case_insensitive: z.boolean().optional().describe("Case-insensitive match (default: false)"),
+  },
+  async ({ query, limit, scope_uri, case_insensitive }) => {
+    const cap = Math.max(1, Math.min(50, limit ?? 10));
+    const scope = scope_uri ?? "viking://session";
+    const { matches } = await client.grep(query, {
+      uri: scope,
+      nodeLimit: SESSION_RECALL_NODE_LIMIT,
+      levelLimit: SESSION_RECALL_LEVEL_LIMIT,
+      caseInsensitive: case_insensitive ?? false,
+    });
+
+    if (matches.length === 0) {
+      return { content: [{ type: "text" as const, text: `No sessions matched "${query}" under ${scope}.` }] };
+    }
+
+    const bySession = new Map<string, { count: number; firstSnippet: string; firstUri: string }>();
+    for (const m of matches) {
+      const sid = extractSessionId(m.uri);
+      if (!sid) continue;
+      const entry = bySession.get(sid);
+      if (entry) {
+        entry.count += 1;
+      } else {
+        bySession.set(sid, {
+          count: 1,
+          firstSnippet: snippetFromContent(m.content, query),
+          firstUri: m.uri,
+        });
+      }
+    }
+
+    if (bySession.size === 0) {
+      return { content: [{ type: "text" as const, text: `Matches found but none mapped to a session id under ${scope}.` }] };
+    }
+
+    const truncated = matches.length >= SESSION_RECALL_NODE_LIMIT;
+    const top = [...bySession.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, cap);
+    const lines = top.map(([sid, info]) =>
+      `- ${sid} (${info.count} match${info.count === 1 ? "" : "es"})\n    ${info.firstSnippet}`,
+    );
+    const note = truncated
+      ? `\n\n(truncated at ${SESSION_RECALL_NODE_LIMIT} raw matches; refine query for full coverage)`
+      : "";
+
+    return {
+      content: [{
+        type: "text" as const,
+        text: `Found ${bySession.size} session${bySession.size === 1 ? "" : "s"} matching "${query}"${bySession.size > cap ? `, showing ${cap}` : ""}:\n\n${lines.join("\n")}${note}`,
       }],
     };
   },

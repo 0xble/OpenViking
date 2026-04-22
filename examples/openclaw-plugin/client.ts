@@ -543,6 +543,32 @@ export class OpenVikingClient {
     );
   }
 
+  async grep(
+    pattern: string,
+    options: {
+      uri: string;
+      nodeLimit?: number;
+      levelLimit?: number;
+      caseInsensitive?: boolean;
+    },
+    agentId?: string,
+  ): Promise<{ matches: Array<{ uri: string; line: number; content: string }> }> {
+    return this.request(
+      "/api/v1/search/grep",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          uri: options.uri,
+          pattern,
+          case_insensitive: options.caseInsensitive ?? false,
+          node_limit: options.nodeLimit,
+          level_limit: options.levelLimit,
+        }),
+      },
+      agentId,
+    );
+  }
+
   async uploadTempFile(filePath: string, agentId?: string): Promise<string> {
     const fileBytes = await readFile(filePath);
     const form = new FormData();

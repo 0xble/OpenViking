@@ -1316,6 +1316,126 @@ const contextEnginePlugin = {
 
     api.registerTool(
       (ctx: ToolContext) => ({
+        name: "session_recall",
+        label: "Session Recall (OpenViking)",
+        description:
+          "Find prior sessions whose transcript contains the given query. Substring (not semantic) match over session message bodies. Use when you need to recall an earlier conversation where a specific string, error, or topic was discussed.",
+        parameters: Type.Object({
+          query: Type.String({ description: "Literal text to grep across session transcripts" }),
+          limit: Type.Optional(Type.Number({ description: "Max sessions to return (default: 10)" })),
+          scopeUri: Type.Optional(Type.String({ description: "Session scope URI (default: viking://session)" })),
+          caseInsensitive: Type.Optional(Type.Boolean({ description: "Case-insensitive match (default: false)" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("session_recall");
+          }
+          rememberSessionAgentId(ctx);
+          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+          const { query } = params as { query: string };
+          const cap =
+            typeof (params as { limit?: number }).limit === "number"
+              ? Math.max(1, Math.min(50, Math.floor((params as { limit: number }).limit)))
+              : 10;
+          const scope =
+            typeof (params as { scopeUri?: string }).scopeUri === "string"
+              ? (params as { scopeUri: string }).scopeUri
+              : "viking://session";
+          const caseInsensitive =
+            typeof (params as { caseInsensitive?: boolean }).caseInsensitive === "boolean"
+              ? (params as { caseInsensitive: boolean }).caseInsensitive
+              : false;
+
+          let recallClient: OpenVikingClient;
+          try {
+            recallClient = await getClientForInteractiveTool("session_recall");
+          } catch (err) {
+            return makeUnavailableToolResult("session_recall", err instanceof Error ? err.message : String(err));
+          }
+
+          const NODE_LIMIT = 300;
+          const LEVEL_LIMIT = 5;
+          const SNIPPET_WIDTH = 200;
+
+          let result: { matches: Array<{ uri: string; line: number; content: string }> };
+          try {
+            result = await recallClient.grep(
+              query,
+              { uri: scope, nodeLimit: NODE_LIMIT, levelLimit: LEVEL_LIMIT, caseInsensitive },
+              agentId,
+            );
+          } catch (err) {
+            return makeUnavailableToolResult("session_recall", err instanceof Error ? err.message : String(err));
+          }
+
+          if (result.matches.length === 0) {
+            return {
+              content: [{ type: "text", text: `No sessions matched "${query}" under ${scope}.` }],
+              details: { matchCount: 0, sessionCount: 0, scope },
+            };
+          }
+
+          const bySession = new Map<string, { count: number; firstSnippet: string; firstUri: string }>();
+          for (const m of result.matches) {
+            const match = m.uri.match(/^viking:\/\/session\/([^/]+)/);
+            const sid = match ? match[1] : null;
+            if (!sid) continue;
+            const entry = bySession.get(sid);
+            if (entry) {
+              entry.count += 1;
+            } else {
+              const needle = caseInsensitive ? query.toLowerCase() : query;
+              const hay = caseInsensitive ? m.content.toLowerCase() : m.content;
+              const idx = hay.indexOf(needle);
+              const start = idx < 0 ? 0 : Math.max(0, idx - Math.floor(SNIPPET_WIDTH / 3));
+              const end = Math.min(m.content.length, start + SNIPPET_WIDTH);
+              const prefix = start > 0 ? "..." : "";
+              const suffix = end < m.content.length ? "..." : "";
+              const snippet = `${prefix}${m.content.slice(start, end).replace(/\s+/g, " ").trim()}${suffix}`;
+              bySession.set(sid, { count: 1, firstSnippet: snippet, firstUri: m.uri });
+            }
+          }
+
+          if (bySession.size === 0) {
+            return {
+              content: [{ type: "text", text: `Matches found but none mapped to a session id under ${scope}.` }],
+              details: { matchCount: result.matches.length, sessionCount: 0, scope },
+            };
+          }
+
+          const truncated = result.matches.length >= NODE_LIMIT;
+          const top = [...bySession.entries()]
+            .sort((a, b) => b[1].count - a[1].count)
+            .slice(0, cap);
+          const lines = top.map(
+            ([sid, info]) =>
+              `- ${sid} (${info.count} match${info.count === 1 ? "" : "es"})\n    ${info.firstSnippet}`,
+          );
+          const header =
+            `Found ${bySession.size} session${bySession.size === 1 ? "" : "s"} matching "${query}"` +
+            (bySession.size > cap ? `, showing ${cap}` : "");
+          const note = truncated
+            ? `\n\n(truncated at ${NODE_LIMIT} raw matches; refine query for full coverage)`
+            : "";
+
+          return {
+            content: [{ type: "text", text: `${header}:\n\n${lines.join("\n")}${note}` }],
+            details: {
+              matchCount: result.matches.length,
+              sessionCount: bySession.size,
+              shown: top.length,
+              scope,
+              truncated,
+              sessions: top.map(([sid, info]) => ({ sessionId: sid, matchCount: info.count })),
+            },
+          };
+        },
+      }),
+      { name: "session_recall" },
+    );
+
+    api.registerTool(
+      (ctx: ToolContext) => ({
         name: "memory_store",
         label: "Memory Store (OpenViking)",
         description:
