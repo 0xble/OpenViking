@@ -2,6 +2,7 @@ mod client;
 mod commands;
 mod config;
 mod error;
+mod handlers;
 mod output;
 mod tui;
 mod utils;
@@ -615,6 +616,21 @@ enum SessionCommands {
         /// Session ID
         session_id: String,
     },
+    /// Get full merged session context
+    GetSessionContext {
+        /// Session ID
+        session_id: String,
+        /// Token budget for latest archive overview inclusion
+        #[arg(long = "token-budget", default_value = "128000")]
+        token_budget: i32,
+    },
+    /// Get one completed archive for a session
+    GetSessionArchive {
+        /// Session ID
+        session_id: String,
+        /// Archive ID
+        archive_id: String,
+    },
     /// Delete a session
     Delete {
         /// Session ID
@@ -1181,6 +1197,32 @@ async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
             commands::session::get_session(&client, &session_id, ctx.output_format, ctx.compact)
                 .await
         }
+        SessionCommands::GetSessionContext {
+            session_id,
+            token_budget,
+        } => {
+            commands::session::get_session_context(
+                &client,
+                &session_id,
+                token_budget,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        SessionCommands::GetSessionArchive {
+            session_id,
+            archive_id,
+        } => {
+            commands::session::get_session_archive(
+                &client,
+                &session_id,
+                &archive_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
         SessionCommands::Delete { session_id } => {
             commands::session::delete_session(&client, &session_id, ctx.output_format, ctx.compact)
                 .await
@@ -1340,39 +1382,6 @@ async fn handle_abstract(uri: String, ctx: CliContext) -> Result<()> {
 async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::content::overview(&client, &uri, ctx.output_format, ctx.compact).await
-}
-
-async fn handle_write(
-    uri: String,
-    content: Option<String>,
-    from_file: Option<String>,
-    append: bool,
-    wait: bool,
-    timeout: Option<f64>,
-    ctx: CliContext,
-) -> Result<()> {
-    let client = ctx.get_client();
-    let payload = match (content, from_file) {
-        (Some(value), None) => value,
-        (None, Some(path)) => std::fs::read_to_string(path)
-            .map_err(|e| Error::Client(format!("Failed to read --from-file: {}", e)))?,
-        _ => {
-            return Err(Error::Client(
-                "Specify exactly one of --content or --from-file".into(),
-            ));
-        }
-    };
-    commands::content::write(
-        &client,
-        &uri,
-        &payload,
-        append,
-        wait,
-        timeout,
-        ctx.output_format,
-        ctx.compact,
-    )
-    .await
 }
 
 async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
