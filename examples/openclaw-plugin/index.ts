@@ -578,8 +578,8 @@ const contextEnginePlugin = {
           api.logger.info(msg);
         }
       : undefined;
-    const tenantAccount = cfg.account;
-    const tenantUser = cfg.user;
+    const tenantAccount = cfg.accountId;
+    const tenantUser = cfg.userId;
     const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.logFindRequests ? "1" : "0"}`;
     const createConfiguredClient = () =>
       new OpenVikingClient(
@@ -587,9 +587,12 @@ const contextEnginePlugin = {
         cfg.apiKey,
         cfg.agentId,
         cfg.timeoutMs,
+        cfg.serverAuthMode,
         tenantAccount,
         tenantUser,
         routingDebugLog,
+        cfg.isolateUserScopeByAgent,
+        cfg.isolateAgentScopeByUser,
       );
 
     let clientPromise: Promise<OpenVikingClient>;
