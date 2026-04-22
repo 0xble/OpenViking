@@ -255,6 +255,7 @@ async function cleanupUploadTempPath(path?: string): Promise<void> {
 
 export class OpenVikingClient {
   private identityCache = new Map<string, RuntimeIdentity>();
+  private spaceCache = new Map<string, Partial<Record<ScopeName, string>>>();
 
   constructor(
     private readonly baseUrl: string,
