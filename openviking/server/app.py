@@ -78,7 +78,6 @@ def create_app(
 
         assert service is not None
         set_service(service)
-        app.state.default_user = service.user
 
         # Initialize APIKeyManager after service (needs VikingFS)
         effective_auth_mode = config.get_effective_auth_mode()
@@ -101,7 +100,7 @@ def create_app(
         elif effective_auth_mode == AuthMode.TRUSTED:
             app.state.api_key_manager = None
             if config.root_api_key and config.root_api_key != "":
-                logger.warning(
+                logger.info(
                     "Trusted mode enabled: authentication trusts X-OpenViking-Account/User/Agent "
                     "headers and requires the configured server API key on each request. "
                     "Only expose this server behind a trusted network boundary or "
@@ -159,8 +158,6 @@ def create_app(
     )
 
     app.state.config = config
-    if service is not None:
-        app.state.default_user = service.user
 
     # Add CORS middleware
     app.add_middleware(
