@@ -3,7 +3,6 @@
 """Tests for MemoryConsolidationScheduler (Phase B)."""
 
 import asyncio
-import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest

@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for /maintenance/consolidate endpoint helpers (Phase C)."""
 
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
+from unittest.mock import MagicMock
 
 from openviking.maintenance.memory_consolidator import ConsolidationResult
 from openviking.server.routers.maintenance import (
