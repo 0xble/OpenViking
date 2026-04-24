@@ -159,13 +159,30 @@ function fitMessagesToBudget(
   tokenBudget: number,
   systemPromptAddition?: string,
 ): { messages: AgentMessage[]; estimatedTokens: number } {
-  const fitted = [...messages];
-  let estimatedTokens = roughEstimate(fitted) + roughTextEstimate(systemPromptAddition);
-  while (estimatedTokens > tokenBudget && fitted.length > fixedCount) {
-    fitted.splice(fixedCount, 1);
-    estimatedTokens = roughEstimate(fitted) + roughTextEstimate(systemPromptAddition);
+  const systemTokens = roughTextEstimate(systemPromptAddition);
+  const minimumMessages = messages.length > 0 ? 1 : 0;
+  const protectedCount = Math.min(fixedCount, messages.length);
+  const fitted = messages.slice(0, protectedCount);
+  let estimatedTokens = systemTokens + fitted.reduce((sum, msg) => sum + msgTokenEstimate(msg), 0);
+
+  for (const msg of messages.slice(protectedCount)) {
+    const msgTokens = msgTokenEstimate(msg);
+    if (estimatedTokens + msgTokens <= tokenBudget || fitted.length < minimumMessages) {
+      fitted.push(msg);
+      estimatedTokens += msgTokens;
+    }
   }
-  return { messages: fitted, estimatedTokens };
+
+  while (estimatedTokens > tokenBudget && fitted.length > minimumMessages) {
+    const removed = fitted.pop();
+    if (!removed) break;
+    estimatedTokens -= msgTokenEstimate(removed);
+  }
+
+  return {
+    messages: fitted,
+    estimatedTokens: roughEstimate(fitted) + systemTokens,
+  };
 }
 
 function msgTokenEstimate(msg: AgentMessage): number {

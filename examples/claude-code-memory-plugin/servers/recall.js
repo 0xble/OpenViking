@@ -36,6 +36,13 @@ function uniqueMemories(items) {
     }
     return result;
 }
+function finalizeMemories(items, options) {
+    return uniqueMemories(items)
+        .filter(isRecallCandidate)
+        .filter((item) => clampScore(item.score) >= options.scoreThreshold)
+        .sort((left, right) => clampScore(right.score) - clampScore(left.score))
+        .slice(0, options.limit);
+}
 export async function searchMemoryScopes(client, query, options) {
     if (options.targetUri) {
         const result = await client.find(query, {
@@ -44,7 +51,7 @@ export async function searchMemoryScopes(client, query, options) {
             scoreThreshold: 0,
         });
         return {
-            memories: uniqueMemories(result.memories ?? []).filter(isRecallCandidate),
+            memories: finalizeMemories(result.memories ?? [], options),
             failedScopes: [],
         };
     }
@@ -64,7 +71,7 @@ export async function searchMemoryScopes(client, query, options) {
         throw new Error(`OpenViking recall failed for all default memory scopes: ${formatScopeFailures(failedScopes)}`);
     }
     return {
-        memories: uniqueMemories(memories).filter(isRecallCandidate),
+        memories: finalizeMemories(memories, options),
         failedScopes,
     };
 }

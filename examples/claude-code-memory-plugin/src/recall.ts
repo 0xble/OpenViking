@@ -71,6 +71,17 @@ function uniqueMemories(items: FindResultItem[]): FindResultItem[] {
   return result;
 }
 
+function finalizeMemories(
+  items: FindResultItem[],
+  options: { limit: number; scoreThreshold: number },
+): FindResultItem[] {
+  return uniqueMemories(items)
+    .filter(isRecallCandidate)
+    .filter((item) => clampScore(item.score) >= options.scoreThreshold)
+    .sort((left, right) => clampScore(right.score) - clampScore(left.score))
+    .slice(0, options.limit);
+}
+
 export async function searchMemoryScopes(
   client: RecallClient,
   query: string,
@@ -83,7 +94,7 @@ export async function searchMemoryScopes(
       scoreThreshold: 0,
     });
     return {
-      memories: uniqueMemories(result.memories ?? []).filter(isRecallCandidate),
+      memories: finalizeMemories(result.memories ?? [], options),
       failedScopes: [],
     };
   }
@@ -110,7 +121,7 @@ export async function searchMemoryScopes(
   }
 
   return {
-    memories: uniqueMemories(memories).filter(isRecallCandidate),
+    memories: finalizeMemories(memories, options),
     failedScopes,
   };
 }
