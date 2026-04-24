@@ -26,6 +26,7 @@ function makeClient(timeoutMs = 5000): OpenVikingClient {
     "",
     "agent",
     timeoutMs,
+    "api_key",
     "acct",
     "alice",
   );
@@ -144,6 +145,7 @@ describe("OpenVikingClient resource and skill import", () => {
       "",
       "agent",
       5000,
+      "api_key",
       "default",
       "default",
     );
@@ -393,7 +395,7 @@ describe("OpenVikingClient resource and skill import", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5_000);
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5_000, "api_key", "acct", "alice");
     const pending = client.commitSession("slow-session", { wait: true });
 
     await vi.advanceTimersByTimeAsync(200_500);
@@ -461,7 +463,7 @@ describe("OpenVikingClient tenant headers (advanced accountId / userId overrides
     expect(headers.get("X-OpenViking-User")).toBe("user-456");
   });
 
-  it("falls back to default/default in api_key dev mode when apiKey is missing", async () => {
+  it("keeps implicit health checks free of tenant headers when apiKey is missing", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({ status: "ok" }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -474,8 +476,8 @@ describe("OpenVikingClient tenant headers (advanced accountId / userId overrides
 
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const headers = new Headers(init.headers);
-    expect(headers.get("X-OpenViking-Account")).toBe("default");
-    expect(headers.get("X-OpenViking-User")).toBe("default");
+    expect(headers.get("X-OpenViking-Account")).toBeNull();
+    expect(headers.get("X-OpenViking-User")).toBeNull();
   });
 
   it("trims whitespace from trusted accountId and userId overrides", async () => {
@@ -512,7 +514,7 @@ describe("OpenVikingClient canonical namespace policy", () => {
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "my-agent", 5000,
       "api_key",
-      "", "", undefined,
+      "acct", "alice", undefined,
       false,
       true,
     );
@@ -540,7 +542,7 @@ describe("OpenVikingClient canonical namespace policy", () => {
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "my-agent", 5000,
       "api_key",
-      "", "", undefined,
+      "acct", "alice", undefined,
       true,
       true,
     );
@@ -568,7 +570,7 @@ describe("OpenVikingClient canonical namespace policy", () => {
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "shared-agent", 5000,
       "api_key",
-      "", "", undefined,
+      "acct", "alice", undefined,
       false,
       true,
     );
@@ -596,7 +598,7 @@ describe("OpenVikingClient canonical namespace policy", () => {
     const client = new OpenVikingClient(
       "http://127.0.0.1:1933", "", "shared-agent", 5000,
       "api_key",
-      "", "", undefined,
+      "acct", "alice", undefined,
       false,
       false,
     );
@@ -613,7 +615,7 @@ describe("OpenVikingClient canonical namespace policy", () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({ session_id: "s1" }));
     vi.stubGlobal("fetch", fetchMock);
 
-    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000);
+    const client = new OpenVikingClient("http://127.0.0.1:1933", "", "agent", 5000, "api_key", "acct", "alice");
     await client.addSessionMessage(
       "s1",
       "user",

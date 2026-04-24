@@ -114,7 +114,7 @@ describe("Slice D: recallMaxContentChars truncation", () => {
 
   it("should have recallMaxContentChars and recallPreferAbstract in parsed config", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
-    expect(cfg.recallMaxContentChars).toBe(500);
+    expect(cfg.recallMaxContentChars).toBe(5000);
     expect(cfg.recallPreferAbstract).toBe(false);
   });
 });
@@ -161,9 +161,9 @@ describe("Slice E: tokenBudget enforcement", () => {
     expect(estimateTokenCount("A".repeat(100))).toBe(25);
   });
 
-  it("should have recallTokenBudget in parsed config with default 2000", () => {
+  it("should have recallTokenBudget in parsed config with default 8000", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
-    expect(cfg.recallTokenBudget).toBe(2000);
+    expect(cfg.recallTokenBudget).toBe(8000);
   });
 });
 

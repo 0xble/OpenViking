@@ -199,9 +199,11 @@ describe("plugin normal flow with healthy backend", () => {
       pluginConfig: {
         autoCapture: true,
         autoRecall: true,
+        account: "acct",
         baseUrl,
         commitTokenThreshold: 20000,
         mode: "remote",
+        user: "alice",
       },
       registerContextEngine: (_id, factory) => {
         contextEngineFactory = factory as () => unknown;

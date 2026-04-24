@@ -14,7 +14,7 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
 
   it("empty object uses all defaults", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
-    expect(cfg.mode).toBe("local");
+    expect(cfg.mode).toBe("remote");
     expect(cfg.port).toBe(1933);
     expect(cfg.recallLimit).toBe(6);
     expect(cfg.recallScoreThreshold).toBe(0.15);
@@ -185,8 +185,8 @@ describe("memoryOpenVikingConfigSchema.parse()", () => {
   it("treats undefined/null as empty config", () => {
     const cfg1 = memoryOpenVikingConfigSchema.parse(undefined);
     const cfg2 = memoryOpenVikingConfigSchema.parse(null);
-    expect(cfg1.mode).toBe("local");
-    expect(cfg2.mode).toBe("local");
+    expect(cfg1.mode).toBe("remote");
+    expect(cfg2.mode).toBe("remote");
   });
 
   it("accepts valid captureMode values", () => {

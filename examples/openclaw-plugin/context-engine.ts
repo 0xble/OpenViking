@@ -149,6 +149,25 @@ function roughEstimate(messages: AgentMessage[]): number {
   return Math.ceil(JSON.stringify(messages).length / 4);
 }
 
+function roughTextEstimate(text?: string): number {
+  return text ? Math.ceil(text.length / 4) : 0;
+}
+
+function fitMessagesToBudget(
+  messages: AgentMessage[],
+  fixedCount: number,
+  tokenBudget: number,
+  systemPromptAddition?: string,
+): { messages: AgentMessage[]; estimatedTokens: number } {
+  const fitted = [...messages];
+  let estimatedTokens = roughEstimate(fitted) + roughTextEstimate(systemPromptAddition);
+  while (estimatedTokens > tokenBudget && fitted.length > fixedCount) {
+    fitted.splice(fixedCount, 1);
+    estimatedTokens = roughEstimate(fitted) + roughTextEstimate(systemPromptAddition);
+  }
+  return { messages: fitted, estimatedTokens };
+}
+
 function msgTokenEstimate(msg: AgentMessage): number {
   const raw = (msg as Record<string, unknown>).content;
   if (typeof raw === "string") return Math.ceil(raw.length / 4);
@@ -322,9 +341,10 @@ export function openClawSessionRefToOvStorageId(ref: string): string {
  * 1. The assistant message with canonical toolCall blocks in its content array
  * 2. A separate toolResult message per ToolPart (carrying tool_output)
  */
-function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentMessage[] {
+export function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentMessage[] {
   const parts = msg.parts ?? [];
-  const contentBlocks: Record<string, unknown>[] = [];
+  const textBlocks: Record<string, unknown>[] = [];
+  const toolCallBlocks: Record<string, unknown>[] = [];
   const toolResults: AgentMessage[] = [];
 
   for (const part of parts) {
@@ -332,19 +352,19 @@ function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentM
     const p = part as Record<string, unknown>;
 
     if (p.type === "text" && typeof p.text === "string") {
-      contentBlocks.push({ type: "text", text: p.text });
+      textBlocks.push({ type: "text", text: p.text });
     } else if (p.type === "context") {
       if (typeof p.abstract === "string" && p.abstract) {
-        contentBlocks.push({ type: "text", text: p.abstract });
+        textBlocks.push({ type: "text", text: p.abstract });
       }
-    } else if (p.type === "tool" && msg.role === "assistant") {
+    } else if (p.type === "tool") {
       const toolId = typeof p.tool_id === "string" ? p.tool_id : "";
       const toolName = typeof p.tool_name === "string" ? p.tool_name : undefined;
       const status = typeof p.tool_status === "string" ? p.tool_status : "unknown";
       const output = typeof p.tool_output === "string" ? p.tool_output : "";
 
       if (toolId) {
-        contentBlocks.push({
+        toolCallBlocks.push({
           type: "toolCall",
           id: toolId,
           name: toolName ?? "unknown",
@@ -378,7 +398,7 @@ function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentM
         if (output) {
           segments.push(`Output: ${output}`);
         }
-        contentBlocks.push({ type: "text", text: segments.join("\n") });
+        textBlocks.push({ type: "text", text: segments.join("\n") });
       }
     }
   }
@@ -386,16 +406,47 @@ function convertToAgentMessages(msg: { role: string; parts: unknown[] }): AgentM
   const result: AgentMessage[] = [];
 
   if (msg.role === "assistant") {
-    result.push({ role: msg.role, content: contentBlocks });
+    result.push({ role: "assistant", content: [...textBlocks, ...toolCallBlocks] });
+    result.push(...toolResults);
+  } else if (toolResults.length > 0) {
+    const texts = textBlocks.map((block) => block.text as string).filter(Boolean);
+    if (texts.length > 0) {
+      result.push({ role: msg.role, content: texts.join("\n") });
+    }
+    result.push({ role: "assistant", content: toolCallBlocks });
     result.push(...toolResults);
   } else {
-    const texts = contentBlocks
-      .filter((b) => b.type === "text")
-      .map((b) => b.text as string);
+    const texts = textBlocks.map((b) => b.text as string);
     result.push({ role: msg.role, content: texts.join("\n") || "" });
   }
 
   return result;
+}
+
+export function mergeConsecutiveAssistants(messages: AgentMessage[]): AgentMessage[] {
+  const merged: AgentMessage[] = [];
+  for (const msg of messages) {
+    const previous = merged[merged.length - 1];
+    if (previous?.role === "assistant" && msg?.role === "assistant") {
+      const previousContent = Array.isArray(previous.content)
+        ? previous.content
+        : typeof previous.content === "string"
+          ? [{ type: "text", text: previous.content }]
+          : [];
+      const nextContent = Array.isArray(msg.content)
+        ? msg.content
+        : typeof msg.content === "string"
+          ? [{ type: "text", text: msg.content }]
+          : [];
+      merged[merged.length - 1] = {
+        ...previous,
+        content: [...previousContent, ...nextContent],
+      };
+      continue;
+    }
+    merged.push(msg);
+  }
+  return merged;
 }
 
 function normalizeAssistantContent(messages: AgentMessage[]): void {
@@ -1006,6 +1057,8 @@ export function createMemoryOpenVikingContextEngine(params: {
         inputTokenEstimate: originalTokens,
         tokenBudget,
         sessionKey: sessionKey ?? null,
+        senderIdFound: Boolean(assembleParams.runtimeContext?.senderId),
+        senderId: assembleParams.runtimeContext?.senderId ?? null,
         messages: messageDigest(messages),
       });
 
@@ -1195,27 +1248,28 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         const withRecall = injectRecallIntoMessages(sanitized, recallPrompt.section);
-        const assembledTokens = roughEstimate(withRecall);
         const archiveCount = preAbstracts.length;
-        const tokensSaved = originalTokens - assembledTokens;
-        const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
         const archiveGuidance = hasArchives ? buildSystemPromptAddition() : undefined;
+        const fixedMessageCount = (ctx.latest_archive_overview ? 1 : 0) + (preAbstracts.length > 0 ? 1 : 0);
+        const fitted = fitMessagesToBudget(withRecall, fixedMessageCount, tokenBudget, archiveGuidance);
+        const tokensSaved = originalTokens - fitted.estimatedTokens;
+        const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
 
         diag("assemble_result", OVSessionId, {
           passthrough: false,
           archiveCount,
           activeCount,
-          outputMessagesCount: withRecall.length,
+          outputMessagesCount: fitted.messages.length,
           inputTokenEstimate: originalTokens,
-          estimatedTokens: assembledTokens,
+          estimatedTokens: fitted.estimatedTokens,
           tokensSaved,
           savingPct,
-          messages: messageDigest(withRecall),
+          messages: messageDigest(fitted.messages),
         });
 
         return {
-          messages: withRecall,
-          estimatedTokens: ctx.estimatedTokens,
+          messages: fitted.messages,
+          estimatedTokens: fitted.estimatedTokens,
           ...(archiveGuidance ? { systemPromptAddition: archiveGuidance } : {}),
         };
       } catch (err) {
@@ -1310,6 +1364,8 @@ export function createMemoryOpenVikingContextEngine(params: {
           newMessageCount: newCount,
           prePromptMessageCount: start,
           newTurnTokens,
+          senderIdFound: Boolean(afterTurnParams.runtimeContext?.senderId),
+          senderId: afterTurnParams.runtimeContext?.senderId ?? null,
           messages: newMsgFull,
         });
 
@@ -1346,12 +1402,10 @@ export function createMemoryOpenVikingContextEngine(params: {
           const msgParts: OvPart[] = [];
           for (const part of msg.parts) {
             if (part.type === "text") {
-              const cleaned = msg.role === "user"
-                ? part.text
-                    .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ")
-                    .replace(/\s+/g, " ")
-                    .trim()
-                : part.text;
+              const cleaned = part.text
+                .replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ")
+                .replace(/\s+/g, " ")
+                .trim();
               if (!cleaned || HEARTBEAT_RE.test(cleaned)) continue;
               capturedTextsForLog.push(cleaned);
               msgParts.push({ type: "text", text: cleaned });
@@ -1388,7 +1442,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           await withTimeout(
             client.addSessionMessage(OVSessionId, group.role, group.parts, agentId, createdAt, roleId),
             captureTimeoutMs,
-            "openviking: afterTurn addSessionMessage timeout",
+            `openviking: afterTurn timeout after ${captureTimeoutMs}ms while adding session message`,
           );
         }
 

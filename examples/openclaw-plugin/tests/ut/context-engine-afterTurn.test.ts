@@ -548,7 +548,7 @@ describe("context-engine afterTurn()", () => {
       prePromptMessageCount: 0,
     });
 
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(1);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
     expect(client.addSessionMessage.mock.calls[0][2][1]).toMatchObject({
       type: "tool",
@@ -559,11 +559,10 @@ describe("context-engine afterTurn()", () => {
     });
     expect(client.addSessionMessage.mock.calls[0][2][1].tool_output).toContain("[bash result]:");
     expect(client.addSessionMessage.mock.calls[0][2][1].tool_output).toContain("file1.txt");
-    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
-    expect(client.addSessionMessage.mock.calls[1][2][0].text).toContain("done");
+    expect(client.addSessionMessage.mock.calls[0][2][2].text).toContain("done");
   });
 
-  it("stores adjacent same-role messages as separate entries with current extractor behavior", async () => {
+  it("coalesces adjacent same-role messages for capture", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
@@ -579,17 +578,15 @@ describe("context-engine afterTurn()", () => {
       prePromptMessageCount: 0,
     });
 
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(2);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("user");
     const firstCallParts = client.addSessionMessage.mock.calls[0][2] as Array<{ text?: string; type?: string }>;
     expect(firstCallParts.map(p => p.text).join(" ")).toContain("first question");
-    expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
-    const secondCallParts = client.addSessionMessage.mock.calls[1][2] as Array<{ text?: string; type?: string }>;
-    expect(secondCallParts.map(p => p.text).join(" ")).toContain("second question");
-    expect(client.addSessionMessage.mock.calls[2][1]).toBe("assistant");
+    expect(firstCallParts.map(p => p.text).join(" ")).toContain("second question");
+    expect(client.addSessionMessage.mock.calls[1][1]).toBe("assistant");
   });
 
-  it("stores adjacent toolResults as separate user groups with current extractor behavior", async () => {
+  it("coalesces adjacent orphan toolResults into one user capture group", async () => {
     const { engine, client } = makeEngine();
 
     const messages = [
@@ -609,7 +606,7 @@ describe("context-engine afterTurn()", () => {
       prePromptMessageCount: 0,
     });
 
-    expect(client.addSessionMessage).toHaveBeenCalledTimes(4);
+    expect(client.addSessionMessage).toHaveBeenCalledTimes(3);
     expect(client.addSessionMessage.mock.calls[0][1]).toBe("assistant");
     expect(client.addSessionMessage.mock.calls[1][1]).toBe("user");
     const toolTexts = (client.addSessionMessage.mock.calls[1][2] as Array<{ text?: string }>).map(p => p.text).join(" ");
@@ -761,10 +758,10 @@ describe("context-engine afterTurn()", () => {
     expect(assistantOut).toBeDefined();
     const blocks = assistantOut!.content as Array<Record<string, unknown>>;
     expect(blocks.some((b) => b.type === "text" && b.text === "Let me check.")).toBe(true);
-    const toolUseBlock = blocks.find((b) => b.type === "toolUse");
-    expect(toolUseBlock).toBeDefined();
-    expect(toolUseBlock!.id).toBe("call_abc");
-    expect(toolUseBlock!.name).toBe("exec");
+    const toolCallBlock = blocks.find((b) => b.type === "toolCall");
+    expect(toolCallBlock).toBeDefined();
+    expect(toolCallBlock!.id).toBe("call_abc");
+    expect(toolCallBlock!.name).toBe("exec");
 
     const toolResultOut = roundTripped.find((m) => m.role === "toolResult");
     expect(toolResultOut).toBeDefined();

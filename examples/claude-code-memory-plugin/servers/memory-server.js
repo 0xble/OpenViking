@@ -14,6 +14,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { createHash } from "node:crypto";
+import { clampScore, formatOrderSourceNote, formatScopeFailures, searchMemoryScopes, } from "./recall.js";
 // ---------------------------------------------------------------------------
 // Configuration — loaded from the Claude Code client config.
 // Env var: OPENVIKING_CC_CONFIG_FILE
@@ -44,6 +45,10 @@ function resolveString(value, fallback) {
     if (typeof value === "string" && value.trim())
         return resolveEnvVars(value.trim());
     return fallback;
+}
+function resolveTenantString(value, fallback) {
+    const resolved = resolveString(value, fallback);
+    return resolved === "default" ? "" : resolved;
 }
 function resolveConfigPath(rawValue, fallback) {
     return resolvePath(resolveString(rawValue, fallback).replace(/^~/, homedir()));
@@ -117,6 +122,7 @@ const serverConfigResult = mode === "local"
     ? loadOptionalJson(serverConfigPath)
     : { file: null, error: null };
 const serverCfg = (serverConfigResult.file?.server ?? {});
+const serverFile = serverConfigResult.file ?? {};
 const config = {
     mode,
     configPath: clientConfigPath,
@@ -126,6 +132,8 @@ const config = {
         ? requireBaseUrl(clientFile.baseUrl)
         : `http://127.0.0.1:${clampPort(serverCfg.port)}`,
     apiKey: resolveString(clientFile.apiKey, "") || (mode === "local" ? resolveString(serverCfg.root_api_key, "") : ""),
+    accountId: resolveTenantString(clientFile.account ?? clientFile.accountId, resolveString(serverFile.default_account, "")),
+    userId: resolveTenantString(clientFile.user ?? clientFile.userId, resolveString(serverFile.default_user, "")),
     agentId: resolveString(clientFile.agentId, "claude-code"),
     timeoutMs: Math.max(1000, Math.floor(num(clientFile.timeoutMs, 15000))),
     recallLimit: Math.max(1, Math.floor(num(clientFile.recallLimit, 6))),
@@ -149,13 +157,17 @@ function isMemoryUri(uri) {
 class OpenVikingClient {
     baseUrl;
     apiKey;
+    accountId;
+    userId;
     agentId;
     timeoutMs;
     resolvedSpaceByScope = {};
     runtimeIdentity = null;
-    constructor(baseUrl, apiKey, agentId, timeoutMs) {
+    constructor(baseUrl, apiKey, accountId, userId, agentId, timeoutMs) {
         this.baseUrl = baseUrl;
         this.apiKey = apiKey;
+        this.accountId = accountId;
+        this.userId = userId;
         this.agentId = agentId;
         this.timeoutMs = timeoutMs;
     }
@@ -166,6 +178,10 @@ class OpenVikingClient {
             const headers = new Headers(init.headers ?? {});
             if (this.apiKey)
                 headers.set("X-API-Key", this.apiKey);
+            if (this.accountId)
+                headers.set("X-OpenViking-Account", this.accountId);
+            if (this.userId)
+                headers.set("X-OpenViking-User", this.userId);
             if (this.agentId)
                 headers.set("X-OpenViking-Agent", this.agentId);
             if (init.body && !headers.has("Content-Type"))
@@ -202,10 +218,10 @@ class OpenVikingClient {
     async getRuntimeIdentity() {
         if (this.runtimeIdentity)
             return this.runtimeIdentity;
-        const fallback = { userId: "default", agentId: this.agentId || "default" };
+        const fallback = { userId: this.userId || "default", agentId: this.agentId || "default" };
         try {
             const status = await this.request("/api/v1/system/status");
-            const userId = typeof status.user === "string" && status.user.trim() ? status.user.trim() : "default";
+            const userId = typeof status.user === "string" && status.user.trim() ? status.user.trim() : fallback.userId;
             this.runtimeIdentity = { userId, agentId: this.agentId || "default" };
             return this.runtimeIdentity;
         }
@@ -292,8 +308,31 @@ class OpenVikingClient {
             body: JSON.stringify({ role, content }),
         });
     }
-    async extractSessionMemories(sessionId) {
-        return this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/extract`, { method: "POST", body: JSON.stringify({}) });
+    async commitSession(sessionId) {
+        const result = await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, { method: "POST", body: JSON.stringify({}) });
+        if (!result.task_id)
+            return result;
+        const deadline = Date.now() + Math.max(this.timeoutMs, 30000);
+        while (Date.now() < deadline) {
+            await sleep(500);
+            const task = await this.getTask(result.task_id).catch(() => null);
+            if (!task)
+                break;
+            if (task.status === "completed") {
+                const taskResult = (task.result ?? {});
+                return {
+                    ...result,
+                    status: "completed",
+                    memories_extracted: (taskResult.memories_extracted ?? {}),
+                };
+            }
+            if (task.status === "failed")
+                return { ...result, status: "failed", error: task.error };
+        }
+        return { ...result, status: "timeout" };
+    }
+    async getTask(taskId) {
+        return this.request(`/api/v1/tasks/${encodeURIComponent(taskId)}`, { method: "GET" });
     }
     async deleteSession(sessionId) {
         await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
@@ -335,11 +374,6 @@ class OpenVikingClient {
 // ---------------------------------------------------------------------------
 // Memory ranking helpers (ported from openclaw-plugin/memory-ranking.ts)
 // ---------------------------------------------------------------------------
-function clampScore(value) {
-    if (typeof value !== "number" || Number.isNaN(value))
-        return 0;
-    return Math.max(0, Math.min(1, value));
-}
 function normalizeDedupeText(text) {
     return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -449,22 +483,16 @@ function pickMemoriesForInjection(items, limit, queryText) {
 // ---------------------------------------------------------------------------
 // Shared search helpers
 // ---------------------------------------------------------------------------
-async function searchBothScopes(client, query, limit) {
-    const [userSettled, agentSettled] = await Promise.allSettled([
-        client.find(query, { targetUri: "viking://user/memories", limit, scoreThreshold: 0 }),
-        client.find(query, { targetUri: "viking://agent/memories", limit, scoreThreshold: 0 }),
-    ]);
-    const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
-    const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-    const all = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
-    // Deduplicate by URI and keep only leaf memories
-    const unique = all.filter((m, i, self) => i === self.findIndex((o) => o.uri === m.uri));
-    return unique.filter((m) => m.level === 2);
+function totalCommitMemories(result) {
+    return Object.values(result.memories_extracted ?? {}).reduce((sum, count) => sum + count, 0);
+}
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 // ---------------------------------------------------------------------------
 // MCP Server
 // ---------------------------------------------------------------------------
-const client = new OpenVikingClient(config.baseUrl, config.apiKey, config.agentId, config.timeoutMs);
+const client = new OpenVikingClient(config.baseUrl, config.apiKey, config.accountId, config.userId, config.agentId, config.timeoutMs);
 const server = new McpServer({
     name: "openviking-memory",
     version: "0.1.0",
@@ -479,18 +507,24 @@ server.tool("memory_recall", "Search long-term memories from OpenViking. Use whe
     const recallLimit = limit ?? config.recallLimit;
     const threshold = score_threshold ?? config.scoreThreshold;
     const candidateLimit = Math.max(recallLimit * 4, 20);
-    let leafMemories;
-    if (target_uri) {
-        const result = await client.find(query, { targetUri: target_uri, limit: candidateLimit, scoreThreshold: 0 });
-        leafMemories = (result.memories ?? []).filter((m) => m.level === 2);
-    }
-    else {
-        leafMemories = await searchBothScopes(client, query, candidateLimit);
-    }
-    const processed = postProcessMemories(leafMemories, { limit: candidateLimit, scoreThreshold: threshold });
+    const searchResult = await searchMemoryScopes(client, query, {
+        targetUri: target_uri,
+        limit: candidateLimit,
+        scoreThreshold: threshold,
+    });
+    const processed = postProcessMemories(searchResult.memories, { limit: candidateLimit, scoreThreshold: threshold });
     const memories = pickMemoriesForInjection(processed, recallLimit, query);
+    const notes = [
+        formatScopeFailures(searchResult.failedScopes),
+        formatOrderSourceNote(query),
+    ].filter(Boolean);
     if (memories.length === 0) {
-        return { content: [{ type: "text", text: "No relevant memories found in OpenViking." }] };
+        return {
+            content: [{
+                    type: "text",
+                    text: ["No relevant memories found in OpenViking.", ...notes].join("\n\n"),
+                }],
+        };
     }
     // Read full content for leaf memories
     const lines = await Promise.all(memories.map(async (item) => {
@@ -507,7 +541,10 @@ server.tool("memory_recall", "Search long-term memories from OpenViking. Use whe
     return {
         content: [{
                 type: "text",
-                text: `Found ${memories.length} relevant memories:\n\n${lines.join("\n")}\n\n---\n${formatMemoryLines(memories)}`,
+                text: [
+                    `Found ${memories.length} relevant memories:\n\n${lines.join("\n")}\n\n---\n${formatMemoryLines(memories)}`,
+                    ...notes,
+                ].join("\n\n"),
             }],
     };
 });
@@ -521,19 +558,36 @@ server.tool("memory_store", "Store information into OpenViking long-term memory.
     try {
         sessionId = await client.createSession();
         await client.addSessionMessage(sessionId, msgRole, text);
-        const extracted = await client.extractSessionMemories(sessionId);
-        if (extracted.length === 0) {
+        const result = await client.commitSession(sessionId);
+        const count = totalCommitMemories(result);
+        if (result.status === "failed") {
             return {
                 content: [{
                         type: "text",
-                        text: "Memory stored but extraction returned 0 memories. The text may be too short or not contain extractable information. Check OpenViking server logs for details.",
+                        text: `Memory extraction failed: ${String(result.error)}`,
+                    }],
+            };
+        }
+        if (result.status === "timeout") {
+            return {
+                content: [{
+                        type: "text",
+                        text: `Memory extraction is still running (task_id=${result.task_id ?? "unknown"}).`,
+                    }],
+            };
+        }
+        if (count === 0) {
+            return {
+                content: [{
+                        type: "text",
+                        text: "Committed session, but OpenViking extracted 0 memory item(s).",
                     }],
             };
         }
         return {
             content: [{
                     type: "text",
-                    text: `Successfully extracted ${extracted.length} memory/memories from the provided text and stored them in OpenViking.`,
+                    text: `Stored memory. Extracted ${count} item(s).`,
                 }],
         };
     }
@@ -604,7 +658,10 @@ server.tool("memory_forget", "Delete a memory from OpenViking. Provide an exact 
         }).filter((item) => isMemoryUri(item.uri));
     }
     else {
-        const leafMemories = await searchBothScopes(client, query, candidateLimit);
+        const { memories: leafMemories } = await searchMemoryScopes(client, query, {
+            limit: candidateLimit,
+            scoreThreshold: config.scoreThreshold,
+        });
         candidates = postProcessMemories(leafMemories, {
             limit: candidateLimit,
             scoreThreshold: config.scoreThreshold,

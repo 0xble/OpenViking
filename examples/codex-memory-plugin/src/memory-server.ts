@@ -5,21 +5,8 @@ import { join, resolve as resolvePath } from "node:path"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
-
-type FindResultItem = {
-  uri: string
-  level?: number
-  abstract?: string
-  overview?: string
-  category?: string
-  score?: number
-}
-
-type FindResult = {
-  memories?: FindResultItem[]
-  resources?: FindResultItem[]
-  skills?: FindResultItem[]
-}
+import type { FindResult } from "./recall.js"
+import { buildRecallResponseText, searchMemoryScopes } from "./recall.js"
 
 type CommitSessionResult = {
   task_id?: string
@@ -62,6 +49,11 @@ function str(value: unknown, fallback: string): string {
   return fallback
 }
 
+function tenantStr(value: unknown, fallback: string): string {
+  const resolved = str(value, fallback)
+  return resolved === "default" ? "" : resolved
+}
+
 function num(value: unknown, fallback: number): number {
   if (typeof value === "number" && Number.isFinite(value)) return value
   if (typeof value === "string" && value.trim()) {
@@ -73,11 +65,6 @@ function num(value: unknown, fallback: number): number {
 
 function md5Short(value: string): string {
   return createHash("md5").update(value).digest("hex").slice(0, 12)
-}
-
-function clampScore(value: number | undefined): number {
-  if (typeof value !== "number" || Number.isNaN(value)) return 0
-  return Math.max(0, Math.min(1, value))
 }
 
 function isMemoryUri(uri: string): boolean {
@@ -100,8 +87,8 @@ const port = Math.floor(num(serverConfig.port, 1933))
 const config = {
   baseUrl: `http://${host}:${port}`,
   apiKey: str(process.env.OPENVIKING_API_KEY, str(serverConfig.root_api_key, "")),
-  accountId: str(process.env.OPENVIKING_ACCOUNT, str(ovConf.default_account, "default")),
-  userId: str(process.env.OPENVIKING_USER, str(ovConf.default_user, "default")),
+  accountId: tenantStr(process.env.OPENVIKING_ACCOUNT, str(ovConf.default_account, "")),
+  userId: tenantStr(process.env.OPENVIKING_USER, str(ovConf.default_user, "")),
   agentId: str(process.env.OPENVIKING_AGENT_ID, str(ovConf.default_agent, "codex")),
   timeoutMs: Math.max(1000, Math.floor(num(process.env.OPENVIKING_TIMEOUT_MS, 15000))),
   recallLimit: Math.max(1, Math.floor(num(process.env.OPENVIKING_RECALL_LIMIT, 6))),
@@ -299,16 +286,6 @@ class OpenVikingClient {
   }
 }
 
-function formatMemoryResults(items: FindResultItem[]): string {
-  return items
-    .map((item, index) => {
-      const summary = item.abstract?.trim() || item.overview?.trim() || item.uri
-      const score = Math.round(clampScore(item.score) * 100)
-      return `${index + 1}. ${summary}\n   URI: ${item.uri}\n   Score: ${score}%`
-    })
-    .join("\n\n")
-}
-
 const client = new OpenVikingClient(
   config.baseUrl,
   config.apiKey,
@@ -324,24 +301,20 @@ server.tool(
   "Search OpenViking long-term memory.",
   {
     query: z.string().describe("Search query"),
-    target_uri: z.string().optional().describe("Search scope URI, default viking://user/memories"),
+    target_uri: z.string().optional().describe("Search scope URI, default searches user and agent memories"),
     limit: z.number().optional().describe("Max results, default 6"),
     score_threshold: z.number().optional().describe("Minimum relevance score 0-1, default 0.01"),
   },
   async ({ query, target_uri, limit, score_threshold }) => {
     const recallLimit = limit ?? config.recallLimit
     const threshold = score_threshold ?? config.scoreThreshold
-    const result = await client.find(query, target_uri ?? "viking://user/memories", recallLimit, threshold)
-    const items = [...(result.memories ?? []), ...(result.resources ?? []), ...(result.skills ?? [])]
-      .filter((item) => clampScore(item.score) >= threshold)
-      .sort((left, right) => clampScore(right.score) - clampScore(left.score))
-      .slice(0, recallLimit)
+    const result = await searchMemoryScopes(client, query, {
+      targetUri: target_uri,
+      limit: recallLimit,
+      scoreThreshold: threshold,
+    })
 
-    if (items.length === 0) {
-      return { content: [{ type: "text" as const, text: "No relevant OpenViking memories found." }] }
-    }
-
-    return { content: [{ type: "text" as const, text: formatMemoryResults(items) }] }
+    return { content: [{ type: "text" as const, text: buildRecallResponseText(query, result) }] }
   },
 )
 

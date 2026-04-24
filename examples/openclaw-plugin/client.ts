@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createWriteStream } from "node:fs";
@@ -209,10 +209,6 @@ const IMPLICIT_TENANT_PREFIXES = [
   "/api/v1/admin",
   "/api/v1/observer",
 ];
-
-function md5Short(input: string): string {
-  return createHash("md5").update(input).digest("hex").slice(0, 12);
-}
 
 export function isMemoryUri(uri: string): boolean {
   return MEMORY_URI_PATTERNS.some((pattern) => pattern.test(uri));
@@ -433,11 +429,8 @@ export class OpenVikingClient {
   private async buildCanonicalRoot(scope: ScopeName, agentId?: string): Promise<string> {
     const identity = await this.getRuntimeIdentity(agentId);
     const effectiveAgentId = agentId ?? this.defaultAgentId;
-    const fallbackSpace =
-      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
     const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
-    const preferredSpace =
-      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
+    const preferredSpace = scope === "user" ? identity.userId : identity.agentId;
 
     const saveSpace = (space: string) => {
       const existing = this.spaceCache.get(effectiveAgentId) ?? {};
@@ -465,8 +458,8 @@ export class OpenVikingClient {
     } catch {
       // Fall back to identity-derived space when listing fails.
     }
-    saveSpace(fallbackSpace);
-    return `viking://${scope}/${fallbackSpace}`;
+    saveSpace(preferredSpace);
+    return `viking://${scope}/${preferredSpace}`;
   }
 
   private async normalizeTargetUri(targetUri: string, agentId?: string): Promise<string> {
@@ -491,7 +484,15 @@ export class OpenVikingClient {
     }
 
     const root = await this.buildCanonicalRoot(scope, agentId);
-    return `${root}/${parts.join("/")}`;
+    const path = parts.join("/");
+    if (scope === "user" && this.isolateUserScopeByAgent) {
+      return `${root}/agent/${agentId ?? this.defaultAgentId}/${path}`;
+    }
+    if (scope === "agent" && this.isolateAgentScopeByUser) {
+      const identity = await this.getRuntimeIdentity(agentId);
+      return `${root}/user/${identity.userId}/${path}`;
+    }
+    return `${root}/${path}`;
   }
 
   async find(

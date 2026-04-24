@@ -578,8 +578,8 @@ const contextEnginePlugin = {
           api.logger.info(msg);
         }
       : undefined;
-    const tenantAccount = cfg.accountId;
-    const tenantUser = cfg.userId;
+    const tenantAccount = cfg.accountId || cfg.account;
+    const tenantUser = cfg.userId || cfg.user;
     const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}:${tenantAccount}:${tenantUser}:${cfg.agentId}:${cfg.logFindRequests ? "1" : "0"}`;
     const createConfiguredClient = () =>
       new OpenVikingClient(
