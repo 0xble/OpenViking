@@ -5,7 +5,7 @@
 // the installer manifest is not updated, so fresh installs download a
 // subset that fails to load at runtime.
 
-import { readFile, readdir } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -49,8 +49,11 @@ for (const file of sourceFiles) {
 const missingOnDisk = [];
 for (const entry of manifestFiles) {
   if (!entry.endsWith(".ts")) continue;
-  const exists = sourceFiles.includes(entry);
-  if (!exists) missingOnDisk.push(entry);
+  try {
+    await access(join(pluginDir, entry));
+  } catch {
+    missingOnDisk.push(entry);
+  }
 }
 
 let failed = false;

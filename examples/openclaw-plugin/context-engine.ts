@@ -264,6 +264,14 @@ const OPENVIKING_OV_SESSION_UUID =
 
 const WINDOWS_BAD_SESSION_SEGMENT = /[:<>"\\/|?\u0000-\u001f]/;
 
+export function toRoleId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const roleId = value.trim().replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return roleId || undefined;
+}
+
 /**
  * Map OpenClaw session identity to an OpenViking session_id that is safe as a single
  * AGFS path segment on Windows (no `:` etc.). Prefer UUID sessionId when present;
@@ -1373,8 +1381,12 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         for (const group of groups) {
+          const roleId =
+            group.role === "user"
+              ? toRoleId(afterTurnParams.runtimeContext?.senderId)
+              : undefined;
           await withTimeout(
-            client.addSessionMessage(OVSessionId, group.role, group.parts, agentId, createdAt),
+            client.addSessionMessage(OVSessionId, group.role, group.parts, agentId, createdAt, roleId),
             captureTimeoutMs,
             "openviking: afterTurn addSessionMessage timeout",
           );

@@ -44,7 +44,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function setupPlugin(clientOverrides?: Record<string, unknown>) {
+function setupPlugin(
+  clientOverrides?: Record<string, unknown>,
+  pluginConfigOverrides?: Record<string, unknown>,
+) {
   const tools = new Map<string, ToolDef>();
   const factoryTools = new Map<string, (ctx: Record<string, unknown>) => ToolDef>();
   const commands = new Map<string, CommandDef>();
@@ -82,8 +85,12 @@ function setupPlugin(clientOverrides?: Record<string, unknown>) {
     pluginConfig: {
       mode: "remote",
       baseUrl: "http://127.0.0.1:1933",
+      accountId: "brianle",
+      userId: "brianle",
+      serverAuthMode: "trusted",
       autoCapture: false,
       autoRecall: false,
+      ...pluginConfigOverrides,
     },
     logger: {
       info: vi.fn(),
@@ -306,6 +313,7 @@ describe("Tool: ov_import and ov_search (registration)", () => {
     expect(tool).toBeDefined();
     expect(tool!.description).toContain("Search OpenViking resources and skills");
     expect(tool!.description).toContain("Use after importing");
+    expect(tool!.description).toContain("email/order history");
     const props = (tool!.parameters as any).properties;
     expect(props).toHaveProperty("query");
     expect(props).toHaveProperty("uri");
@@ -429,7 +437,46 @@ describe("Tool: ov_search (behavioral)", () => {
 
     expect(result.details.resources).toHaveLength(1);
     expect(result.details.skills).toHaveLength(0);
+    expect(result.details.failedScopes).toHaveLength(1);
     expect(result.content[0]!.text).toContain("resource");
+    expect(result.content[0]!.text).toContain("Partial OpenViking results");
+  });
+
+  it("adds a source hint for order-like queries", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/api/v1/fs/ls")) {
+        return okResponse([]);
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        if (body.target_uri === "viking://resources") {
+          return okResponse({
+            memories: [],
+            resources: [],
+            skills: [],
+            total: 0,
+          });
+        }
+        return okResponse({
+          memories: [],
+          resources: [],
+          skills: [],
+          total: 0,
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const search = tools.get("ov_search")!;
+    const result = await search.execute("tc1", { query: "recall my order of Auredot" }) as ToolResult;
+
+    expect(result.details.sourceHint).toContain("email/order history");
   });
 
   it("renders memory hits when explicit uri returns memories", async () => {
@@ -509,6 +556,109 @@ describe("Tool: memory_recall (behavioral)", () => {
     expect(result.content[0]!.text).toContain("temporarily unavailable");
     expect(result.details.action).toBe("unavailable");
     expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/api/v1/search/find"))).toBe(false);
+  });
+
+  it("returns partial memory results when the first default scope fails", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/api/v1/fs/ls")) {
+        return okResponse([]);
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        const targetUri = String(body.target_uri ?? "");
+        if (targetUri.includes("/user/")) {
+          throw new Error("user memory unavailable");
+        }
+        return okResponse({
+          memories: [
+            makeMemory({
+              uri: "viking://agent/main/memories/cases/m1",
+              abstract: "Auredot was discussed in an agent memory",
+              score: 0.91,
+            }),
+          ],
+          resources: [],
+          skills: [],
+          total: 1,
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const recall = tools.get("memory_recall")!;
+    const result = await recall.execute("tc1", { query: "Auredot order", limit: 3 }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("Auredot was discussed");
+    expect(result.content[0]!.text).toContain("Partial OpenViking memory results");
+    expect(result.details.memories).toHaveLength(1);
+    expect(result.details.failedScopes).toHaveLength(1);
+  });
+
+  it("adds a source hint for order-like memory recall queries", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/api/v1/fs/ls")) {
+        return okResponse([]);
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({ memories: [], resources: [], skills: [], total: 0 });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const recall = tools.get("memory_recall")!;
+    const result = await recall.execute("tc1", { query: "what did I order from Auredot?" }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("Source note");
+    expect(result.details.sourceHint).toContain("email/order history");
+  });
+
+  it("filters directory overview memories out of memory recall results", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/api/v1/fs/ls")) {
+        return okResponse([]);
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        return okResponse({
+          memories: [
+            makeMemory({
+              uri: "viking://user/default/memories/.abstract.md",
+              level: 0,
+              abstract: "[Directory overview is not generated]",
+              score: 0.95,
+            }),
+          ],
+          resources: [],
+          skills: [],
+          total: 1,
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const recall = tools.get("memory_recall")!;
+    const result = await recall.execute("tc1", { query: "what did I order from Auredot?" }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("No relevant OpenViking memories found");
+    expect(result.content[0]!.text).not.toContain("Directory overview");
+    expect(result.details.count).toBe(0);
   });
 });
 
@@ -599,10 +749,10 @@ describe("OpenViking search command parsing", () => {
 });
 
 describe("Plugin registration", () => {
-  it("registers all 7 tools", () => {
+  it("registers all 8 tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(7);
+    expect(api.registerTool).toHaveBeenCalledTimes(8);
   });
 
   it("registers import and search commands", () => {

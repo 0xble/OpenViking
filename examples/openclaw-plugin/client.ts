@@ -500,6 +500,7 @@ export class OpenVikingClient {
       targetUri: string;
       limit: number;
       scoreThreshold?: number;
+      timeoutMs?: number;
     },
     agentId?: string,
   ): Promise<FindResult> {
@@ -533,7 +534,7 @@ export class OpenVikingClient {
     return this.request<FindResult>("/api/v1/search/find", {
       method: "POST",
       body: JSON.stringify(body),
-    }, agentId);
+    }, agentId, options.timeoutMs);
   }
 
   async read(uri: string, agentId?: string): Promise<string> {

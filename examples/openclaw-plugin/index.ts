@@ -667,7 +667,72 @@ const contextEnginePlugin = {
     });
 
     const interactiveToolTimeoutMs = Math.min(cfg.timeoutMs, 5_000);
+    const interactiveRetrievalTimeoutMs = Math.min(cfg.timeoutMs, 12_000);
     const interactiveHealthTimeoutMs = Math.min(interactiveToolTimeoutMs, 2_000);
+
+    type ScopeSearchStatus = "fulfilled" | "rejected";
+    type ScopeSearchResult = {
+      scope: string;
+      status: ScopeSearchStatus;
+      elapsedMs: number;
+      result?: FindResult;
+      reason?: string;
+    };
+
+    const isOrderLikeQuery = (query: string): boolean =>
+      /\b(order|ordered|purchase|purchased|receipt|invoice|shipment|shipping|delivery|delivered|return|refund|tracking)\b/i.test(query);
+
+    const orderSourceHint =
+      "For order, purchase, receipt, delivery, tracking, return, or refund questions, use email/order history as the primary source before OpenViking.";
+
+    const findScopeWithStatus = async (
+      client: OpenVikingClient,
+      query: string,
+      options: {
+        targetUri: string;
+        limit: number;
+        scoreThreshold?: number;
+      },
+      timeoutMessage: string,
+      agentId?: string,
+    ): Promise<ScopeSearchResult> => {
+      const startedAt = Date.now();
+      try {
+        const result = await withTimeout(
+          client.find(query, { ...options, timeoutMs: interactiveRetrievalTimeoutMs }, agentId),
+          interactiveRetrievalTimeoutMs,
+          timeoutMessage,
+        );
+        return {
+          scope: options.targetUri,
+          status: "fulfilled",
+          elapsedMs: Date.now() - startedAt,
+          result,
+        };
+      } catch (err) {
+        return {
+          scope: options.targetUri,
+          status: "rejected",
+          elapsedMs: Date.now() - startedAt,
+          reason: err instanceof Error ? err.message : String(err),
+        };
+      }
+    };
+
+    const summarizeScopeOutcomes = (outcomes: ScopeSearchResult[]) => ({
+      searchedScopes: outcomes.map(({ scope, status, elapsedMs, reason }) => ({
+        scope,
+        status,
+        elapsedMs,
+        ...(reason ? { reason } : {}),
+      })),
+      failedScopes: outcomes
+        .filter((outcome) => outcome.status === "rejected")
+        .map(({ scope, elapsedMs, reason }) => ({ scope, elapsedMs, reason })),
+    });
+
+    const isRecallCandidate = (item: FindResultItem): boolean =>
+      item.level === undefined || item.level === 2;
 
     const makeUnavailableToolResult = (toolName: string, reason: string) => ({
       content: [
@@ -875,52 +940,66 @@ const contextEnginePlugin = {
         return makeUnavailableToolResult("ov_search", err instanceof Error ? err.message : String(err));
       }
       let result: FindResult;
+      let scopeSummary: ReturnType<typeof summarizeScopeOutcomes> | undefined;
       try {
         if (input.uri) {
-          result = await withTimeout(
-            client.find(query, { targetUri: input.uri, limit }, agentId),
-            interactiveToolTimeoutMs,
+          const outcome = await findScopeWithStatus(
+            client,
+            query,
+            { targetUri: input.uri, limit },
             "OpenViking ov_search request timed out",
+            agentId,
           );
+          scopeSummary = summarizeScopeOutcomes([outcome]);
+          if (outcome.status === "rejected") {
+            throw new Error(outcome.reason ?? "OpenViking search failed");
+          }
+          result = outcome.result ?? {};
         } else {
-          const [resourcesSettled, skillsSettled] = await Promise.allSettled([
-            withTimeout(
-              client.find(query, { targetUri: "viking://resources", limit }, agentId),
-              interactiveToolTimeoutMs,
+          const outcomes = await Promise.all([
+            findScopeWithStatus(
+              client,
+              query,
+              { targetUri: "viking://resources", limit },
               "OpenViking resource search timed out",
+              agentId,
             ),
-            withTimeout(
-              client.find(query, { targetUri: "viking://agent/skills", limit }, agentId),
-              interactiveToolTimeoutMs,
+            findScopeWithStatus(
+              client,
+              query,
+              { targetUri: "viking://agent/skills", limit },
               "OpenViking skill search timed out",
+              agentId,
             ),
           ]);
-          const successful = [
-            resourcesSettled.status === "fulfilled" ? resourcesSettled.value : null,
-            skillsSettled.status === "fulfilled" ? skillsSettled.value : null,
-          ].filter((value): value is FindResult => value !== null);
+          scopeSummary = summarizeScopeOutcomes(outcomes);
+          const successful = outcomes
+            .filter((outcome) => outcome.status === "fulfilled" && outcome.result)
+            .map((outcome) => outcome.result as FindResult);
           if (successful.length === 0) {
-            const firstError =
-              resourcesSettled.status === "rejected"
-                ? resourcesSettled.reason
-                : skillsSettled.status === "rejected"
-                  ? skillsSettled.reason
-                  : new Error("OpenViking search failed");
-            throw firstError instanceof Error ? firstError : new Error(String(firstError));
+            const firstFailure = outcomes.find((outcome) => outcome.status === "rejected");
+            throw new Error(firstFailure?.reason ?? "OpenViking search failed");
           }
-          if (resourcesSettled.status === "rejected") {
-            api.logger.warn?.(`openviking: resource search failed: ${String(resourcesSettled.reason)}`);
-          }
-          if (skillsSettled.status === "rejected") {
-            api.logger.warn?.(`openviking: skill search failed: ${String(skillsSettled.reason)}`);
+          for (const outcome of outcomes) {
+            if (outcome.status === "rejected") {
+              api.logger.warn?.(`openviking: ${outcome.scope} search failed: ${outcome.reason}`);
+            }
           }
           result = mergeFindResults(successful);
         }
       } catch (err) {
         return makeUnavailableToolResult("ov_search", err instanceof Error ? err.message : String(err));
       }
+      const warningLines = scopeSummary?.failedScopes.length
+        ? [
+            "",
+            `Partial OpenViking results: ${scopeSummary.failedScopes
+              .map((failure) => `${failure.scope} failed (${failure.reason ?? "unknown error"})`)
+              .join("; ")}`,
+          ]
+        : [];
       return {
-        content: [{ type: "text" as const, text: formatSearchText(query, input.uri, result) }],
+        content: [{ type: "text" as const, text: [formatSearchText(query, input.uri, result), ...warningLines].join("\n") }],
         details: {
           action: "searched",
           query,
@@ -929,6 +1008,8 @@ const contextEnginePlugin = {
           resources: result.resources ?? [],
           skills: result.skills ?? [],
           total: result.total ?? 0,
+          ...(scopeSummary ?? {}),
+          ...(isOrderLikeQuery(query) ? { sourceHint: orderSourceHint } : {}),
         },
       };
     };
@@ -1084,7 +1165,7 @@ const contextEnginePlugin = {
         name: "ov_search",
         label: "Search (OpenViking)",
         description:
-          "Search OpenViking resources and skills. Use after importing, or when the user asks to search OpenViking resources or skills.",
+          `Search OpenViking resources and skills. Use after importing, or when the user asks to search OpenViking resources or skills. ${orderSourceHint}`,
         parameters: Type.Object({
           query: Type.String({ description: "Search query" }),
           uri: Type.Optional(Type.String({ description: "Optional search URI. Defaults to resources plus agent skills." })),
@@ -1153,7 +1234,7 @@ const contextEnginePlugin = {
         name: "memory_recall",
         label: "Memory Recall (OpenViking)",
         description:
-          "Search long-term memories from OpenViking. Use when you need past user preferences, facts, or decisions.",
+          `Search long-term memories from OpenViking. Use when you need past user preferences, facts, or decisions. ${orderSourceHint}`,
         parameters: Type.Object({
           query: Type.String({ description: "Search query" }),
           limit: Type.Optional(
@@ -1200,84 +1281,89 @@ const contextEnginePlugin = {
             );
           }
 
-          let result;
+          let result: FindResult;
+          let scopeSummary: ReturnType<typeof summarizeScopeOutcomes> | undefined;
           try {
             if (targetUri) {
               // Targeted-URI search path
-              result = await withTimeout(
-                recallClient.find(
+              const outcome = await findScopeWithStatus(
+                recallClient,
+                query,
+                {
+                  targetUri,
+                  limit: requestLimit,
+                  scoreThreshold: 0,
+                },
+                "OpenViking memory_recall request timed out",
+                agentId,
+              );
+              scopeSummary = summarizeScopeOutcomes([outcome]);
+              if (outcome.status === "rejected") {
+                throw new Error(outcome.reason ?? "OpenViking memory_recall request failed");
+              }
+              result = outcome.result ?? {};
+            } else {
+              const outcomes: ScopeSearchResult[] = [];
+              const allMemories: FindResultItem[] = [];
+              const searchScopes = [
+                {
+                  targetUri: "viking://user/memories",
+                  timeoutMessage: "OpenViking user memory search timed out",
+                },
+                {
+                  targetUri: "viking://agent/memories",
+                  timeoutMessage: "OpenViking agent memory search timed out",
+                },
+              ];
+
+              if (cfg.recallResources) {
+                searchScopes.push({
+                  targetUri: "viking://resources",
+                  timeoutMessage: "OpenViking resources search timed out",
+                });
+              }
+
+              for (const scope of searchScopes) {
+                const outcome = await findScopeWithStatus(
+                  recallClient,
                   query,
                   {
-                    targetUri,
+                    targetUri: scope.targetUri,
                     limit: requestLimit,
                     scoreThreshold: 0,
                   },
+                  scope.timeoutMessage,
                   agentId,
-                ),
-                interactiveToolTimeoutMs,
-                "OpenViking memory_recall request timed out",
-              );
-            } else {
-              const searchPromises: Promise<FindResult>[] = [
-                withTimeout(
-                  recallClient.find(
-                    query,
-                    {
-                      targetUri: "viking://user/memories",
-                      limit: requestLimit,
-                      scoreThreshold: 0,
-                    },
-                    agentId,
-                  ),
-                  interactiveToolTimeoutMs,
-                  "OpenViking user memory search timed out",
-                ),
-                withTimeout(
-                  recallClient.find(
-                    query,
-                    {
-                      targetUri: "viking://agent/memories",
-                      limit: requestLimit,
-                      scoreThreshold: 0,
-                    },
-                    agentId,
-                  ),
-                  interactiveToolTimeoutMs,
-                  "OpenViking agent memory search timed out",
-                ),
-              ];
-              if (cfg.recallResources) {
-                searchPromises.push(
-                  withTimeout(
-                    recallClient.find(
-                      query,
-                      {
-                        targetUri: "viking://resources",
-                        limit: requestLimit,
-                        scoreThreshold: 0,
-                      },
-                      agentId,
-                    ),
-                    interactiveToolTimeoutMs,
-                    "OpenViking resources search timed out",
-                  ),
                 );
-              }
-              const settled = await Promise.allSettled(searchPromises);
-              if (settled.every((s) => s.status === "rejected")) {
-                const first = settled[0] as PromiseRejectedResult;
-                throw first.reason instanceof Error ? first.reason : new Error(String(first.reason));
-              }
-              const allMemories: FindResultItem[] = [];
-              for (const s of settled) {
-                if (s.status === "fulfilled") {
-                  allMemories.push(...(s.value.memories ?? []), ...(s.value.resources ?? []));
+                outcomes.push(outcome);
+                if (outcome.status === "rejected") {
+                  api.logger.warn?.(`openviking: ${outcome.scope} memory search failed: ${outcome.reason}`);
+                  continue;
                 }
+                allMemories.push(
+                  ...(outcome.result?.memories ?? []),
+                  ...(outcome.result?.resources ?? []),
+                );
+
+                const usableMemories = postProcessMemories(
+                  allMemories.filter((memory, index, self) =>
+                    index === self.findIndex((m) => m.uri === memory.uri)
+                  ).filter(isRecallCandidate),
+                  { limit, scoreThreshold },
+                );
+                if (usableMemories.length >= limit && !cfg.recallResources) {
+                  break;
+                }
+              }
+              scopeSummary = summarizeScopeOutcomes(outcomes);
+              if (outcomes.every((outcome) => outcome.status === "rejected")) {
+                const firstFailure = outcomes.find((outcome) => outcome.status === "rejected");
+                throw new Error(firstFailure?.reason ?? "OpenViking memory_recall request failed");
               }
               const uniqueMemories = allMemories.filter((memory, index, self) =>
                 index === self.findIndex((m) => m.uri === memory.uri)
               );
-              const leafOnly = uniqueMemories.filter((m) => !m.level || m.level === 2);
+              const leafOnly = uniqueMemories.filter(isRecallCandidate);
               result = {
                 memories: leafOnly,
                 total: leafOnly.length,
@@ -1287,21 +1373,34 @@ const contextEnginePlugin = {
             return makeUnavailableToolResult("memory_recall", err instanceof Error ? err.message : String(err));
           }
 
-          const memories = postProcessMemories(result.memories ?? [], {
+          const memories = postProcessMemories((result.memories ?? []).filter(isRecallCandidate), {
             limit,
             scoreThreshold,
           });
+          const sourceHint = isOrderLikeQuery(query) ? orderSourceHint : undefined;
+          const failedScopesText = scopeSummary?.failedScopes.length
+            ? `\n\nPartial OpenViking memory results: ${scopeSummary.failedScopes
+              .map((failure) => `${failure.scope} failed (${failure.reason ?? "unknown error"})`)
+              .join("; ")}`
+            : "";
+          const sourceHintText = sourceHint ? `\n\nSource note: ${sourceHint}` : "";
           if (memories.length === 0) {
             return {
-              content: [{ type: "text", text: "No relevant OpenViking memories found." }],
-              details: { count: 0, total: result.total ?? 0, scoreThreshold },
+              content: [{ type: "text", text: `No relevant OpenViking memories found.${failedScopesText}${sourceHintText}` }],
+              details: {
+                count: 0,
+                total: result.total ?? 0,
+                scoreThreshold,
+                ...(scopeSummary ?? {}),
+                ...(sourceHint ? { sourceHint } : {}),
+              },
             };
           }
           return {
             content: [
               {
                 type: "text",
-                text: `Found ${memories.length} memories:\n\n${formatMemoryLines(memories)}`,
+                text: `Found ${memories.length} memories:\n\n${formatMemoryLines(memories)}${failedScopesText}${sourceHintText}`,
               },
             ],
             details: {
@@ -1310,6 +1409,8 @@ const contextEnginePlugin = {
               total: result.total ?? memories.length,
               scoreThreshold,
               requestLimit,
+              ...(scopeSummary ?? {}),
+              ...(sourceHint ? { sourceHint } : {}),
             },
           };
         },
@@ -1476,7 +1577,15 @@ const contextEnginePlugin = {
               usedTempSession = true;
             }
             sessionId = openClawSessionToOvStorageId(sessionId, ctx.sessionKey);
-            await c.addSessionMessage(sessionId, role, [{ type: "text", text }], storeAgentId);
+            const roleId = role === "user" ? toRoleId(extractToolSenderId(ctx)) : undefined;
+            await c.addSessionMessage(
+              sessionId,
+              role,
+              [{ type: "text", text }],
+              storeAgentId,
+              undefined,
+              roleId,
+            );
             const commitResult = await c.commitSession(sessionId, { wait: true, agentId: storeAgentId });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {
