@@ -95,6 +95,8 @@ async function resolveMemoryContent(
 
   if (options.recallPreferAbstract && item.abstract?.trim()) {
     content = item.abstract.trim();
+  } else if (item.uri.includes("#") && item.abstract?.trim()) {
+    content = item.abstract.trim();
   } else if (item.level === 2) {
     try {
       const fullContent = await readFn(item.uri);

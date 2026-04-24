@@ -107,6 +107,28 @@ describe("buildMemoryLines", () => {
     expect(lines[0]).toContain("Fallback abstract");
   });
 
+  it("uses chunk abstracts without attempting a full read", async () => {
+    const memories = [
+      makeMemory({
+        uri: "viking://user/brianle/memories/profile.md#chunk_0001",
+        level: 2,
+        abstract: "Chunk abstract",
+      }),
+    ];
+    const readFn = vi.fn().mockRejectedValue(new Error("should not read chunk fragments"));
+    const logger = { warn: vi.fn() };
+
+    const lines = await buildMemoryLines(memories, readFn, {
+      recallPreferAbstract: false,
+      recallMaxContentChars: 500,
+      logger,
+    });
+
+    expect(lines).toEqual(["- [core] Chunk abstract"]);
+    expect(readFn).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("truncates content exceeding recallMaxContentChars", async () => {
     const longAbstract = "x".repeat(600);
     const memories = [makeMemory({ abstract: longAbstract })];

@@ -1145,7 +1145,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           agentId,
           client,
           logger,
-          verboseLog: runtimeLog,
+          verboseLog: cfg.logFindRequests ? runtimeLog : () => {},
           sessionId: OVSessionId,
         };
         const recallPromise =
