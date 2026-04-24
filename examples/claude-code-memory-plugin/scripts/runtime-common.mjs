@@ -26,9 +26,11 @@ export function getRuntimePaths() {
     sourcePackagePath: join(pluginRoot, "package.json"),
     sourceLockPath: join(pluginRoot, "package-lock.json"),
     sourceServerPath: join(pluginRoot, "servers", "memory-server.js"),
+    sourceRecallPath: join(pluginRoot, "servers", "recall.js"),
     runtimePackagePath: join(runtimeRoot, "package.json"),
     runtimeLockPath: join(runtimeRoot, "package-lock.json"),
     runtimeServerPath: join(runtimeRoot, "servers", "memory-server.js"),
+    runtimeRecallPath: join(runtimeRoot, "servers", "recall.js"),
     runtimeNodeModulesPath: join(runtimeRoot, "node_modules"),
     statePath: join(runtimeRoot, "install-state.json"),
     lockDir: join(runtimeRoot, ".install-lock"),
@@ -38,10 +40,11 @@ export function getRuntimePaths() {
 }
 
 export async function computeSourceState(paths) {
-  const [pkgRaw, lockRaw, serverRaw] = await Promise.all([
+  const [pkgRaw, lockRaw, serverRaw, recallRaw] = await Promise.all([
     readFile(paths.sourcePackagePath),
     readFile(paths.sourceLockPath),
     readFile(paths.sourceServerPath),
+    readFile(paths.sourceRecallPath),
   ]);
 
   const pkg = JSON.parse(pkgRaw.toString("utf8"));
@@ -49,7 +52,7 @@ export async function computeSourceState(paths) {
   return {
     pluginVersion: typeof pkg.version === "string" ? pkg.version : "0.0.0",
     manifestHash: sha256(pkgRaw, lockRaw),
-    serverHash: sha256(serverRaw),
+    serverHash: sha256(serverRaw, recallRaw),
   };
 }
 
@@ -103,6 +106,7 @@ export async function runtimeIsReady(paths, expectedState) {
     paths.runtimePackagePath,
     paths.runtimeLockPath,
     paths.runtimeServerPath,
+    paths.runtimeRecallPath,
     paths.runtimeNodeModulesPath,
   ]) {
     if (!(await pathExists(target))) return false;
@@ -116,6 +120,7 @@ export async function syncRuntimeFiles(paths) {
   await copyFile(paths.sourcePackagePath, paths.runtimePackagePath);
   await copyFile(paths.sourceLockPath, paths.runtimeLockPath);
   await copyFile(paths.sourceServerPath, paths.runtimeServerPath);
+  await copyFile(paths.sourceRecallPath, paths.runtimeRecallPath);
   await writeRuntimeEnvMeta(paths);
 }
 
