@@ -273,3 +273,50 @@ class TestAuditRecord:
             )
 
         assert "/agent/default/" in result.audit_uri
+
+
+class TestReindexRegenerateGate:
+    @pytest.mark.parametrize(
+        "ops_applied, expected_regenerate",
+        [
+            ({}, False),
+            ({"archived": 3}, True),
+            ({"merged": 1}, True),
+            ({"deleted": 2}, True),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_regenerate_flag_tracks_mutations(self, ops_applied, expected_regenerate):
+        consolidator = make_consolidator(with_service=True)
+        result = ConsolidationResult(scope_uri="viking://agent/a/memories/patterns/")
+        result.ops_applied.update(ops_applied)
+
+        with patch(
+            "openviking.server.routers.maintenance._do_reindex_locked",
+            new_callable=AsyncMock,
+        ) as mock_reindex:
+            await consolidator._reindex(result.scope_uri, _make_request_ctx("a"), result)
+
+        assert mock_reindex.await_count == 1
+        assert mock_reindex.await_args.kwargs["regenerate"] is expected_regenerate
+
+    @pytest.mark.asyncio
+    async def test_run_invokes_reindex_on_idle_pass(self):
+        """Idle passes must still reach _reindex so re-embed work runs;
+        regression guard against re-introducing an outer _has_writes gate."""
+        consolidator = make_consolidator(with_service=True)
+        consolidator._reindex = AsyncMock()
+
+        with (
+            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
+            patch(
+                "openviking.maintenance.memory_consolidator.get_lock_manager",
+                return_value=MagicMock(),
+            ),
+        ):
+            await consolidator.run(
+                "viking://agent/a/memories/patterns/",
+                _make_request_ctx("a"),
+            )
+
+        consolidator._reindex.assert_awaited_once()

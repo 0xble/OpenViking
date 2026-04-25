@@ -210,8 +210,7 @@ class MemoryConsolidator:
                         clusters, scope_uri, overview, ctx, result, lock_handle
                     )
                     await self._archive(archive_candidates, ctx, result)
-                    if self._has_writes(result):
-                        await self._reindex(scope_uri, ctx, result)
+                    await self._reindex(scope_uri, ctx, result)
                     if canaries:
                         result.canaries_post = await self._run_canaries(
                             scope_uri, canaries, ctx
@@ -574,16 +573,22 @@ class MemoryConsolidator:
         ctx: RequestContext,
         result: ConsolidationResult,
     ) -> None:
-        """Phase 5: rebuild scope overview/abstract under the existing lock."""
+        """Phase 5: rebuild scope overview/abstract under the existing lock.
+
+        Only force VLM-backed regeneration when this pass actually mutated the
+        scope. Idle passes re-embed only, which keeps periodic consolidation
+        cheap while still catching genuine staleness on the next mutating pass.
+        """
         t0 = time.perf_counter()
         if self.service is None:
             logger.debug("[MemoryConsolidator] no service handle; skipping reindex")
             result.phase_durations["reindex"] = 0.0
             return
+        regenerate = self._has_writes(result)
         try:
             from openviking.server.routers.maintenance import _do_reindex_locked
 
-            await _do_reindex_locked(self.service, scope_uri, regenerate=True, ctx=ctx)
+            await _do_reindex_locked(self.service, scope_uri, regenerate=regenerate, ctx=ctx)
         except Exception as e:
             logger.warning(f"[MemoryConsolidator] reindex failed: {e}")
             result.errors.append(f"reindex_failed: {e}")
