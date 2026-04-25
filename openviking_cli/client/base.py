@@ -42,10 +42,20 @@ class BaseClient(ABC):
         wait: bool = False,
         timeout: Optional[float] = None,
         watch_interval: float = 0,
-        metadata: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
+        ...
+
+    @abstractmethod
+    async def patch_resource_metadata(
+        self,
+        uri: str,
+        patch: Dict[str, Any],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Patch durable metadata for a resource."""
         ...
 
     @abstractmethod

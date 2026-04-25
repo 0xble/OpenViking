@@ -41,7 +41,6 @@ class AddResourceRequest(BaseModel):
         reason: Reason for adding the resource. Used for documentation and monitoring.
         instruction: Processing instruction for semantic extraction.
             Provides hints for how the resource should be processed.
-        metadata: Opaque JSON object stored with the resource and returned by stat.
         wait: Whether to wait for semantic extraction and vectorization to complete.
             Default is False (async processing).
         timeout: Timeout in seconds when wait=True. None means no timeout.
@@ -62,6 +61,7 @@ class AddResourceRequest(BaseModel):
             Note: If the target URI already has an active watch task, a ConflictError will be
             raised. You must first cancel the existing watch (set watch_interval <= 0) before
             creating a new one.
+        metadata: Durable resource metadata stored with the imported resource directory.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -72,7 +72,6 @@ class AddResourceRequest(BaseModel):
     parent: Optional[str] = None
     reason: str = ""
     instruction: str = ""
-    metadata: Optional[dict[str, Any]] = None
     wait: bool = False
     timeout: Optional[float] = None
     strict: bool = False
@@ -84,12 +83,23 @@ class AddResourceRequest(BaseModel):
     preserve_structure: Optional[bool] = None
     telemetry: TelemetryRequest = False
     watch_interval: float = 0
+    metadata: Optional[dict[str, Any]] = None
 
     @model_validator(mode="after")
     def check_path_or_temp_file_id(self):
         if not self.path and not self.temp_file_id:
             raise ValueError("Either 'path' or 'temp_file_id' must be provided")
         return self
+
+
+class PatchResourceMetadataRequest(BaseModel):
+    """Request model for patching durable resource metadata."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    patch: dict[str, Any]
+    telemetry: TelemetryRequest = False
 
 
 class AddSkillRequest(BaseModel):
@@ -228,8 +238,6 @@ async def add_resource(
     }
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
-    if request.metadata is not None:
-        kwargs["metadata"] = request.metadata
 
     execution = await run_operation(
         operation="resources.add_resource",
@@ -243,9 +251,33 @@ async def add_resource(
             instruction=request.instruction,
             wait=request.wait,
             timeout=request.timeout,
+            metadata=request.metadata,
             allow_local_path_resolution=allow_local_path_resolution,
             enforce_public_remote_targets=True,
             **kwargs,
+        ),
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
+
+
+@router.patch("/resources/metadata")
+async def patch_resource_metadata(
+    request: PatchResourceMetadataRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Patch durable metadata for a resource."""
+    service = get_service()
+    execution = await run_operation(
+        operation="resources.patch_metadata",
+        telemetry=request.telemetry,
+        fn=lambda: service.resources.patch_resource_metadata(
+            uri=request.uri,
+            patch=request.patch,
+            ctx=_ctx,
         ),
     )
     return Response(

@@ -48,30 +48,29 @@ async def test_sdk_add_resource(http_client):
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(SAMPLE_MD_CONTENT)
 
-    result = await client.add_resource(path=str(f), reason="sdk test", wait=True)
+    metadata = {"source": {"kind": "sdk", "etag": "v1"}}
+    result = await client.add_resource(
+        path=str(f),
+        reason="sdk test",
+        wait=True,
+        metadata=metadata,
+    )
     assert "usage" not in result
     assert "telemetry" not in result
     assert "root_uri" in result
     assert result["root_uri"].startswith("viking://")
 
-
-async def test_sdk_add_resource_metadata(http_client):
-    client, _ = http_client
-    f = TEST_TMP_DIR / "sdk_metadata_sample.md"
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(SAMPLE_MD_CONTENT)
-    metadata = {"source": {"provider": "sdk", "id": "sdk_metadata_sample.md"}}
-
-    result = await client.add_resource(
-        path=str(f),
-        to="viking://resources/sdk-metadata",
-        reason="sdk metadata test",
-        metadata=metadata,
-        wait=True,
-    )
-
     stat = await client.stat(result["root_uri"])
     assert stat["metadata"] == metadata
+
+    patched = await client.patch_resource_metadata(
+        result["root_uri"],
+        {"source": {"etag": "v2"}, "status": "active"},
+    )
+    assert patched["metadata"] == {
+        "source": {"kind": "sdk", "etag": "v2"},
+        "status": "active",
+    }
 
 
 async def test_sdk_add_skill_from_local_file(http_client):

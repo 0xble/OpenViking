@@ -214,6 +214,7 @@ class VikingFS:
         self.rerank_config = rerank_config
         self.vector_store = vector_store
         self._encryptor = encryptor
+        self._resource_metadata_locks: dict[str, asyncio.Lock] = {}
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
@@ -732,49 +733,11 @@ class VikingFS:
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         info = dict(self.agfs.stat(path))
-        if (
-            include_metadata
-            and info.get("isDir")
-            and not uri.rstrip("/").endswith(f"/{RESOURCE_METADATA_FILENAME}")
-        ):
+        if include_metadata and info.get("isDir"):
             metadata = await self._read_resource_metadata(uri, ctx=ctx)
             if metadata is not None:
                 info["metadata"] = metadata
         return info
-
-    def _resource_metadata_uri(self, uri: str) -> str:
-        return f"{uri.rstrip('/')}/{RESOURCE_METADATA_FILENAME}"
-
-    async def _read_resource_metadata(
-        self,
-        uri: str,
-        ctx: Optional[RequestContext] = None,
-    ) -> Optional[Dict[str, Any]]:
-        try:
-            content = await self.read_file(self._resource_metadata_uri(uri), ctx=ctx)
-            metadata = json.loads(content)
-        except Exception as exc:
-            if not is_not_found_error(exc):
-                logger.debug(f"Failed to read resource metadata for {uri}: {exc}")
-            return None
-        if isinstance(metadata, dict):
-            return metadata
-        logger.debug(f"Ignoring non-object resource metadata for {uri}")
-        return None
-
-    async def write_resource_metadata(
-        self,
-        uri: str,
-        metadata: Dict[str, Any],
-        ctx: Optional[RequestContext] = None,
-    ) -> None:
-        """Persist opaque metadata for a resource root."""
-        self._ensure_mutable_access(uri, ctx)
-        try:
-            json_content = json.dumps(metadata, ensure_ascii=False, sort_keys=True, indent=2)
-        except TypeError as exc:
-            raise InvalidArgumentError("metadata must be JSON-serializable") from exc
-        await self.write_file(self._resource_metadata_uri(uri), f"{json_content}\n", ctx=ctx)
 
     async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
         """Check if a URI exists.
@@ -1471,6 +1434,99 @@ class VikingFS:
             return f"viking:/{path}"
         else:
             return f"viking://{path}"
+
+    @staticmethod
+    def _resource_metadata_uri(uri: str) -> str:
+        return f"{uri.rstrip('/')}/{RESOURCE_METADATA_FILENAME}"
+
+    @staticmethod
+    def normalize_resource_metadata(metadata: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(metadata, dict):
+            raise InvalidArgumentError("resource metadata must be a JSON object")
+        try:
+            return json.loads(json.dumps(metadata, ensure_ascii=False))
+        except TypeError as exc:
+            raise InvalidArgumentError("resource metadata must be JSON serializable") from exc
+
+    @classmethod
+    def _apply_resource_metadata_patch(
+        cls,
+        current: Dict[str, Any],
+        patch: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        result = dict(current)
+        for key, value in patch.items():
+            if value is None:
+                result.pop(key, None)
+                continue
+            existing = result.get(key)
+            if isinstance(existing, dict) and isinstance(value, dict):
+                result[key] = cls._apply_resource_metadata_patch(existing, value)
+            else:
+                result[key] = value
+        return result
+
+    async def _read_resource_metadata(
+        self,
+        uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> Optional[Dict[str, Any]]:
+        metadata_uri = self._resource_metadata_uri(uri)
+        try:
+            raw_metadata = await self.read_file(metadata_uri, ctx=ctx)
+        except NotFoundError:
+            return None
+
+        try:
+            metadata = json.loads(raw_metadata)
+        except json.JSONDecodeError:
+            logger.warning(f"[VikingFS] Ignoring invalid resource metadata at {metadata_uri}")
+            return None
+        if not isinstance(metadata, dict):
+            logger.warning(f"[VikingFS] Ignoring non-object resource metadata at {metadata_uri}")
+            return None
+        return metadata
+
+    async def write_resource_metadata(
+        self,
+        uri: str,
+        metadata: Dict[str, Any],
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        """Persist durable metadata for a resource directory."""
+        self._ensure_mutable_access(uri, ctx)
+        path = self._uri_to_path(uri, ctx=ctx)
+        stat = self.agfs.stat(path)
+        if not stat.get("isDir"):
+            raise InvalidArgumentError(f"resource metadata can only be set on directories: {uri}")
+
+        normalized_metadata = self.normalize_resource_metadata(metadata)
+        metadata_uri = self._resource_metadata_uri(uri)
+        metadata_json = json.dumps(
+            normalized_metadata,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        await self.write_file(metadata_uri, metadata_json + "\n", ctx=ctx)
+        return normalized_metadata
+
+    async def patch_resource_metadata(
+        self,
+        uri: str,
+        patch: Dict[str, Any],
+        ctx: Optional[RequestContext] = None,
+    ) -> Dict[str, Any]:
+        """Merge durable metadata into a resource directory without reprocessing content."""
+        real_ctx = self._ctx_or_default(ctx)
+        canonical_uri = canonicalize_uri(uri, real_ctx)
+        metadata_lock = self._resource_metadata_locks.setdefault(canonical_uri, asyncio.Lock())
+
+        async with metadata_lock:
+            normalized_patch = self.normalize_resource_metadata(patch)
+            current = await self._read_resource_metadata(canonical_uri, ctx=real_ctx) or {}
+            updated = self._apply_resource_metadata_patch(current, normalized_patch)
+            return await self.write_resource_metadata(canonical_uri, updated, ctx=real_ctx)
 
     def _looks_like_legacy_temp_leaf(self, value: str) -> bool:
         return bool(re.match(r"^\d{8}_[0-9a-f]{6}$", value or ""))

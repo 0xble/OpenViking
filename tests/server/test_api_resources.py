@@ -33,28 +33,21 @@ async def test_add_resource_success(
     assert body["result"]["root_uri"].startswith("viking://")
 
 
-async def test_add_resource_persists_metadata(
+async def test_add_resource_with_metadata_persists_to_stat(
     client: httpx.AsyncClient,
     sample_markdown_file,
     upload_temp_dir,
 ):
     metadata = {
-        "source": {
-            "provider": "filesystem",
-            "id": "docs/guide.md",
-            "change_detector": "etag-123",
-        },
-        "labels": ["docs", "imported"],
+        "source": {"kind": "docs", "id": "guide"},
+        "sync": {"etag": "abc123"},
     }
-
     resp = await client.post(
         "/api/v1/resources",
         json={
             "temp_file_id": sample_markdown_file.name,
-            "to": "viking://resources/metadata-test",
-            "reason": "test metadata",
+            "reason": "metadata resource",
             "metadata": metadata,
-            "wait": False,
         },
     )
     assert resp.status_code == 200
@@ -74,11 +67,100 @@ async def test_add_resource_rejects_non_object_metadata(
         "/api/v1/resources",
         json={
             "temp_file_id": sample_markdown_file.name,
-            "reason": "test metadata",
+            "reason": "metadata resource",
             "metadata": ["not", "an", "object"],
         },
     )
     assert resp.status_code == 422
+
+
+async def test_patch_resource_metadata_merges_and_deletes_fields(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "reason": "metadata patch resource",
+            "metadata": {
+                "source": {"kind": "docs", "etag": "v1"},
+                "remove_me": True,
+            },
+        },
+    )
+    assert resp.status_code == 200
+    root_uri = resp.json()["result"]["root_uri"]
+
+    patch_resp = await client.patch(
+        "/api/v1/resources/metadata",
+        json={
+            "uri": root_uri,
+            "patch": {
+                "source": {"etag": "v2"},
+                "status": "active",
+                "remove_me": None,
+            },
+        },
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["result"]["metadata"] == {
+        "source": {"kind": "docs", "etag": "v2"},
+        "status": "active",
+    }
+
+    stat_resp = await client.get("/api/v1/fs/stat", params={"uri": root_uri})
+    assert stat_resp.status_code == 200
+    assert stat_resp.json()["result"]["metadata"] == {
+        "source": {"kind": "docs", "etag": "v2"},
+        "status": "active",
+    }
+
+
+async def test_patch_resource_metadata_creates_metadata_when_missing(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "reason": "metadata patch resource",
+        },
+    )
+    assert resp.status_code == 200
+    root_uri = resp.json()["result"]["root_uri"]
+
+    patch_resp = await client.patch(
+        "/api/v1/resources/metadata",
+        json={"uri": root_uri, "patch": {"source": {"id": "new"}}},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["result"]["metadata"] == {"source": {"id": "new"}}
+
+
+async def test_patch_resource_metadata_rejects_non_object_patch(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "reason": "metadata patch resource",
+        },
+    )
+    assert resp.status_code == 200
+    root_uri = resp.json()["result"]["root_uri"]
+
+    patch_resp = await client.patch(
+        "/api/v1/resources/metadata",
+        json={"uri": root_uri, "patch": ["not", "an", "object"]},
+    )
+    assert patch_resp.status_code == 422
 
 
 async def test_add_resource_with_wait(

@@ -135,8 +135,8 @@ class SyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
-        metadata: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        metadata: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (resources scope only)
@@ -144,7 +144,6 @@ class SyncOpenViking:
         Args:
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
-            metadata: Opaque JSON object stored with the resource and returned by stat.
             **kwargs: Extra options forwarded to the parser chain, e.g.
                 ``strict``, ``ignore_dirs``, ``include``, ``exclude``.
         """
@@ -164,6 +163,21 @@ class SyncOpenViking:
                 metadata=metadata,
                 telemetry=telemetry,
                 **kwargs,
+            )
+        )
+
+    def patch_resource_metadata(
+        self,
+        uri: str,
+        patch: Dict[str, Any],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Patch durable metadata for a resource."""
+        return run_async(
+            self._async_client.patch_resource_metadata(
+                uri=uri,
+                patch=patch,
+                telemetry=telemetry,
             )
         )
 

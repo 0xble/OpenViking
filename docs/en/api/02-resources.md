@@ -46,10 +46,10 @@ Add a resource to the knowledge base.
 | parent | str | No | None | Parent URI under which the resource will be stored. Cannot be combined with `to` |
 | reason | str | No | "" | Why this resource is being added (improves search relevance) |
 | instruction | str | No | "" | Special processing instructions |
-| metadata | object | No | None | Opaque JSON metadata stored with the resource and returned by `stat` |
 | wait | bool | No | False | Wait for semantic processing to complete |
 | timeout | float | No | None | Timeout in seconds (only used when wait=True) |
 | watch_interval | float | No | 0 | Watch interval (minutes). >0 enables/updates watch; <=0 disables watch. Only takes effect when `to` is provided |
+| metadata | object | No | None | Durable JSON metadata stored with the resource directory and returned by `GET /api/v1/fs/stat` |
 
 `POST /api/v1/resources` uses `to` in JSON. CLI uses `--to`.
 
@@ -61,6 +61,53 @@ Add a resource to the knowledge base.
   - Local file: call `POST /api/v1/resources/temp_upload` first, then pass the returned `temp_file_id`
   - Local directory: zip it first, upload the `.zip` file, then pass the returned `temp_file_id`
 - `POST /api/v1/resources` does not accept direct host filesystem paths such as `./guide.md`, `/tmp/guide.md`, or `/tmp/my-dir/`.
+
+**Resource metadata**
+
+Callers can attach a JSON object when adding a resource. The metadata is stored with the
+resource directory and does not participate in semantic processing or vectorization.
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.com/guide.md",
+    "to": "viking://resources/guides/example",
+    "metadata": {
+      "source": {"kind": "web", "id": "guide"},
+      "sync": {"etag": "abc123"}
+    }
+  }'
+```
+
+Read it back through filesystem stat:
+
+```bash
+curl "http://localhost:1933/api/v1/fs/stat?uri=viking://resources/guides/example" \
+  -H "X-API-Key: your-key"
+```
+
+Patch metadata without re-importing or reprocessing content:
+
+```
+PATCH /api/v1/resources/metadata
+```
+
+```bash
+curl -X PATCH http://localhost:1933/api/v1/resources/metadata \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://resources/guides/example",
+    "patch": {
+      "sync": {"etag": "def456"},
+      "stale": null
+    }
+  }'
+```
+
+The patch is a JSON object merge: nested objects are merged, and `null` removes a field.
 
 **Incremental Updates**
 
@@ -98,35 +145,8 @@ curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "reason": "User guide documentation",
-    "metadata": {
-      "source": {
-        "provider": "website",
-        "id": "https://example.com/guide.md",
-        "change_detector": "etag-123"
-      }
-    }
+    "reason": "User guide documentation"
   }'
-```
-
-The metadata object is stored opaquely. OpenViking does not interpret its keys, but
-callers can retrieve the same object with `GET /api/v1/fs/stat?uri=...`:
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "name": "guide",
-    "isDir": true,
-    "metadata": {
-      "source": {
-        "provider": "website",
-        "id": "https://example.com/guide.md",
-        "change_detector": "etag-123"
-      }
-    }
-  }
-}
 ```
 
 **CLI**

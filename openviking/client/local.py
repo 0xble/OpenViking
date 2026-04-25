@@ -97,9 +97,9 @@ class LocalClient(BaseClient):
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
-        metadata: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         watch_interval: float = 0,
+        metadata: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -120,9 +120,30 @@ class LocalClient(BaseClient):
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
-                metadata=metadata,
                 watch_interval=watch_interval,
+                metadata=metadata,
                 **kwargs,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
+
+    async def patch_resource_metadata(
+        self,
+        uri: str,
+        patch: Dict[str, Any],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Patch durable metadata for a resource."""
+        execution = await run_with_telemetry(
+            operation="resources.patch_metadata",
+            telemetry=telemetry,
+            fn=lambda: self._service.resources.patch_resource_metadata(
+                uri=uri,
+                patch=patch,
+                ctx=self._ctx,
             ),
         )
         return attach_telemetry_payload(

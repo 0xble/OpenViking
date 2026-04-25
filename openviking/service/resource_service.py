@@ -113,11 +113,11 @@ class ResourceService:
         timeout: Optional[float] = None,
         build_index: bool = True,
         summarize: bool = False,
-        metadata: Optional[Dict[str, Any]] = None,
         watch_interval: float = 0,
         skip_watch_management: bool = False,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
@@ -132,7 +132,6 @@ class ResourceService:
             timeout: Wait timeout in seconds
             build_index: Whether to build vector index immediately (default: True)
             summarize: Whether to generate summary (default: False)
-            metadata: Opaque JSON object to store with the resulting resource root
             watch_interval: Watch interval in minutes for automatic resource monitoring.
                 - watch_interval > 0: Creates or updates a watch task. The resource will be
                   automatically re-processed at the specified interval by the scheduler.
@@ -158,6 +157,12 @@ class ResourceService:
             InvalidArgumentError: If the URI scope is not 'resources'
         """
         self._ensure_initialized()
+        viking_fs = self._viking_fs
+        resource_processor = self._resource_processor
+        assert viking_fs is not None
+        assert resource_processor is not None
+        if metadata is not None:
+            metadata = viking_fs.normalize_resource_metadata(metadata)
         request_start = time.perf_counter()
         telemetry = get_current_telemetry()
         telemetry_id = register_wait_telemetry(wait)
@@ -196,7 +201,7 @@ class ResourceService:
                 path = require_remote_resource_source(path)
                 kwargs.setdefault("request_validator", ensure_public_remote_target)
 
-            result = await self._resource_processor.process_resource(
+            result = await resource_processor.process_resource(
                 path=path,
                 ctx=ctx,
                 reason=reason,
@@ -209,15 +214,10 @@ class ResourceService:
                 allow_local_path_resolution=allow_local_path_resolution,
                 **kwargs,
             )
-            if metadata is not None and result.get("root_uri"):
-                viking_fs = self._viking_fs
-                if viking_fs is None:
-                    raise NotInitializedError("VikingFS")
-                await viking_fs.write_resource_metadata(
-                    result["root_uri"],
-                    metadata,
-                    ctx=ctx,
-                )
+
+            root_uri = result.get("root_uri")
+            if metadata is not None and root_uri:
+                await viking_fs.write_resource_metadata(root_uri, metadata, ctx=ctx)
 
             if wait:
                 wait_start = time.perf_counter()
@@ -305,6 +305,25 @@ class ResourceService:
             )
             get_request_wait_tracker().cleanup(telemetry_id)
             unregister_wait_telemetry(telemetry_id)
+
+    async def patch_resource_metadata(
+        self,
+        uri: str,
+        patch: Dict[str, Any],
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Patch durable resource metadata without reprocessing content."""
+        self._ensure_initialized()
+        viking_fs = self._viking_fs
+        assert viking_fs is not None
+        parsed = VikingURI(uri)
+        if parsed.scope != "resources":
+            raise InvalidArgumentError(
+                f"resource metadata only supports resources scope, got {parsed.scope}"
+            )
+
+        metadata = await viking_fs.patch_resource_metadata(uri, patch, ctx=ctx)
+        return {"uri": uri, "metadata": metadata}
 
     async def _handle_watch_task_creation(
         self,
