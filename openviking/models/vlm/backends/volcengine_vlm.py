@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
-from openviking.utils.model_retry import retry_async
+from openviking.utils.model_retry import retry_async, retry_sync
 
 from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM
@@ -122,14 +122,23 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tool_choice"] = tool_choice or "auto"
 
         client = self.get_client()
-        t0 = time.perf_counter()
-        response = client.chat.completions.create(**kwargs)
-        elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        result = self._build_vlm_response(response, has_tools=bool(tools))
-        if tools:
-            return result
-        return self._clean_response(str(result))
+
+        def _do_call():
+            t0 = time.perf_counter()
+            response = client.chat.completions.create(**kwargs)
+            elapsed = time.perf_counter() - t0
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            result = self._build_vlm_response(response, has_tools=bool(tools))
+            if tools:
+                return result
+            return self._clean_response(str(result))
+
+        return retry_sync(
+            _do_call,
+            max_retries=self.max_retries,
+            operation_name="VolcEngineVLM.get_completion",
+            logger=logger,
+        )
 
     @tracer("volcengine.vlm.call", ignore_result=True, ignore_args=False)
     async def get_completion_async(
@@ -322,14 +331,23 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tool_choice"] = "auto"
 
         client = self.get_client()
-        t0 = time.perf_counter()
-        response = client.chat.completions.create(**kwargs)
-        elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        result = self._build_vlm_response(response, has_tools=bool(tools))
-        if tools:
-            return result
-        return self._clean_response(str(result))
+
+        def _do_call():
+            t0 = time.perf_counter()
+            response = client.chat.completions.create(**kwargs)
+            elapsed = time.perf_counter() - t0
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            result = self._build_vlm_response(response, has_tools=bool(tools))
+            if tools:
+                return result
+            return self._clean_response(str(result))
+
+        return retry_sync(
+            _do_call,
+            max_retries=self.max_retries,
+            operation_name="VolcEngineVLM.get_vision_completion",
+            logger=logger,
+        )
 
     async def get_vision_completion_async(
         self,
@@ -363,11 +381,20 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tool_choice"] = "auto"
 
         client = self.get_async_client()
-        t0 = time.perf_counter()
-        response = await client.chat.completions.create(**kwargs)
-        elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        result = self._build_vlm_response(response, has_tools=bool(tools))
-        if tools:
-            return result
-        return self._clean_response(str(result))
+
+        async def _do_call():
+            t0 = time.perf_counter()
+            response = await client.chat.completions.create(**kwargs)
+            elapsed = time.perf_counter() - t0
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            result = self._build_vlm_response(response, has_tools=bool(tools))
+            if tools:
+                return result
+            return self._clean_response(str(result))
+
+        return await retry_async(
+            _do_call,
+            max_retries=self.max_retries,
+            operation_name="VolcEngineVLM.get_vision_completion_async",
+            logger=logger,
+        )

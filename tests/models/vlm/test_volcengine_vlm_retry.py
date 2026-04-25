@@ -69,3 +69,54 @@ async def test_get_completion_async_retries_transient_error(vlm):
 
     # max_retries=3 means initial attempt + 3 retries = 4 calls.
     assert failing.await_count == 4
+
+
+def test_get_completion_sync_does_not_retry_permanent_error(vlm):
+    """Sync path should match the async path: 401 fails fast, no retry."""
+    failing = MagicMock(side_effect=RuntimeError("401 Unauthorized"))
+    fake_client = MagicMock()
+    fake_client.chat.completions.create = failing
+
+    with patch.object(vlm, "get_client", return_value=fake_client):
+        with pytest.raises(RuntimeError, match="401"):
+            vlm.get_completion(prompt="hello")
+
+    assert failing.call_count == 1
+
+
+def test_get_completion_sync_retries_transient_error(vlm):
+    failing = MagicMock(side_effect=RuntimeError("503 service unavailable"))
+    fake_client = MagicMock()
+    fake_client.chat.completions.create = failing
+
+    with patch.object(vlm, "get_client", return_value=fake_client):
+        with patch("openviking.utils.model_retry.time.sleep"):
+            with pytest.raises(RuntimeError):
+                vlm.get_completion(prompt="hello")
+
+    assert failing.call_count == 4
+
+
+def test_get_vision_completion_sync_does_not_retry_permanent_error(vlm):
+    failing = MagicMock(side_effect=RuntimeError("403 Forbidden"))
+    fake_client = MagicMock()
+    fake_client.chat.completions.create = failing
+
+    with patch.object(vlm, "get_client", return_value=fake_client):
+        with pytest.raises(RuntimeError, match="403"):
+            vlm.get_vision_completion(prompt="hello", images=None)
+
+    assert failing.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_vision_completion_async_does_not_retry_permanent_error(vlm):
+    failing = AsyncMock(side_effect=RuntimeError("400 BadRequest"))
+    fake_client = MagicMock()
+    fake_client.chat.completions.create = failing
+
+    with patch.object(vlm, "get_async_client", return_value=fake_client):
+        with pytest.raises(RuntimeError, match="400"):
+            await vlm.get_vision_completion_async(prompt="hello", images=None)
+
+    assert failing.await_count == 1

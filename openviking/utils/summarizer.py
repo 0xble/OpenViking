@@ -12,7 +12,7 @@ from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
-from openviking.utils.safety import check_vlm_enabled
+from openviking.utils.safety import check_model_calls_enabled
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -43,7 +43,7 @@ class Summarizer:
         Summarize the given resources.
         Triggers SemanticQueue to generate .abstract.md and .overview.md.
         """
-        check_vlm_enabled("Summarizer.summarize")
+        check_model_calls_enabled("Summarizer.summarize")
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
 

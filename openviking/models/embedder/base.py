@@ -12,7 +12,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.model_retry import retry_async, retry_sync
-from openviking.utils.safety import check_vlm_enabled
+from openviking.utils.safety import check_model_calls_enabled
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
@@ -221,7 +221,7 @@ class EmbedderBase(ABC):
 
     def _run_with_retry(self, func: Callable[[], T], *, logger=None, operation_name: str) -> T:
         def _wrapped() -> T:
-            check_vlm_enabled("EmbedderBase.embed")
+            check_model_calls_enabled("EmbedderBase.embed")
             previous_started_at = self._active_call_started_at
             self._active_call_started_at = time.monotonic()
             try:
@@ -244,7 +244,7 @@ class EmbedderBase(ABC):
         operation_name: str,
     ) -> T:
         async def _wrapped() -> T:
-            check_vlm_enabled("EmbedderBase.embed_async")
+            check_model_calls_enabled("EmbedderBase.embed_async")
             semaphore = _get_async_embed_semaphore(self.max_concurrent)
             wait_started = time.monotonic()
             await semaphore.acquire()

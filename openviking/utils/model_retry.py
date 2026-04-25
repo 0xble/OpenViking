@@ -1,11 +1,15 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
 from __future__ import annotations
 
 import asyncio
 import random
 import time
-from typing import Awaitable, Callable, TypeVar
+from typing import Awaitable, Callable, Literal, TypeVar
 
 T = TypeVar("T")
+
+ErrorClass = Literal["permanent", "rate_limit", "transient", "unknown"]
 
 PERMANENT_API_ERROR_PATTERNS = (
     "400",
@@ -40,7 +44,7 @@ RATE_LIMIT_ERROR_PATTERNS = (
 )
 
 
-def classify_api_error(error: Exception) -> str:
+def classify_api_error(error: Exception) -> ErrorClass:
     """Classify an API error as permanent, rate_limit, transient, or unknown."""
     texts = [str(error)]
     if error.__cause__ is not None:

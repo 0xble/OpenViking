@@ -111,6 +111,10 @@ class CircuitBreaker:
                 logger.info(f"Circuit breaker tripped immediately on permanent error: {error}")
                 return
 
+            # rate_limit and transient both fall through to the threshold-based
+            # trip below. Inline retry of rate-limit is filtered upstream by
+            # is_retryable_api_error; here we treat it as a generic failure
+            # signal toward circuit-open like any other transient error.
             if self._failure_count >= self._failure_threshold:
                 self._state = _STATE_OPEN
                 self._current_reset_timeout = self._base_reset_timeout
