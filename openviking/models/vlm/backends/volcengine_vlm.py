@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
 from openviking.utils.model_retry import retry_async
+
 from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM
 

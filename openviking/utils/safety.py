@@ -41,6 +41,5 @@ def check_vlm_enabled(operation: str) -> None:
     """
     if vlm_disabled():
         raise VLMDisabledError(
-            f"{operation} blocked: OPENVIKING_DISABLE_VLM is set. "
-            f"Unset the env var to resume."
+            f"{operation} blocked: OPENVIKING_DISABLE_VLM is set. Unset the env var to resume."
         )
