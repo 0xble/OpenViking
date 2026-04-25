@@ -17,14 +17,10 @@ PERMANENT_API_ERROR_PATTERNS = (
 )
 
 TRANSIENT_API_ERROR_PATTERNS = (
-    "429",
     "500",
     "502",
     "503",
     "504",
-    "TooManyRequests",
-    "RateLimit",
-    "RequestBurstTooFast",
     "timeout",
     "Timeout",
     "ConnectionError",
@@ -32,9 +28,20 @@ TRANSIENT_API_ERROR_PATTERNS = (
     "Connection reset",
 )
 
+# Rate-limit signals are intentionally separated from transient-network signals.
+# Inline retry of a rate-limited call amplifies billed volume and prolongs the
+# rate-limit window. Callers that want to handle rate-limit explicitly (e.g.
+# re-enqueue with provider-aware backoff) should use is_rate_limit_error.
+RATE_LIMIT_ERROR_PATTERNS = (
+    "429",
+    "TooManyRequests",
+    "RateLimit",
+    "RequestBurstTooFast",
+)
+
 
 def classify_api_error(error: Exception) -> str:
-    """Classify an API error as permanent, transient, or unknown."""
+    """Classify an API error as permanent, rate_limit, transient, or unknown."""
     texts = [str(error)]
     if error.__cause__ is not None:
         texts.append(str(error.__cause__))
@@ -45,6 +52,11 @@ def classify_api_error(error: Exception) -> str:
                 return "permanent"
 
     for text in texts:
+        for pattern in RATE_LIMIT_ERROR_PATTERNS:
+            if pattern in text:
+                return "rate_limit"
+
+    for text in texts:
         for pattern in TRANSIENT_API_ERROR_PATTERNS:
             if pattern in text:
                 return "transient"
@@ -53,8 +65,19 @@ def classify_api_error(error: Exception) -> str:
 
 
 def is_retryable_api_error(error: Exception) -> bool:
-    """Return True if the error should be retried."""
+    """Return True if the error should be retried inline.
+
+    Rate-limit errors are NOT considered retryable here: inline retry of a
+    rate-limited call amplifies billed volume. Callers that want to retry
+    after a longer backoff should use is_rate_limit_error and schedule
+    accordingly.
+    """
     return classify_api_error(error) == "transient"
+
+
+def is_rate_limit_error(error: Exception) -> bool:
+    """Return True if the error is a provider rate-limit response."""
+    return classify_api_error(error) == "rate_limit"
 
 
 def _compute_delay(
