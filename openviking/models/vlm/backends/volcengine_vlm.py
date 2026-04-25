@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """VolcEngine VLM backend implementation."""
 
-import asyncio
 import base64
 import json
 import logging
@@ -11,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
+from openviking.utils.model_retry import retry_async
 from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM
 
@@ -158,26 +158,22 @@ class VolcEngineVLM(OpenAIVLM):
 
         client = self.get_async_client()
 
-        last_error = None
-        for attempt in range(self.max_retries + 1):
-            try:
-                t0 = time.perf_counter()
-                response = await client.chat.completions.create(**kwargs)
-                elapsed = time.perf_counter() - t0
-                self._update_token_usage_from_response(response, duration_seconds=elapsed)
-                result = self._build_vlm_response(response, has_tools=bool(tools))
-                if tools:
-                    return result
-                return self._clean_response(str(result))
-            except Exception as e:
-                last_error = e
-                if attempt < self.max_retries:
-                    await asyncio.sleep(2**attempt)
+        async def _do_call():
+            t0 = time.perf_counter()
+            response = await client.chat.completions.create(**kwargs)
+            elapsed = time.perf_counter() - t0
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            result = self._build_vlm_response(response, has_tools=bool(tools))
+            if tools:
+                return result
+            return self._clean_response(str(result))
 
-        if last_error:
-            raise last_error
-        else:
-            raise RuntimeError("Unknown error in async completion")
+        return await retry_async(
+            _do_call,
+            max_retries=self.max_retries,
+            operation_name="VolcEngineVLM.get_completion_async",
+            logger=logger,
+        )
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
