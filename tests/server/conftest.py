@@ -232,8 +232,10 @@ async def service(temp_dir: Path, monkeypatch):
     reset_lock_manager()
     fake_embedder_cls = _install_fake_embedder(monkeypatch)
     _install_fake_vlm(monkeypatch)
+    test_user = UserIdentifier("test_account", "test_user", "default")
     svc = OpenVikingService(
-        path=str(temp_dir / "data"), user=UserIdentifier.the_default_user("test_user")
+        path=str(temp_dir / "data"),
+        user=test_user,
     )
     await svc.initialize()
     svc.viking_fs.query_embedder = fake_embedder_cls()
@@ -258,14 +260,21 @@ async def app(service: OpenVikingService):
 async def client(app):
     """httpx AsyncClient bound to the ASGI app (no real network)."""
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={
+            "X-OpenViking-Account": "test_account",
+            "X-OpenViking-User": "test_user",
+        },
+    ) as c:
         yield c
 
 
 @pytest_asyncio.fixture(scope="function")
 async def client_with_resource(client, service, sample_markdown_file):
     """Client + a resource already added and processed."""
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
     result = await service.resources.add_resource(
         path=str(sample_markdown_file),
         ctx=ctx,
@@ -289,7 +298,8 @@ async def running_server(temp_dir: Path, monkeypatch):
     _install_fake_vlm(monkeypatch)
 
     svc = OpenVikingService(
-        path=str(temp_dir / "sdk_data"), user=UserIdentifier.the_default_user("sdk_test_user")
+        path=str(temp_dir / "sdk_data"),
+        user=UserIdentifier("test_account", "sdk_test_user", "default"),
     )
     await svc.initialize()
     svc.viking_fs.query_embedder = fake_embedder_cls()

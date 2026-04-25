@@ -503,7 +503,8 @@ async def test_grep_walks_directories_with_more_than_1000_children(
     needle_index = 1001
     needle_child = f"overflow_{needle_index:05d}"
     needle = "NEEDLE_pos1001_a7f2c9"
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    tenant_user = UserIdentifier("test_account", "test_user", "default")
+    ctx = RequestContext(user=tenant_user, role=Role.ROOT)
     root_uri = "viking://resources/overflow"
 
     await service.viking_fs.mkdir(root_uri, exist_ok=True, ctx=ctx)
@@ -520,6 +521,10 @@ async def test_grep_walks_directories_with_more_than_1000_children(
     resp = await client.post(
         "/api/v1/search/grep",
         json={"uri": root_uri, "pattern": needle},
+        headers={
+            "X-OpenViking-Account": tenant_user.account_id,
+            "X-OpenViking-User": tenant_user.user_id,
+        },
     )
 
     assert resp.status_code == 200
