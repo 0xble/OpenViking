@@ -259,13 +259,13 @@ def create_app(
     app.include_router(relations_router)
     app.include_router(sessions_router)
     app.include_router(stats_router)
+    app.include_router(maintenance_router)
     app.include_router(pack_router)
     app.include_router(debug_router)
     app.include_router(observer_router)
     app.include_router(metrics_router)
     app.include_router(tasks_router)
     app.include_router(webdav_router)
-    app.include_router(maintenance_router)
     app.include_router(bot_router, prefix="/bot/v1")
 
     return app

@@ -31,11 +31,11 @@ __all__ = [
     "relations_router",
     "sessions_router",
     "stats_router",
+    "maintenance_router",
     "pack_router",
     "debug_router",
     "metrics_router",
     "observer_router",
     "tasks_router",
     "webdav_router",
-    "maintenance_router",
 ]

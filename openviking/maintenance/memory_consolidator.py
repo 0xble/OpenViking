@@ -151,8 +151,8 @@ class MemoryConsolidator:
             dedup: MemoryDeduplicator providing consolidate_cluster().
             archiver: MemoryArchiver for cold-archive phase.
             service: Optional service handle. If provided, _reindex calls
-                _do_reindex_locked from openviking.server.routers.maintenance
-                with this service. Without it, _reindex is a no-op.
+                service.reindex(uri=..., lock_already_held=True). Without
+                it, _reindex is a no-op.
             cluster_threshold: Minimum cosine similarity to link two
                 memories into the same cluster.
             top_k: Top-K size for per-memory similarity queries.
@@ -584,11 +584,15 @@ class MemoryConsolidator:
             logger.debug("[MemoryConsolidator] no service handle; skipping reindex")
             result.phase_durations["reindex"] = 0.0
             return
-        regenerate = self._has_writes(result)
+        mode = "semantic_and_vectors" if self._has_writes(result) else "vectors_only"
         try:
-            from openviking.server.routers.maintenance import _do_reindex_locked
-
-            await _do_reindex_locked(self.service, scope_uri, regenerate=regenerate, ctx=ctx)
+            await self.service.reindex(
+                uri=scope_uri,
+                mode=mode,
+                wait=True,
+                ctx=ctx,
+                lock_already_held=True,
+            )
         except Exception as e:
             logger.warning(f"[MemoryConsolidator] reindex failed: {e}")
             result.errors.append(f"reindex_failed: {e}")

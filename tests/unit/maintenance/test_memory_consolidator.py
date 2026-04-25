@@ -277,28 +277,28 @@ class TestAuditRecord:
 
 class TestReindexRegenerateGate:
     @pytest.mark.parametrize(
-        "ops_applied, expected_regenerate",
+        "ops_applied, expected_mode",
         [
-            ({}, False),
-            ({"archived": 3}, True),
-            ({"merged": 1}, True),
-            ({"deleted": 2}, True),
+            ({}, "vectors_only"),
+            ({"archived": 3}, "semantic_and_vectors"),
+            ({"merged": 1}, "semantic_and_vectors"),
+            ({"deleted": 2}, "semantic_and_vectors"),
         ],
     )
     @pytest.mark.asyncio
-    async def test_regenerate_flag_tracks_mutations(self, ops_applied, expected_regenerate):
+    async def test_reindex_mode_tracks_mutations(self, ops_applied, expected_mode):
         consolidator = make_consolidator(with_service=True)
+        consolidator.service.reindex = AsyncMock()
         result = ConsolidationResult(scope_uri="viking://agent/a/memories/patterns/")
         result.ops_applied.update(ops_applied)
 
-        with patch(
-            "openviking.server.routers.maintenance._do_reindex_locked",
-            new_callable=AsyncMock,
-        ) as mock_reindex:
-            await consolidator._reindex(result.scope_uri, _make_request_ctx("a"), result)
+        await consolidator._reindex(result.scope_uri, _make_request_ctx("a"), result)
 
-        assert mock_reindex.await_count == 1
-        assert mock_reindex.await_args.kwargs["regenerate"] is expected_regenerate
+        assert consolidator.service.reindex.await_count == 1
+        kwargs = consolidator.service.reindex.await_args.kwargs
+        assert kwargs["mode"] == expected_mode
+        assert kwargs["lock_already_held"] is True
+        assert kwargs["uri"] == result.scope_uri
 
     @pytest.mark.asyncio
     async def test_run_invokes_reindex_on_idle_pass(self):

@@ -142,6 +142,7 @@ struct Cli {
 }
 
 
+
 #[derive(Subcommand)]
 enum Commands {
     /// Add resources into OpenViking
@@ -385,15 +386,15 @@ enum Commands {
         #[arg(long)]
         timeout: Option<f64>,
     },
-    /// Reindex content at URI (regenerates .abstract.md and .overview.md)
+    /// Reindex semantic/vector artifacts for a URI
     Reindex {
         /// Viking URI
         uri: String,
-        /// Force regenerate summaries even if they exist
-        #[arg(short, long)]
-        regenerate: bool,
+        /// Reindex mode
+        #[arg(long, default_value = "vectors_only")]
+        mode: String,
         /// Wait for reindex to complete
-        #[arg(long, default_value = "true")]
+        #[arg(long, default_value_t = true, action = ArgAction::Set)]
         wait: bool,
     },
     /// Download file to local path (supports binaries/images)
@@ -903,9 +904,9 @@ async fn main() {
         }
         Commands::Reindex {
             uri,
-            regenerate,
+            mode,
             wait,
-        } => handle_reindex(uri, regenerate, wait, ctx).await,
+        } => handle_reindex(uri, mode, wait, ctx).await,
         Commands::Get { uri, local_path } => handle_get(uri, local_path, ctx).await,
         Commands::Find {
             query,
@@ -1384,12 +1385,12 @@ async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
     commands::content::overview(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
-async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
+async fn handle_reindex(uri: String, mode: String, wait: bool, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::content::reindex(
         &client,
         &uri,
-        regenerate,
+        &mode,
         wait,
         ctx.output_format,
         ctx.compact,
@@ -1626,6 +1627,19 @@ mod tests {
         ]);
 
         assert!(result.is_err(), "removed write flags should not parse");
+    }
+
+    fn cli_parses_reindex_command() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "reindex",
+            "viking://resources/demo",
+            "--mode",
+            "semantic_and_vectors",
+            "--wait=false",
+        ]);
+
+        assert!(result.is_ok(), "reindex command should parse");
     }
 
     #[test]

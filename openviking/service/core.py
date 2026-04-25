@@ -373,6 +373,36 @@ class OpenVikingService:
 
         logger.info("OpenVikingService closed")
 
+    async def reindex(
+        self,
+        *,
+        uri: str,
+        mode: str = "vectors_only",
+        wait: bool = True,
+        ctx: RequestContext | None = None,
+        lock_already_held: bool = False,
+    ) -> dict[str, Any]:
+        """Reindex semantic/vector artifacts for a URI.
+
+        Set ``lock_already_held=True`` when the caller is already inside a
+        ``LockContext`` on the URI's path (e.g. MemoryConsolidator under its
+        own scope lock). Skips the executor's inner lock acquisition to avoid
+        deadlocking on lock re-entry.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
+        from openviking.service.reindex_executor import get_reindex_executor
+
+        return await get_reindex_executor().execute(
+            uri=uri,
+            mode=mode,
+            wait=wait,
+            ctx=effective_ctx,
+            lock_already_held=lock_already_held,
+        )
+
     def _ensure_initialized(self) -> None:
         """Ensure service is initialized."""
         if not self._initialized:
