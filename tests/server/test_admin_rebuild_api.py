@@ -225,10 +225,6 @@ async def test_reindex_executor_does_not_treat_resource_named_memories_as_memory
     )
 
 
-@pytest.mark.xfail(
-    reason="PR #1592 _reindex_user_namespace emits 'viking://user/<id>/resources' for the resource branch, but tests expect the bare namespace URI; upstream PR is BLOCKED, fix not landed",
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_reindex_user_namespace_semantic_and_vectors_promotes_memory_mode(monkeypatch):
     from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
@@ -284,14 +280,10 @@ async def test_reindex_user_namespace_semantic_and_vectors_promotes_memory_mode(
     )
 
     assert seen["memory_modes"] == [("viking://user/default/memories", "semantic_and_vectors")]
-    assert seen["semantic_calls"] == [("viking://user/default", "resource")]
+    assert seen["semantic_calls"] == [("viking://user/default/resources", "resource")]
     assert seen["resource_calls"]
 
 
-@pytest.mark.xfail(
-    reason="PR #1592 _reindex_user_namespace URI shape mismatch (see promotes_memory_mode xfail); upstream BLOCKED",
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_reindex_user_namespace_semantic_and_vectors_does_not_reprocess_memory_as_resource(
     monkeypatch,
@@ -350,13 +342,9 @@ async def test_reindex_user_namespace_semantic_and_vectors_does_not_reprocess_me
     )
 
     assert seen["memory_modes"] == [("viking://user/default/memories", "semantic_and_vectors")]
-    assert seen["semantic_calls"] == [("viking://user/default", "resource")]
+    assert seen["semantic_calls"] == [("viking://user/default/resources", "resource")]
 
 
-@pytest.mark.xfail(
-    reason="PR #1592 _reindex_agent_namespace URI shape mismatch (parallel to user_namespace); upstream BLOCKED",
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_reindex_agent_namespace_semantic_and_vectors_promotes_memory_and_skill_modes(
     monkeypatch,
@@ -420,14 +408,10 @@ async def test_reindex_agent_namespace_semantic_and_vectors_promotes_memory_and_
 
     assert seen["memory_modes"] == [("viking://agent/default/memories", "semantic_and_vectors")]
     assert seen["skill_modes"] == [("viking://agent/default/skills/demo", "semantic_and_vectors")]
-    assert seen["semantic_calls"] == [("viking://agent/default", "resource")]
+    assert seen["semantic_calls"] == [("viking://agent/default/resources", "resource")]
     assert seen["resource_calls"]
 
 
-@pytest.mark.xfail(
-    reason="PR #1592 _reindex_agent_namespace URI shape mismatch (parallel to user_namespace); upstream BLOCKED",
-    strict=False,
-)
 @pytest.mark.asyncio
 async def test_reindex_agent_namespace_semantic_and_vectors_does_not_reprocess_memory_as_resource(
     monkeypatch,
@@ -492,7 +476,7 @@ async def test_reindex_agent_namespace_semantic_and_vectors_does_not_reprocess_m
 
     assert seen["memory_modes"] == [("viking://agent/default/memories", "semantic_and_vectors")]
     assert seen["skill_modes"] == [("viking://agent/default/skills/demo", "semantic_and_vectors")]
-    assert seen["semantic_calls"] == [("viking://agent/default", "resource")]
+    assert seen["semantic_calls"] == [("viking://agent/default/resources", "resource")]
 
 
 @pytest.mark.asyncio
