@@ -16,6 +16,24 @@ from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
+TENANT_HEADERS = {
+    "X-OpenViking-Account": "test-account",
+    "X-OpenViking-User": "test-user",
+    "X-OpenViking-Agent": "test-agent",
+}
+TENANT_USER = UserIdentifier("test-account", "test-user", "test-agent")
+
+
+async def _add_tenant_resource(service, sample_markdown_file) -> str:
+    ctx = RequestContext(user=TENANT_USER, role=Role.ROOT)
+    result = await service.resources.add_resource(
+        path=str(sample_markdown_file),
+        ctx=ctx,
+        reason="test resource",
+        wait=True,
+    )
+    return result.get("root_uri", "")
+
 
 @pytest.fixture(autouse=True)
 def fake_query_embedder(service):
@@ -383,6 +401,36 @@ async def test_grep(client_with_resource):
     assert resp.json()["status"] == "ok"
 
 
+async def test_grep_time_filter_includes_recent_files(client, service, sample_markdown_file):
+    uri = await _add_tenant_resource(service, sample_markdown_file)
+    parent_uri = "/".join(uri.split("/")[:-1]) + "/"
+    resp = await client.post(
+        "/api/v1/search/grep",
+        json={"uri": parent_uri, "pattern": "Sample", "since": "365d"},
+        headers=TENANT_HEADERS,
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["count"] > 0
+
+
+async def test_grep_time_filter_excludes_old_upper_bound(client, service, sample_markdown_file):
+    uri = await _add_tenant_resource(service, sample_markdown_file)
+    parent_uri = "/".join(uri.split("/")[:-1]) + "/"
+    resp = await client.post(
+        "/api/v1/search/grep",
+        json={"uri": parent_uri, "pattern": "Sample", "until": "2000-01-01"},
+        headers=TENANT_HEADERS,
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["matches"] == []
+
+
 async def test_grep_case_insensitive(client_with_resource):
     client, uri = client_with_resource
     parent_uri = "/".join(uri.split("/")[:-1]) + "/"
@@ -543,3 +591,31 @@ async def test_glob(client_with_resource):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+async def test_glob_time_filter_excludes_old_upper_bound(client, service, sample_markdown_file):
+    await _add_tenant_resource(service, sample_markdown_file)
+    resp = await client.post(
+        "/api/v1/search/glob",
+        json={"pattern": "*.md", "until": "2000-01-01"},
+        headers=TENANT_HEADERS,
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["matches"] == []
+
+
+async def test_glob_time_filter_includes_recent_files(client, service, sample_markdown_file):
+    await _add_tenant_resource(service, sample_markdown_file)
+    resp = await client.post(
+        "/api/v1/search/glob",
+        json={"pattern": "*.md", "since": "365d"},
+        headers=TENANT_HEADERS,
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["count"] > 0

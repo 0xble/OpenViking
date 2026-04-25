@@ -138,10 +138,14 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.create_session(session_id)
 
-    async def list_sessions(self) -> List[Any]:
+    async def list_sessions(
+        self,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> List[Any]:
         """List all sessions."""
         await self._ensure_initialized()
-        return await self._client.list_sessions()
+        return await self._client.list_sessions(since=since, until=until)
 
     async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
@@ -467,6 +471,8 @@ class AsyncOpenViking:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> Dict:
         """Content search"""
         await self._ensure_initialized()
@@ -476,12 +482,27 @@ class AsyncOpenViking:
             case_insensitive=case_insensitive,
             node_limit=node_limit,
             exclude_uri=exclude_uri,
+            since=since,
+            until=until,
         )
 
-    async def glob(self, pattern: str, uri: str = "viking://") -> Dict:
+    async def glob(
+        self,
+        pattern: str,
+        uri: str = "viking://",
+        node_limit: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> Dict:
         """File pattern matching"""
         await self._ensure_initialized()
-        return await self._client.glob(pattern, uri=uri)
+        return await self._client.glob(
+            pattern,
+            uri=uri,
+            node_limit=node_limit,
+            since=since,
+            until=until,
+        )
 
     async def mv(self, from_uri: str, to_uri: str) -> None:
         """Move resource"""

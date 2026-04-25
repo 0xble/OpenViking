@@ -35,6 +35,7 @@ from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.search_filters import matches_entry_time_bounds, resolve_time_bounds
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import (
     FailedPreconditionError,
@@ -608,6 +609,8 @@ class VikingFS:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         level_limit: int = 5,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """Content search by pattern or keywords.
@@ -621,10 +624,18 @@ class VikingFS:
             case_insensitive: Whether to perform case-insensitive matching
             node_limit: Maximum number of results to return
             level_limit: Maximum depth level to traverse (default: 5)
+            since: Only include files modified on or after this time
+            until: Only include files modified on or before this time
             ctx: Request context
         """
         self._ensure_access(uri, ctx)
         await self.stat(uri, ctx=ctx)
+        since_dt, until_dt = resolve_time_bounds(
+            since=since,
+            until=until,
+            lower_label="since",
+            upper_label="until",
+        )
 
         flags = re.IGNORECASE if case_insensitive else 0
         compiled_pattern = re.compile(pattern, flags)
@@ -672,6 +683,8 @@ class VikingFS:
                 if entry.get("isDir"):
                     await search_recursive(entry_uri, current_depth + 1)
                 else:
+                    if not matches_entry_time_bounds(entry, since_dt, until_dt):
+                        continue
                     nonlocal files_scanned
                     files_scanned += 1
                     try:
@@ -734,13 +747,23 @@ class VikingFS:
         pattern: str,
         uri: str = "viking://",
         node_limit: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """File pattern matching, supports **/*.md recursive."""
+        since_dt, until_dt = resolve_time_bounds(
+            since=since,
+            until=until,
+            lower_label="since",
+            upper_label="until",
+        )
         entries = await self.tree(uri, node_limit=1000000, ctx=ctx)
         base_uri = uri.rstrip("/")
         matches = []
         for entry in entries:
+            if not matches_entry_time_bounds(entry, since_dt, until_dt):
+                continue
             rel_path = entry.get("rel_path", "")
             if PurePath(rel_path).match(pattern):
                 matches.append(f"{base_uri}/{rel_path}")
@@ -1865,8 +1888,6 @@ class VikingFS:
             except AGFSHTTPError as e:
                 if e.status_code != 404:
                     raise
-            except FileNotFoundError:
-                pass
             except RuntimeError as e:
                 if "not found" not in str(e).lower():
                     raise

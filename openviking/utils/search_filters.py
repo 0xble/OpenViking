@@ -104,6 +104,33 @@ def matches_time_bounds(
     return True
 
 
+def parse_time_bound_value(value: Any) -> Optional[datetime]:
+    """Parse an entry timestamp value for non-semantic time filtering."""
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return parse_iso_datetime(value)
+
+
+def matches_entry_time_bounds(
+    entry: Dict[str, Any],
+    since: Optional[datetime] = None,
+    until: Optional[datetime] = None,
+    *,
+    field: str = "modTime",
+) -> bool:
+    """Return True when an entry timestamp falls within resolved bounds."""
+    if since is None and until is None:
+        return True
+
+    try:
+        entry_time = parse_time_bound_value(entry.get(field))
+    except (TypeError, ValueError):
+        return False
+    return matches_time_bounds(entry_time, since=since, until=until)
+
+
 def _parse_time_value(value: str, now: datetime, *, is_upper_bound: bool) -> datetime:
     relative_match = _RELATIVE_RE.fullmatch(value)
     if relative_match:

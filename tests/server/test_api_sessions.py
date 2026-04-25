@@ -25,6 +25,11 @@ from tests.utils.mock_agfs import MockLocalAGFS
 DEFAULT_USER = UserIdentifier.the_default_user()
 TEST_ROOT_KEY = "root-secret-key-for-session-tests"
 _UNSET = object()
+TENANT_HEADERS = {
+    "X-OpenViking-Account": "test-account",
+    "X-OpenViking-User": "test-user",
+    "X-OpenViking-Agent": "test-agent",
+}
 
 
 def _message_request(
@@ -150,6 +155,40 @@ async def test_list_sessions(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert isinstance(body["result"], list)
+
+
+async def test_list_sessions_since_includes_recent_session(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={}, headers=TENANT_HEADERS)
+    assert create_resp.status_code == 200, create_resp.text
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.get(
+        "/api/v1/sessions",
+        params={"since": "365d"},
+        headers=TENANT_HEADERS,
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert any(item["session_id"] == session_id for item in body["result"])
+
+
+async def test_list_sessions_until_excludes_recent_session(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={}, headers=TENANT_HEADERS)
+    assert create_resp.status_code == 200, create_resp.text
+    session_id = create_resp.json()["result"]["session_id"]
+
+    resp = await client.get(
+        "/api/v1/sessions",
+        params={"until": "2000-01-01"},
+        headers=TENANT_HEADERS,
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert all(item["session_id"] != session_id for item in body["result"])
 
 
 async def test_get_session(client: httpx.AsyncClient):

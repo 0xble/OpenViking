@@ -200,12 +200,21 @@ class BaseClient(ABC):
         case_insensitive: bool = False,
         exclude_uri: Optional[str] = None,
         node_limit: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         ...
 
     @abstractmethod
-    async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
+    async def glob(
+        self,
+        pattern: str,
+        uri: str = "viking://",
+        node_limit: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """File pattern matching."""
         ...
 
@@ -239,7 +248,11 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def list_sessions(self) -> List[Dict[str, Any]]:
+    async def list_sessions(
+        self,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """List all sessions."""
         ...
 

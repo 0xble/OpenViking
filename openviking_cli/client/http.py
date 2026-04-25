@@ -675,6 +675,8 @@ class AsyncHTTPClient(BaseClient):
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         uri = VikingURI.normalize(uri)
@@ -687,18 +689,36 @@ class AsyncHTTPClient(BaseClient):
             request_json["node_limit"] = node_limit
         if exclude_uri is not None:
             request_json["exclude_uri"] = VikingURI.normalize(exclude_uri)
+        if since is not None:
+            request_json["since"] = since
+        if until is not None:
+            request_json["until"] = until
         response = await self._http.post(
             "/api/v1/search/grep",
             json=request_json,
         )
         return self._handle_response(response)
 
-    async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
+    async def glob(
+        self,
+        pattern: str,
+        uri: str = "viking://",
+        node_limit: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """File pattern matching."""
         uri = VikingURI.normalize(uri)
+        request_json = {"pattern": pattern, "uri": uri}
+        if node_limit is not None:
+            request_json["node_limit"] = node_limit
+        if since is not None:
+            request_json["since"] = since
+        if until is not None:
+            request_json["until"] = until
         response = await self._http.post(
             "/api/v1/search/glob",
-            json={"pattern": pattern, "uri": uri},
+            json=request_json,
         )
         return self._handle_response(response)
 
@@ -753,9 +773,18 @@ class AsyncHTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
-    async def list_sessions(self) -> List[Any]:
+    async def list_sessions(
+        self,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> List[Any]:
         """List all sessions."""
-        response = await self._http.get("/api/v1/sessions")
+        params = {}
+        if since is not None:
+            params["since"] = since
+        if until is not None:
+            params["until"] = until
+        response = await self._http.get("/api/v1/sessions", params=params)
         return self._handle_response(response)
 
     async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:

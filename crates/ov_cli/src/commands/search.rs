@@ -65,6 +65,8 @@ pub async fn grep(
     ignore_case: bool,
     node_limit: i32,
     level_limit: i32,
+    since: Option<&str>,
+    until: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -76,6 +78,8 @@ pub async fn grep(
             ignore_case,
             node_limit,
             level_limit,
+            since.map(|s| s.to_string()),
+            until.map(|s| s.to_string()),
         )
         .await?;
     output_success(&result, output_format, compact);
@@ -87,10 +91,20 @@ pub async fn glob(
     pattern: &str,
     uri: &str,
     node_limit: i32,
+    since: Option<&str>,
+    until: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.glob(pattern, uri, node_limit).await?;
+    let result = client
+        .glob(
+            pattern,
+            uri,
+            node_limit,
+            since.map(|s| s.to_string()),
+            until.map(|s| s.to_string()),
+        )
+        .await?;
     output_success(&result, output_format, compact);
     Ok(())
 }

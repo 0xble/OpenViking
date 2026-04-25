@@ -125,7 +125,9 @@ impl HttpClient {
             .connect_timeout(std::time::Duration::from_secs(30))
             .timeout(std::time::Duration::from_secs(1800))
             .build()
-            .map_err(|e| Error::Network(format!("Failed to build long-timeout HTTP client: {}", e)))?;
+            .map_err(|e| {
+                Error::Network(format!("Failed to build long-timeout HTTP client: {}", e))
+            })?;
 
         let response = long_timeout_client
             .post(&url)
@@ -384,12 +386,7 @@ impl HttpClient {
         })
     }
 
-    pub async fn reindex(
-        &self,
-        uri: &str,
-        mode: &str,
-        wait: bool,
-    ) -> Result<serde_json::Value> {
+    pub async fn reindex(&self, uri: &str, mode: &str, wait: bool) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "uri": uri,
             "mode": mode,
@@ -577,6 +574,8 @@ impl HttpClient {
         ignore_case: bool,
         node_limit: i32,
         level_limit: i32,
+        since: Option<String>,
+        until: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "uri": uri,
@@ -585,6 +584,8 @@ impl HttpClient {
             "case_insensitive": ignore_case,
             "node_limit": node_limit,
             "level_limit": level_limit,
+            "since": since,
+            "until": until,
         });
         self.post("/api/v1/search/grep", &body).await
     }
@@ -594,11 +595,15 @@ impl HttpClient {
         pattern: &str,
         uri: &str,
         node_limit: i32,
+        since: Option<String>,
+        until: Option<String>,
     ) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "pattern": pattern,
             "uri": uri,
             "node_limit": node_limit,
+            "since": since,
+            "until": until,
         });
         self.post("/api/v1/search/glob", &body).await
     }
@@ -1094,11 +1099,15 @@ mod tests {
         let headers = client.build_headers();
 
         assert_eq!(
-            headers.get("X-Custom-Header").and_then(|value| value.to_str().ok()),
+            headers
+                .get("X-Custom-Header")
+                .and_then(|value| value.to_str().ok()),
             Some("custom-value")
         );
         assert_eq!(
-            headers.get("Authorization").and_then(|value| value.to_str().ok()),
+            headers
+                .get("Authorization")
+                .and_then(|value| value.to_str().ok()),
             Some("Bearer token")
         );
     }

@@ -146,11 +146,17 @@ async def create_session(
 
 @router.get("")
 async def list_sessions(
+    since: Optional[str] = Query(
+        None, description="Only include sessions updated on or after this time"
+    ),
+    until: Optional[str] = Query(
+        None, description="Only include sessions updated on or before this time"
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List all sessions."""
     service = get_service()
-    result = await service.sessions.sessions(_ctx)
+    result = await service.sessions.sessions(_ctx, since=since, until=until)
     return Response(status="ok", result=result)
 
 

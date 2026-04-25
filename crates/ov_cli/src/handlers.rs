@@ -1,9 +1,9 @@
+use crate::CliContext;
 use crate::client;
 use crate::commands;
 use crate::config::merge_csv_options;
 use crate::error::{Error, Result};
 use crate::tui;
-use crate::CliContext;
 
 pub async fn handle_add_resource(
     mut path: String,
@@ -228,8 +228,15 @@ pub async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()>
         SessionCommands::New => {
             commands::session::new_session(&client, ctx.output_format, ctx.compact).await
         }
-        SessionCommands::List => {
-            commands::session::list_sessions(&client, ctx.output_format, ctx.compact).await
+        SessionCommands::List { after, before } => {
+            commands::session::list_sessions(
+                &client,
+                after.as_deref(),
+                before.as_deref(),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         SessionCommands::Get { session_id } => {
             commands::session::get_session(&client, &session_id, ctx.output_format, ctx.compact)
@@ -331,8 +338,22 @@ pub async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
             )
             .await
         }
-        AdminCommands::ListUsers { account_id, limit, name, role } => {
-            commands::admin::list_users(&client, &account_id, limit, name, role, ctx.output_format, ctx.compact).await
+        AdminCommands::ListUsers {
+            account_id,
+            limit,
+            name,
+            role,
+        } => {
+            commands::admin::list_users(
+                &client,
+                &account_id,
+                limit,
+                name,
+                role,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         AdminCommands::RemoveUser {
             account_id,
@@ -456,12 +477,7 @@ pub async fn handle_write(
     .await
 }
 
-pub async fn handle_reindex(
-    uri: String,
-    mode: String,
-    wait: bool,
-    ctx: CliContext,
-) -> Result<()> {
+pub async fn handle_reindex(uri: String, mode: String, wait: bool, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::content::reindex(&client, &uri, &mode, wait, ctx.output_format, ctx.compact).await
 }
@@ -671,6 +687,8 @@ pub async fn handle_grep(
     ignore_case: bool,
     node_limit: i32,
     level_limit: i32,
+    after: Option<String>,
+    before: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     // Prevent grep from root directory to avoid excessive server load and timeouts
@@ -698,6 +716,7 @@ pub async fn handle_grep(
     if ignore_case {
         params.push("-i".to_string());
     }
+    append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
     params.push(format!("\"{}\"", pattern));
     print_command_echo("ov grep", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -709,18 +728,25 @@ pub async fn handle_grep(
         ignore_case,
         node_limit,
         level_limit,
+        after.as_deref(),
+        before.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
     .await
 }
 
-pub async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: CliContext) -> Result<()> {
-    let params = vec![
-        format!("--uri={}", uri),
-        format!("-n {}", node_limit),
-        format!("\"{}\"", pattern),
-    ];
+pub async fn handle_glob(
+    pattern: String,
+    uri: String,
+    node_limit: i32,
+    after: Option<String>,
+    before: Option<String>,
+    ctx: CliContext,
+) -> Result<()> {
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
+    params.push(format!("\"{}\"", pattern));
     print_command_echo("ov glob", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
     commands::search::glob(
@@ -728,6 +754,8 @@ pub async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: Cli
         &pattern,
         &uri,
         node_limit,
+        after.as_deref(),
+        before.as_deref(),
         ctx.output_format,
         ctx.compact,
     )

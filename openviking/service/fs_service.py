@@ -200,6 +200,8 @@ class FSService:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         level_limit: int = 5,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> Dict:
         """Content search."""
         viking_fs = self._ensure_initialized()
@@ -210,6 +212,8 @@ class FSService:
             case_insensitive=case_insensitive,
             node_limit=node_limit,
             level_limit=level_limit,
+            since=since,
+            until=until,
             ctx=ctx,
         )
 
@@ -219,10 +223,19 @@ class FSService:
         ctx: RequestContext,
         uri: str = "viking://",
         node_limit: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> Dict:
         """File pattern matching."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.glob(pattern, uri=uri, node_limit=node_limit, ctx=ctx)
+        return await viking_fs.glob(
+            pattern,
+            uri=uri,
+            node_limit=node_limit,
+            since=since,
+            until=until,
+            ctx=ctx,
+        )
 
     async def read_file_bytes(self, uri: str, ctx: RequestContext) -> bytes:
         """Read file as raw bytes."""

@@ -48,9 +48,13 @@ class SyncOpenViking:
         """
         return run_async(self._async_client.create_session(session_id))
 
-    def list_sessions(self) -> List[Any]:
+    def list_sessions(
+        self,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> List[Any]:
         """List all sessions."""
-        return run_async(self._async_client.list_sessions())
+        return run_async(self._async_client.list_sessions(since=since, until=until))
 
     def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
@@ -315,15 +319,40 @@ class SyncOpenViking:
         case_insensitive: bool = False,
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> Dict:
         """Content search"""
         return run_async(
-            self._async_client.grep(uri, pattern, case_insensitive, node_limit, exclude_uri)
+            self._async_client.grep(
+                uri,
+                pattern,
+                case_insensitive=case_insensitive,
+                node_limit=node_limit,
+                exclude_uri=exclude_uri,
+                since=since,
+                until=until,
+            )
         )
 
-    def glob(self, pattern: str, uri: str = "viking://") -> Dict:
+    def glob(
+        self,
+        pattern: str,
+        uri: str = "viking://",
+        node_limit: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> Dict:
         """File pattern matching"""
-        return run_async(self._async_client.glob(pattern, uri))
+        return run_async(
+            self._async_client.glob(
+                pattern,
+                uri=uri,
+                node_limit=node_limit,
+                since=since,
+                until=until,
+            )
+        )
 
     def mv(self, from_uri: str, to_uri: str) -> None:
         """Move resource"""

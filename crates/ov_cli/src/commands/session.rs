@@ -15,10 +15,19 @@ pub async fn new_session(
 
 pub async fn list_sessions(
     client: &HttpClient,
+    after: Option<&str>,
+    before: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let response: serde_json::Value = client.get("/api/v1/sessions", &[]).await?;
+    let mut params = Vec::new();
+    if let Some(value) = after {
+        params.push(("since".to_string(), value.to_string()));
+    }
+    if let Some(value) = before {
+        params.push(("until".to_string(), value.to_string()));
+    }
+    let response: serde_json::Value = client.get("/api/v1/sessions", &params).await?;
     output_success(&response, output_format, compact);
     Ok(())
 }

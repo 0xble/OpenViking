@@ -365,6 +365,8 @@ class LocalClient(BaseClient):
         node_limit: Optional[int] = None,
         exclude_uri: Optional[str] = None,
         level_limit: int = 5,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Content search with pattern."""
         return await self._service.fs.grep(
@@ -375,11 +377,27 @@ class LocalClient(BaseClient):
             node_limit=node_limit,
             exclude_uri=exclude_uri,
             level_limit=level_limit,
+            since=since,
+            until=until,
         )
 
-    async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
+    async def glob(
+        self,
+        pattern: str,
+        uri: str = "viking://",
+        node_limit: Optional[int] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """File pattern matching."""
-        return await self._service.fs.glob(pattern, ctx=self._ctx, uri=uri)
+        return await self._service.fs.glob(
+            pattern,
+            ctx=self._ctx,
+            uri=uri,
+            node_limit=node_limit,
+            since=since,
+            until=until,
+        )
 
     # ============= Relations =============
 
@@ -412,9 +430,13 @@ class LocalClient(BaseClient):
             "user": session.user.to_dict(),
         }
 
-    async def list_sessions(self) -> List[Any]:
+    async def list_sessions(
+        self,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> List[Any]:
         """List all sessions."""
-        return await self._service.sessions.sessions(self._ctx)
+        return await self._service.sessions.sessions(self._ctx, since=since, until=until)
 
     async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""

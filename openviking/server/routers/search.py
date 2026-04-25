@@ -16,7 +16,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
-from openviking.utils.search_filters import merge_time_filter
+from openviking.utils.search_filters import merge_time_filter, resolve_time_bounds
 from openviking_cli.exceptions import NotFoundError
 
 
@@ -102,6 +102,8 @@ class GrepRequest(BaseModel):
     case_insensitive: bool = False
     node_limit: Optional[int] = None
     level_limit: int = 5
+    since: Optional[str] = None
+    until: Optional[str] = None
 
 
 class GlobRequest(BaseModel):
@@ -110,6 +112,15 @@ class GlobRequest(BaseModel):
     pattern: str
     uri: str = "viking://"
     node_limit: Optional[int] = None
+    since: Optional[str] = None
+    until: Optional[str] = None
+
+
+def _validate_time_bounds(since: Optional[str], until: Optional[str]) -> None:
+    try:
+        resolve_time_bounds(since=since, until=until)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/find")
@@ -202,6 +213,7 @@ async def grep(
 ):
     """Content search with pattern."""
     service = get_service()
+    _validate_time_bounds(request.since, request.until)
     try:
         result = await service.fs.grep(
             request.uri,
@@ -211,6 +223,8 @@ async def grep(
             case_insensitive=request.case_insensitive,
             node_limit=request.node_limit,
             level_limit=request.level_limit,
+            since=request.since,
+            until=request.until,
         )
     except AGFSNotFoundError:
         raise NotFoundError(request.uri, "file")
@@ -235,10 +249,13 @@ async def glob(
 ):
     """File pattern matching."""
     service = get_service()
+    _validate_time_bounds(request.since, request.until)
     result = await service.fs.glob(
         request.pattern,
         ctx=_ctx,
         uri=request.uri,
         node_limit=request.node_limit,
+        since=request.since,
+        until=request.until,
     )
     return Response(status="ok", result=result)

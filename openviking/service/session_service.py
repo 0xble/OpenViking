@@ -1,20 +1,22 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""
-Session Service for OpenViking.
+"""Session Service for OpenViking."""
 
-Provides session management operations: session, sessions, add_message, commit, delete.
-"""
-
+import json
 from typing import Any, Dict, List, Optional
 
 from openviking.core.namespace import canonical_session_uri
 from openviking.server.identity import RequestContext, Role
 from openviking.service.task_tracker import get_task_tracker
-from openviking.session import Session
+from openviking.session import Session, SessionMeta
 from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
+from openviking.utils.search_filters import (
+    matches_time_bounds,
+    parse_time_bound_value,
+    resolve_time_bounds,
+)
 from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, NotInitializedError
 from openviking_cli.utils import get_logger
 
@@ -147,7 +149,12 @@ class SessionService:
             self._record_lifecycle_metric("get", "error")
             raise
 
-    async def sessions(self, ctx: RequestContext) -> List[Dict[str, Any]]:
+    async def sessions(
+        self,
+        ctx: RequestContext,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """Get all sessions for the current user.
 
         Returns:
@@ -155,6 +162,12 @@ class SessionService:
         """
         self._ensure_initialized()
         session_base_uri = canonical_session_uri()
+        since_dt, until_dt = resolve_time_bounds(
+            since=since,
+            until=until,
+            lower_label="since",
+            upper_label="until",
+        )
 
         try:
             entries = await self._viking_fs.ls(session_base_uri, ctx=ctx)
@@ -163,10 +176,28 @@ class SessionService:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
+                session_uri = f"{session_base_uri}/{name}"
+                if since_dt is not None or until_dt is not None:
+                    timestamp_value = entry.get("modTime")
+                    try:
+                        meta_content = await self._viking_fs.read_file(
+                            f"{session_uri}/.meta.json",
+                            ctx=ctx,
+                        )
+                        meta = SessionMeta.from_dict(json.loads(meta_content))
+                        timestamp_value = meta.updated_at or meta.created_at or timestamp_value
+                    except Exception:
+                        logger.debug("Failed to read session metadata for %s", name, exc_info=True)
+                    try:
+                        session_time = parse_time_bound_value(timestamp_value)
+                    except (TypeError, ValueError):
+                        session_time = None
+                    if not matches_time_bounds(session_time, since=since_dt, until=until_dt):
+                        continue
                 sessions.append(
                     {
                         "session_id": name,
-                        "uri": f"{session_base_uri}/{name}",
+                        "uri": session_uri,
                         "is_dir": entry.get("isDir", False),
                     }
                 )

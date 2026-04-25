@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from openviking.utils.search_filters import merge_time_filter
+from openviking.utils.search_filters import matches_entry_time_bounds, merge_time_filter
 from openviking.utils.time_utils import parse_iso_datetime
 
 
@@ -119,3 +119,15 @@ def test_merge_time_filter_date_only_uses_now_timezone():
 
     assert result["gte"].endswith("Z")
     assert result["lte"].endswith("Z")
+
+
+def test_matches_entry_time_bounds_matches_mod_time():
+    entry = {"modTime": "2026-03-11T16:00:00.000Z"}
+    since = parse_iso_datetime("2026-03-11T15:00:00Z")
+    until = parse_iso_datetime("2026-03-11T17:00:00Z")
+
+    assert matches_entry_time_bounds(entry, since=since, until=until)
+
+
+def test_matches_entry_time_bounds_rejects_missing_timestamp_when_filtered():
+    assert not matches_entry_time_bounds({"name": "missing.md"}, since=datetime.now(timezone.utc))

@@ -458,6 +458,12 @@ enum Commands {
         /// Maximum depth level to traverse (default: 10)
         #[arg(short = 'L', long = "level-limit", default_value = "10")]
         level_limit: i32,
+        /// Only include files modified on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
+        #[arg(long = "after")]
+        after: Option<String>,
+        /// Only include files modified on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
+        #[arg(long = "before")]
+        before: Option<String>,
     },
     /// Run file glob pattern search
     Glob {
@@ -474,6 +480,12 @@ enum Commands {
             default_value = "256"
         )]
         node_limit: i32,
+        /// Only include files modified on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
+        #[arg(long = "after")]
+        after: Option<String>,
+        /// Only include files modified on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
+        #[arg(long = "before")]
+        before: Option<String>,
     },
     /// Add memory in one shot (creates session, adds messages, commits)
     AddMemory {
@@ -568,7 +580,14 @@ enum SessionCommands {
     /// Create a new session
     New,
     /// List sessions
-    List,
+    List {
+        /// Only include sessions updated on or after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
+        #[arg(long = "after")]
+        after: Option<String>,
+        /// Only include sessions updated on or before this time (e.g. 24h, 2026-03-15, ISO-8601)
+        #[arg(long = "before")]
+        before: Option<String>,
+    },
     /// Get session details
     Get {
         /// Session ID
@@ -902,6 +921,8 @@ async fn main() {
             ignore_case,
             node_limit,
             level_limit,
+            after,
+            before,
         } => {
             handle_grep(
                 uri,
@@ -910,6 +931,8 @@ async fn main() {
                 ignore_case,
                 node_limit,
                 level_limit,
+                after,
+                before,
                 ctx,
             )
             .await
@@ -919,7 +942,9 @@ async fn main() {
             pattern,
             uri,
             node_limit,
-        } => handle_glob(pattern, uri, node_limit, ctx).await,
+            after,
+            before,
+        } => handle_glob(pattern, uri, node_limit, after, before, ctx).await,
     };
 
     if let Err(e) = result {
@@ -1145,8 +1170,15 @@ async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
         SessionCommands::New => {
             commands::session::new_session(&client, ctx.output_format, ctx.compact).await
         }
-        SessionCommands::List => {
-            commands::session::list_sessions(&client, ctx.output_format, ctx.compact).await
+        SessionCommands::List { after, before } => {
+            commands::session::list_sessions(
+                &client,
+                after.as_deref(),
+                before.as_deref(),
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         SessionCommands::Get { session_id } => {
             commands::session::get_session(&client, &session_id, ctx.output_format, ctx.compact)
@@ -1358,6 +1390,83 @@ async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<
     commands::content::get(&client, &uri, &local_path).await
 }
 
+async fn handle_find(
+    query: String,
+    uri: String,
+    node_limit: i32,
+    threshold: Option<f64>,
+    after: Option<String>,
+    before: Option<String>,
+    ctx: CliContext,
+) -> Result<()> {
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(t) = threshold {
+        params.push(format!("--threshold {}", t));
+    }
+    append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
+    params.push(format!("\"{}\"", query));
+    print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
+    let client = ctx.get_client();
+    commands::search::find(
+        &client,
+        &query,
+        &uri,
+        node_limit,
+        threshold,
+        after.as_deref(),
+        before.as_deref(),
+        None,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_search(
+    query: String,
+    uri: String,
+    session_id: Option<String>,
+    node_limit: i32,
+    threshold: Option<f64>,
+    after: Option<String>,
+    before: Option<String>,
+    ctx: CliContext,
+) -> Result<()> {
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(s) = &session_id {
+        params.push(format!("--session-id {}", s));
+    }
+    if let Some(t) = threshold {
+        params.push(format!("--threshold {}", t));
+    }
+    append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
+    params.push(format!("\"{}\"", query));
+    print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
+    let client = ctx.get_client();
+    commands::search::search(
+        &client,
+        &query,
+        &uri,
+        session_id,
+        node_limit,
+        threshold,
+        after.as_deref(),
+        before.as_deref(),
+        None,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+fn append_time_filter_params(params: &mut Vec<String>, after: Option<&str>, before: Option<&str>) {
+    if let Some(value) = after {
+        params.push(format!("--after {}", value));
+    }
+    if let Some(value) = before {
+        params.push(format!("--before {}", value));
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::{Cli, CliContext};
@@ -1491,6 +1600,47 @@ mod tests {
             assert!(result.is_err(), "{flag} should not parse");
         }
     }
+
+    #[test]
+    fn cli_grep_glob_and_session_list_accept_after_before_flags() {
+        let grep = Cli::try_parse_from([
+            "ov",
+            "grep",
+            "--uri",
+            "viking://resources",
+            "--after",
+            "7d",
+            "--before",
+            "2026-03-15",
+            "invoice",
+        ]);
+        assert!(grep.is_ok(), "grep time filter flags should parse");
+
+        let glob = Cli::try_parse_from([
+            "ov",
+            "glob",
+            "**/*.md",
+            "--after",
+            "7d",
+            "--before",
+            "2026-03-15",
+        ]);
+        assert!(glob.is_ok(), "glob time filter flags should parse");
+
+        let sessions = Cli::try_parse_from([
+            "ov",
+            "session",
+            "list",
+            "--after",
+            "7d",
+            "--before",
+            "2026-03-15",
+        ]);
+        assert!(
+            sessions.is_ok(),
+            "session list time filter flags should parse"
+        );
+    }
 }
 
 /// Print command with specified parameters for debugging
@@ -1611,6 +1761,8 @@ async fn handle_grep(
     ignore_case: bool,
     node_limit: i32,
     level_limit: i32,
+    after: Option<String>,
+    before: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     // Prevent grep from root directory to avoid excessive server load and timeouts
@@ -1638,6 +1790,7 @@ async fn handle_grep(
     if ignore_case {
         params.push("-i".to_string());
     }
+    append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
     params.push(format!("\"{}\"", pattern));
     print_command_echo("ov grep", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
@@ -1649,18 +1802,25 @@ async fn handle_grep(
         ignore_case,
         node_limit,
         level_limit,
+        after.as_deref(),
+        before.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
     .await
 }
 
-async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: CliContext) -> Result<()> {
-    let params = vec![
-        format!("--uri={}", uri),
-        format!("-n {}", node_limit),
-        format!("\"{}\"", pattern),
-    ];
+async fn handle_glob(
+    pattern: String,
+    uri: String,
+    node_limit: i32,
+    after: Option<String>,
+    before: Option<String>,
+    ctx: CliContext,
+) -> Result<()> {
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    append_time_filter_params(&mut params, after.as_deref(), before.as_deref());
+    params.push(format!("\"{}\"", pattern));
     print_command_echo("ov glob", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
     commands::search::glob(
@@ -1668,6 +1828,8 @@ async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: CliCont
         &pattern,
         &uri,
         node_limit,
+        after.as_deref(),
+        before.as_deref(),
         ctx.output_format,
         ctx.compact,
     )
