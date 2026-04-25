@@ -116,8 +116,8 @@ class SyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
-        metadata: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        metadata: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (resources scope only)

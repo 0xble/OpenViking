@@ -162,8 +162,8 @@ class SyncHTTPClient:
         include: Optional[str] = None,
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
-        metadata: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
         if to and parent:

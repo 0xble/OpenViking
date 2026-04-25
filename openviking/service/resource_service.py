@@ -114,10 +114,10 @@ class ResourceService:
         build_index: bool = True,
         summarize: bool = False,
         watch_interval: float = 0,
-        metadata: Optional[Dict[str, Any]] = None,
         skip_watch_management: bool = False,
         allow_local_path_resolution: bool = True,
         enforce_public_remote_targets: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
