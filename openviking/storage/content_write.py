@@ -211,7 +211,7 @@ class ContentWriteCoordinator:
                 if isinstance(exc, NotFoundError):
                     raise
                 raise NotFoundError(uri, "file") from exc
-            raise NotFoundError(uri, "file") from exc
+            raise
 
     def _validate_create_extension(self, uri: str) -> None:
         _, ext = os.path.splitext(uri)
