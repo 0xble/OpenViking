@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Filesystem endpoints for OpenViking HTTP Server."""
 
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -122,6 +122,13 @@ class MkdirRequest(BaseModel):
     description: Optional[str] = None
 
 
+class MetadataRequest(BaseModel):
+    """Request model for resource metadata writes."""
+
+    uri: str
+    metadata: dict[str, Any]
+
+
 @router.post("/mkdir")
 async def mkdir(
     request: MkdirRequest,
@@ -138,6 +145,30 @@ async def mkdir(
             raise NotFoundError(request.uri, "file")
         raise
     return Response(status="ok", result={"uri": request.uri})
+
+
+@router.patch("/metadata")
+async def patch_metadata(
+    request: MetadataRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Patch opaque metadata for a resource root."""
+    service = get_service()
+    try:
+        result = await service.fs.patch_metadata(request.uri, request.metadata, ctx=_ctx)
+    except AGFSNotFoundError:
+        raise NotFoundError(request.uri, "file")
+    except AGFSClientError as e:
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(request.uri, "file")
+        raise
+    except Exception as exc:
+        mapped = map_exception(exc, resource=request.uri)
+        if mapped is not None:
+            raise mapped from exc
+        raise
+    return Response(status="ok", result=result)
 
 
 @router.delete("")

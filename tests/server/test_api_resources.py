@@ -58,6 +58,41 @@ async def test_add_resource_with_metadata_persists_to_stat(
     assert stat_resp.json()["result"]["metadata"] == metadata
 
 
+async def test_patch_resource_metadata(
+    client: httpx.AsyncClient,
+    sample_markdown_file,
+    upload_temp_dir,
+):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "temp_file_id": sample_markdown_file.name,
+            "to": "viking://resources/metadata-patch-test",
+            "reason": "test metadata patch",
+            "metadata": {"source_id": "before"},
+            "wait": False,
+        },
+    )
+    assert resp.status_code == 200
+    root_uri = resp.json()["result"]["root_uri"]
+
+    patch_resp = await client.patch(
+        "/api/v1/fs/metadata",
+        json={
+            "uri": root_uri,
+            "metadata": {"source_id": "after", "manager": "openviking-sync"},
+        },
+    )
+    assert patch_resp.status_code == 200
+
+    stat_resp = await client.get("/api/v1/fs/stat", params={"uri": root_uri})
+    assert stat_resp.status_code == 200
+    assert stat_resp.json()["result"]["metadata"] == {
+        "source_id": "after",
+        "manager": "openviking-sync",
+    }
+
+
 async def test_add_resource_rejects_non_object_metadata(
     client: httpx.AsyncClient,
     sample_markdown_file,

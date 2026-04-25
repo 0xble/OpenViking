@@ -176,6 +176,22 @@ class FSService:
         viking_fs = self._ensure_initialized()
         return await viking_fs.stat(uri, ctx=ctx, include_metadata=True)
 
+    async def patch_metadata(
+        self,
+        uri: str,
+        metadata: Dict[str, Any],
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Replace opaque resource metadata."""
+        viking_fs = self._ensure_initialized()
+        stat = await viking_fs.stat(uri, ctx=ctx)
+        if not stat.get("isDir"):
+            from openviking_cli.exceptions import InvalidArgumentError
+
+            raise InvalidArgumentError(f"metadata is only supported on resource roots: {uri}")
+        await viking_fs.write_resource_metadata(uri, metadata, ctx=ctx)
+        return {"uri": uri, "metadata": metadata}
+
     async def read(self, uri: str, ctx: RequestContext, offset: int = 0, limit: int = -1) -> str:
         """Read file content."""
         viking_fs = self._ensure_initialized()

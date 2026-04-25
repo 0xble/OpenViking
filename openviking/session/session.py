@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _ARCHIVE_WAIT_POLL_SECONDS = 0.1
+SESSION_METADATA_FILENAME = ".session.metadata.json"
 
 
 @dataclass
@@ -275,6 +276,47 @@ class Session:
             content=json.dumps(self._meta.to_dict(), ensure_ascii=False),
             ctx=self.ctx,
         )
+
+    def _metadata_uri(self) -> str:
+        return f"{self._session_uri}/{SESSION_METADATA_FILENAME}"
+
+    async def get_metadata(self) -> Optional[Dict[str, Any]]:
+        """Read opaque session metadata stored separately from core session stats."""
+        if not self._viking_fs:
+            return None
+        try:
+            content = await self._viking_fs.read_file(self._metadata_uri(), ctx=self.ctx)
+            metadata = json.loads(content)
+        except Exception:
+            return None
+        if isinstance(metadata, dict):
+            return metadata
+        return None
+
+    async def write_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Replace opaque session metadata."""
+        from openviking_cli.exceptions import InvalidArgumentError
+
+        if not self._viking_fs:
+            return metadata
+        try:
+            json_content = json.dumps(metadata, ensure_ascii=False, sort_keys=True, indent=2)
+        except TypeError as exc:
+            raise InvalidArgumentError("metadata must be JSON-serializable") from exc
+        await self.ensure_exists()
+        await self._viking_fs.write_file(
+            uri=self._metadata_uri(),
+            content=f"{json_content}\n",
+            ctx=self.ctx,
+        )
+        return metadata
+
+    async def patch_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """Shallow-merge opaque session metadata."""
+        current = await self.get_metadata()
+        merged = dict(current or {})
+        merged.update(metadata)
+        return await self.write_metadata(merged)
 
     def _save_meta_sync(self) -> None:
         """Sync wrapper for _save_meta()."""
@@ -686,8 +728,6 @@ class Session:
         redo_task_id: Optional[str] = None
 
         try:
-            
-
             tracker.start(task_id)
             with bind_telemetry(telemetry):
                 redo_task_id = str(uuid.uuid4())
@@ -772,7 +812,6 @@ class Session:
             )
             logger.info(f"Session {self.session_id} detached memory follow-up completed")
         except Exception as e:
-            
             await self._write_memory_failed_marker(
                 archive_uri,
                 stage="memory_extraction",

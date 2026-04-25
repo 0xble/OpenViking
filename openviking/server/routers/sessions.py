@@ -84,6 +84,13 @@ class CreateSessionRequest(BaseModel):
     """Request model for creating a session."""
 
     session_id: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class PatchSessionMetadataRequest(BaseModel):
+    """Request model for patching opaque session metadata."""
+
+    metadata: Dict[str, Any]
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -134,13 +141,18 @@ async def create_session(
     await service.initialize_user_directories(_ctx)
     await service.initialize_agent_directories(_ctx)
     session_id = request.session_id if request else None
-    session = await service.sessions.create(_ctx, session_id)
+    metadata = request.metadata if request else None
+    session = await service.sessions.create(_ctx, session_id, metadata=metadata)
+    stored_metadata = await session.get_metadata()
+    result = {
+        "session_id": session.session_id,
+        "user": session.user.to_dict(),
+    }
+    if stored_metadata is not None:
+        result["metadata"] = stored_metadata
     return Response(
         status="ok",
-        result={
-            "session_id": session.session_id,
-            "user": session.user.to_dict(),
-        },
+        result=result,
     )
 
 
@@ -171,9 +183,24 @@ async def get_session(
     session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
+    metadata = await session.get_metadata()
+    if metadata is not None:
+        result["metadata"] = metadata
     pending_tokens = sum(m.estimated_tokens for m in session.messages)
     result["pending_tokens"] = pending_tokens
     return Response(status="ok", result=result)
+
+
+@router.patch("/{session_id}/metadata")
+async def patch_session_metadata(
+    request: PatchSessionMetadataRequest,
+    session_id: str = Path(..., description="Session ID"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Patch opaque session metadata."""
+    service = get_service()
+    metadata = await service.sessions.patch_metadata(session_id, request.metadata, _ctx)
+    return Response(status="ok", result={"session_id": session_id, "metadata": metadata})
 
 
 @router.get("/{session_id}/context")

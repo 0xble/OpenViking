@@ -100,7 +100,12 @@ class SessionService:
             session_id=session_id,
         )
 
-    async def create(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
+    async def create(
+        self,
+        ctx: RequestContext,
+        session_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Session:
         """Create a session and persist its root path.
 
         Args:
@@ -119,6 +124,8 @@ class SessionService:
                     raise AlreadyExistsError(f"Session '{session_id}' already exists")
             session = self.session(ctx, session_id)
             await session.ensure_exists()
+            if metadata is not None:
+                await session.write_metadata(metadata)
             self._record_lifecycle_metric("create", "ok")
             return session
         except Exception:
@@ -232,6 +239,16 @@ class SessionService:
             logger.error(f"Failed to delete session {session_id}: {e}")
             self._record_lifecycle_metric("delete", "error")
             raise NotFoundError(session_id, "session")
+
+    async def patch_metadata(
+        self,
+        session_id: str,
+        metadata: Dict[str, Any],
+        ctx: RequestContext,
+    ) -> Dict[str, Any]:
+        """Shallow-merge opaque metadata for a session."""
+        session = await self.get(session_id, ctx)
+        return await session.patch_metadata(metadata)
 
     async def commit(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).

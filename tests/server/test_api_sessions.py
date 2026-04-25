@@ -147,6 +147,53 @@ async def test_create_session(client: httpx.AsyncClient):
     assert "session_id" in body["result"]
 
 
+async def test_session_metadata_persists_across_message_write(client: httpx.AsyncClient):
+    metadata = {
+        "openviking_sync": {
+            "producer_kind": "codex_sessions",
+            "source_id": "sess-1",
+            "change_detector": "hash-1",
+        }
+    }
+    create_resp = await client.post(
+        "/api/v1/sessions",
+        json={"session_id": "metadata-session", "metadata": metadata},
+    )
+    assert create_resp.status_code == 200
+    assert create_resp.json()["result"]["metadata"] == metadata
+
+    message_resp = await client.post(
+        "/api/v1/sessions/metadata-session/messages",
+        json=_message_request("user", content="hello"),
+    )
+    assert message_resp.status_code == 200
+
+    get_resp = await client.get("/api/v1/sessions/metadata-session")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["result"]["metadata"] == metadata
+
+
+async def test_patch_session_metadata_shallow_merges(client: httpx.AsyncClient):
+    create_resp = await client.post(
+        "/api/v1/sessions",
+        json={
+            "session_id": "patch-metadata-session",
+            "metadata": {"openviking_sync": {"source_id": "sess-1"}},
+        },
+    )
+    assert create_resp.status_code == 200
+
+    patch_resp = await client.patch(
+        "/api/v1/sessions/patch-metadata-session/metadata",
+        json={"metadata": {"status": "committed"}},
+    )
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["result"]["metadata"] == {
+        "openviking_sync": {"source_id": "sess-1"},
+        "status": "committed",
+    }
+
+
 async def test_list_sessions(client: httpx.AsyncClient):
     # Create a session first
     await client.post("/api/v1/sessions", json={})
