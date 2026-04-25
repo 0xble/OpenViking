@@ -116,6 +116,7 @@ class SyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
+        metadata: Optional[Dict[str, Any]] = None,
         telemetry: TelemetryRequest = False,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -140,8 +141,24 @@ class SyncOpenViking:
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
+                metadata=metadata,
                 telemetry=telemetry,
                 **kwargs,
+            )
+        )
+
+    def patch_resource_metadata(
+        self,
+        uri: str,
+        patch: Dict[str, Any],
+        telemetry: TelemetryRequest = False,
+    ) -> Dict[str, Any]:
+        """Patch durable metadata for a resource."""
+        return run_async(
+            self._async_client.patch_resource_metadata(
+                uri=uri,
+                patch=patch,
+                telemetry=telemetry,
             )
         )
 
