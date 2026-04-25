@@ -422,7 +422,7 @@ async def test_grep_exclude_uri_does_not_exclude_same_named_sibling_dirs(
 
 async def test_grep_walks_directories_with_more_than_1000_children(
     client: httpx.AsyncClient,
-    upload_temp_dir,
+    service,
 ):
     """Regression: VikingFS.grep used to call the inner ls() without a node_limit,
     so directories with more than the default 1000 children silently dropped
@@ -433,26 +433,23 @@ async def test_grep_walks_directories_with_more_than_1000_children(
     needle_index = 1001
     needle_child = f"overflow_{needle_index:05d}"
     needle = "NEEDLE_pos1001_a7f2c9"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    root_uri = "viking://resources/overflow"
+
+    await service.viking_fs.mkdir(root_uri, exist_ok=True, ctx=ctx)
 
     for i in range(total_children):
-        name = f"overflow_{i:05d}.md"
-        (upload_temp_dir / name).write_text(needle if i == needle_index else f"sibling_{i:05d}\n")
-        resp = await client.post(
-            "/api/v1/resources",
-            json={
-                "temp_file_id": name,
-                "to": f"viking://resources/overflow/{name[:-3]}/body.md",
-                "reason": "grep_overflow_regression",
-            },
+        child_uri = f"{root_uri}/overflow_{i:05d}"
+        await service.viking_fs.mkdir(child_uri, exist_ok=True, ctx=ctx)
+        await service.viking_fs.write_file(
+            f"{child_uri}/body.md",
+            needle if i == needle_index else f"sibling_{i:05d}\n",
+            ctx=ctx,
         )
-        if i == needle_index:
-            assert resp.status_code == 200, (
-                f"needle upload failed: {resp.status_code} {resp.text[:200]}"
-            )
 
     resp = await client.post(
         "/api/v1/search/grep",
-        json={"uri": "viking://resources/overflow", "pattern": needle},
+        json={"uri": root_uri, "pattern": needle},
     )
 
     assert resp.status_code == 200
