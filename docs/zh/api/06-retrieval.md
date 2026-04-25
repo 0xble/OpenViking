@@ -27,9 +27,9 @@ OpenViking 提供两种搜索方法：`find` 用于简单的语义搜索，`sear
 | limit | int | 否 | 10 | 最大返回结果数 |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
 | filter | Dict | 否 | None | 元数据过滤器 |
-| since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`，不带时区的值按本地时间解释。CLI `--after 7d` 会映射为 `since="7d"` |
+| since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`，不带时区的值按本地时间解释。CLI `--last 7d` 会映射为 `since="7d"` |
 | until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`，不带时区的值按本地时间解释 |
-| time_field | `"updated_at"` 或 `"created_at"` | 否 | `"updated_at"` | `since` / `until` 使用的元数据时间字段。CLI 使用默认的 `updated_at` 字段 |
+| time_field | `"updated_at"` 或 `"created_at"` | 否 | `"updated_at"` | `since` / `until` 使用的元数据时间字段。CLI `--time-field updated|created` 会映射为 `updated_at|created_at` |
 
 **FindResult 结构**
 
@@ -97,13 +97,11 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 ```bash
 openviking find "how to authenticate users" [--uri viking://resources/] [--limit 10]
-openviking find "invoice" --after 7d
+openviking find "invoice" --time-field created --last 7d
 ```
 
-CLI 只为检索时间过滤暴露 `--after` 和 `--before`。`--after 7d` 会映射为
-API `since="7d"`，`--before 2026-03-15` 会映射为 API
-`until="2026-03-15"`。如需按 `created_at` 而非默认 `updated_at` 过滤，
-请使用 SDK 或 HTTP API。
+`--time-field created` 会映射为 API `time_field="created_at"`，`--time-field updated`
+会映射为 `time_field="updated_at"`。`--last 7d` 是 `--since 7d` 的 CLI 简写。
 
 **响应**
 
@@ -200,9 +198,9 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 | limit | int | 否 | 10 | 最大返回结果数 |
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
 | filter | Dict | 否 | None | 元数据过滤器 |
-| since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`，不带时区的值按本地时间解释。CLI `--after 7d` 会映射为 `since="7d"` |
+| since | str | 否 | None | 时间下界，支持 `2h` 或 ISO 8601 / `YYYY-MM-DD`，不带时区的值按本地时间解释。CLI `--last 7d` 会映射为 `since="7d"` |
 | until | str | 否 | None | 时间上界，支持 `30m` 或 ISO 8601 / `YYYY-MM-DD`，不带时区的值按本地时间解释 |
-| time_field | `"updated_at"` 或 `"created_at"` | 否 | `"updated_at"` | `since` / `until` 使用的元数据时间字段。CLI 使用默认的 `updated_at` 字段 |
+| time_field | `"updated_at"` 或 `"created_at"` | 否 | `"updated_at"` | `since` / `until` 使用的元数据时间字段。CLI `--time-field updated|created` 会映射为 `updated_at|created_at` |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -253,11 +251,12 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```bash
 openviking search "best practices" [--session-id abc123] [--limit 10]
-openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-15
+openviking search "watch vs scheduled" --time-field created --on 2026-03-15
 ```
 
-CLI 只为检索时间过滤暴露 `--after` 和 `--before`。如需按 `created_at` 而非
-默认 `updated_at` 过滤，请使用 SDK 或 HTTP API。
+`--time-field created` 会映射为 API `time_field="created_at"`，`--time-field updated`
+会映射为 `time_field="updated_at"`。`--last 7d` 是 `--since 7d` 的 CLI 简写。
+`--on 2026-03-15` 是同时设置 `since="2026-03-15"` 与 `until="2026-03-15"` 的 CLI 简写。
 
 **响应**
 

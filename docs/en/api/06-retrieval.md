@@ -27,9 +27,9 @@ Basic vector similarity search.
 | limit | int | No | 10 | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
-| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--after 7d` maps to `since="7d"` |
+| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--last 7d` maps to `since="7d"` |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time |
-| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until`. The CLI uses the default `updated_at` field |
+| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until`. CLI `--time-field updated|created` maps to `updated_at|created_at` |
 
 **FindResult Structure**
 
@@ -97,13 +97,11 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 ```bash
 openviking find "how to authenticate users" [--uri viking://resources/] [--limit 10]
-openviking find "invoice" --after 7d
+openviking find "invoice" --time-field created --last 7d
 ```
 
-The CLI exposes only `--after` and `--before` for retrieval time filtering.
-`--after 7d` maps to API `since="7d"` and `--before 2026-03-15` maps to
-API `until="2026-03-15"`. Use the SDK or HTTP API when you need to filter on
-`created_at` instead of the default `updated_at`.
+`--time-field created` maps to API `time_field="created_at"` and `--time-field updated`
+maps to `time_field="updated_at"`. `--last 7d` is CLI sugar for `--since 7d`.
 
 **Response**
 
@@ -200,9 +198,9 @@ Search with session context and intent analysis.
 | limit | int | No | 10 | Maximum number of results |
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
-| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--after 7d` maps to `since="7d"` |
+| since | str | No | None | Lower time bound, accepts `2h` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time. CLI `--last 7d` maps to `since="7d"` |
 | until | str | No | None | Upper time bound, accepts `30m` or ISO 8601 / `YYYY-MM-DD`, timezone-less values use local time |
-| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until`. The CLI uses the default `updated_at` field |
+| time_field | `"updated_at"` or `"created_at"` | No | `"updated_at"` | Metadata time field used by `since` / `until`. CLI `--time-field updated|created` maps to `updated_at|created_at` |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -253,12 +251,12 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```bash
 openviking search "best practices" [--session-id abc123] [--limit 10]
-openviking search "watch vs scheduled" --after 2026-03-15 --before 2026-03-15
+openviking search "watch vs scheduled" --time-field created --on 2026-03-15
 ```
 
-The CLI exposes only `--after` and `--before` for retrieval time filtering.
-Use the SDK or HTTP API when you need to filter on `created_at` instead of the
-default `updated_at`.
+`--time-field created` maps to API `time_field="created_at"` and `--time-field updated`
+maps to `time_field="updated_at"`. `--last 7d` is CLI sugar for `--since 7d`.
+`--on 2026-03-15` is CLI sugar for `since="2026-03-15"` plus `until="2026-03-15"`.
 
 **Response**
 
