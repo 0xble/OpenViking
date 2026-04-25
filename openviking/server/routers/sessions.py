@@ -165,7 +165,7 @@ async def get_session(
     session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
-    pending_tokens = sum(len(m.content) // 4 for m in session.messages)
+    pending_tokens = sum(m.estimated_tokens for m in session.messages)
     result["pending_tokens"] = pending_tokens
     return Response(status="ok", result=result)
 

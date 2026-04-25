@@ -686,6 +686,8 @@ class Session:
         redo_task_id: Optional[str] = None
 
         try:
+            
+
             tracker.start(task_id)
             with bind_telemetry(telemetry):
                 redo_task_id = str(uuid.uuid4())
@@ -712,6 +714,7 @@ class Session:
                         session_id=self.session_id,
                         ctx=self.ctx,
                         latest_archive_overview=latest_archive_overview,
+                        archive_uri=archive_uri,
                     )
                     logger.info(f"Extracted {len(extracted)} memories")
                     for ctx_item in extracted:
