@@ -125,7 +125,7 @@ install_test_deps() {
   need cargo
   need cmake
   run uv sync --frozen --extra test
-  run uv pip install setuptools setuptools_scm cmake wheel
+  run uv pip install setuptools setuptools_scm cmake wheel maturin
 }
 
 clean_native_artifacts() {
@@ -136,11 +136,13 @@ clean_native_artifacts() {
     openviking/storage/vectordb/engine/*.so \
     openviking/storage/vectordb/engine/*.pyd \
     openviking/storage/vectordb/engine/*.dll
+  rm -rf build/temp.*/cmake_build
 }
 
 build_cpp_extensions_for_ci() {
   clean_native_artifacts
   export OV_SKIP_OV_BUILD=1
+  export OV_REQUIRE_RAGFS_BUILD=1
   mkdir -p openviking/bin
   touch openviking/bin/ov
   chmod +x openviking/bin/ov
