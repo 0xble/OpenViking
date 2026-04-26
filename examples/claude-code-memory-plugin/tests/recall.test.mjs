@@ -29,8 +29,66 @@ describe("Claude Code MCP recall parity helpers", () => {
     })
 
     assert.equal(result.memories.length, 1)
+    assert.equal(result.resources.length, 0)
     assert.equal(result.failedScopes.length, 1)
     assert.match(formatScopeFailures(result.failedScopes), /Partial OpenViking memory results/)
+  })
+
+  it("returns resources for an explicit resource target", async () => {
+    const client = {
+      async find(_query, options) {
+        assert.equal(options.targetUri, "viking://resources/docs")
+        return {
+          resources: [
+            { uri: "viking://resources/docs/api.md", level: 2, abstract: "API notes", score: 0.8 },
+          ],
+        }
+      },
+    }
+
+    const result = await searchMemoryScopes(client, "api notes", {
+      targetUri: "viking://resources/docs",
+      limit: 6,
+      scoreThreshold: 0.01,
+    })
+
+    assert.equal(result.memories.length, 0)
+    assert.equal(result.resources.length, 1)
+    assert.equal(result.resources[0].context_type, "resource")
+  })
+
+  it("does not treat resource-like prefixes as resource scopes", async () => {
+    const client = {
+      async find(_query, options) {
+        assert.equal(options.targetUri, "viking://resourcesFoo/docs")
+        return {
+          resources: [
+            { uri: "viking://resourcesFoo/docs/api.md", level: 2, abstract: "API notes", score: 0.8 },
+          ],
+        }
+      },
+    }
+
+    const result = await searchMemoryScopes(client, "api notes", {
+      targetUri: "viking://resourcesFoo/docs",
+      limit: 6,
+      scoreThreshold: 0.01,
+    })
+
+    assert.equal(result.resources.length, 0)
+  })
+
+  it("keeps default unscoped recall memory-only unless resources are requested", async () => {
+    const seen = []
+    const client = {
+      async find(_query, options) {
+        seen.push(options.targetUri)
+        return { memories: [], resources: [] }
+      },
+    }
+
+    await searchMemoryScopes(client, "api notes", { limit: 6, scoreThreshold: 0.01 })
+    assert.deepEqual(seen, ["viking://user/memories", "viking://agent/memories"])
   })
 
   it("filters non-leaf memories when level is present", async () => {

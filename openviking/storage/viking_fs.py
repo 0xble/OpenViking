@@ -63,6 +63,20 @@ def _ensure_non_empty_search_query(query: str) -> None:
         raise InvalidArgumentError("Search query must not be empty.")
 
 
+def _trim_find_result_to_limit(find_result, limit: int):
+    """Apply limit across all context buckets while preserving bucketed output."""
+    if limit <= 0 or find_result.total <= limit:
+        return find_result
+
+    ranked = sorted(find_result, key=lambda ctx: getattr(ctx, "score", 0.0), reverse=True)
+    selected = {id(ctx) for ctx in ranked[:limit]}
+    find_result.memories = [ctx for ctx in find_result.memories if id(ctx) in selected]
+    find_result.resources = [ctx for ctx in find_result.resources if id(ctx) in selected]
+    find_result.skills = [ctx for ctx in find_result.skills if id(ctx) in selected]
+    find_result.total = len(find_result.memories) + len(find_result.resources) + len(find_result.skills)
+    return find_result
+
+
 def _is_directory_not_empty_error(message: str) -> bool:
     """Check if an error message indicates a directory not empty error.
 
@@ -1130,6 +1144,8 @@ class VikingFS:
             resources=resources,
             skills=skills,
         )
+        if context_type is None:
+            find_result = _trim_find_result_to_limit(find_result, limit)
         telemetry.set("vector.returned", find_result.total)
         return find_result
 
@@ -1284,6 +1300,8 @@ class VikingFS:
             query_plan=query_plan,
             query_results=query_results,
         )
+        if target_context_type is None:
+            find_result = _trim_find_result_to_limit(find_result, limit)
         telemetry.set("vector.returned", find_result.total)
         return find_result
 

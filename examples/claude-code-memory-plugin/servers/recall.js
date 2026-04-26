@@ -1,4 +1,5 @@
 const DEFAULT_MEMORY_SCOPES = ["viking://user/memories", "viking://agent/memories"];
+const DEFAULT_RESOURCE_SCOPE = "viking://resources";
 const ORDER_QUERY_RE = /\b(order|ordered|purchase|purchased|bought|buy|item|product|amazon|shop|shipping|delivery)\b/i;
 export function clampScore(value) {
     if (typeof value !== "number" || Number.isNaN(value))
@@ -26,6 +27,9 @@ function failureReason(error) {
     return error instanceof Error ? error.message : String(error);
 }
 function uniqueMemories(items) {
+    return uniqueItems(items);
+}
+function uniqueItems(items) {
     const seen = new Set();
     const result = [];
     for (const item of items) {
@@ -36,12 +40,26 @@ function uniqueMemories(items) {
     }
     return result;
 }
+function withContextType(items, contextType) {
+    return items.map((item) => ({ ...item, context_type: item.context_type ?? contextType }));
+}
 function finalizeMemories(items, options) {
     return uniqueMemories(items)
         .filter(isRecallCandidate)
         .filter((item) => clampScore(item.score) >= options.scoreThreshold)
         .sort((left, right) => clampScore(right.score) - clampScore(left.score))
         .slice(0, options.limit);
+}
+function finalizeResources(items, options) {
+    return uniqueItems(items)
+        .filter(isRecallCandidate)
+        .filter((item) => clampScore(item.score) >= options.scoreThreshold)
+        .sort((left, right) => clampScore(right.score) - clampScore(left.score))
+        .slice(0, options.limit);
+}
+function isResourceScope(uri) {
+    const normalized = uri?.trim().replace(/\/+$/, "") ?? "";
+    return normalized === DEFAULT_RESOURCE_SCOPE || normalized.startsWith(`${DEFAULT_RESOURCE_SCOPE}/`);
 }
 export async function searchMemoryScopes(client, query, options) {
     if (options.targetUri) {
@@ -51,27 +69,38 @@ export async function searchMemoryScopes(client, query, options) {
             scoreThreshold: 0,
         });
         return {
-            memories: finalizeMemories(result.memories ?? [], options),
+            memories: finalizeMemories(withContextType(result.memories ?? [], "memory"), options),
+            resources: isResourceScope(options.targetUri)
+                ? finalizeResources(withContextType(result.resources ?? [], "resource"), options)
+                : [],
             failedScopes: [],
         };
     }
-    const settled = await Promise.allSettled(DEFAULT_MEMORY_SCOPES.map((scope) => client.find(query, { targetUri: scope, limit: options.limit, scoreThreshold: 0 })));
+    const scopes = options.includeResources
+        ? [...DEFAULT_MEMORY_SCOPES, DEFAULT_RESOURCE_SCOPE]
+        : [...DEFAULT_MEMORY_SCOPES];
+    const settled = await Promise.allSettled(scopes.map((scope) => client.find(query, { targetUri: scope, limit: options.limit, scoreThreshold: 0 })));
     const memories = [];
+    const resources = [];
     const failedScopes = [];
     settled.forEach((result, index) => {
-        const scope = DEFAULT_MEMORY_SCOPES[index];
+        const scope = scopes[index];
         if (result.status === "fulfilled") {
-            memories.push(...(result.value.memories ?? []));
+            memories.push(...withContextType(result.value.memories ?? [], "memory"));
+            if (isResourceScope(scope)) {
+                resources.push(...withContextType(result.value.resources ?? [], "resource"));
+            }
         }
         else {
             failedScopes.push({ scope, reason: failureReason(result.reason) });
         }
     });
-    if (memories.length === 0 && failedScopes.length === DEFAULT_MEMORY_SCOPES.length) {
+    if (memories.length === 0 && resources.length === 0 && failedScopes.length === scopes.length) {
         throw new Error(`OpenViking recall failed for all default memory scopes: ${formatScopeFailures(failedScopes)}`);
     }
     return {
         memories: finalizeMemories(memories, options),
+        resources: finalizeResources(resources, options),
         failedScopes,
     };
 }

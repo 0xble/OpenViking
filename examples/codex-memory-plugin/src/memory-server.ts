@@ -93,6 +93,8 @@ const config = {
   timeoutMs: Math.max(1000, Math.floor(num(process.env.OPENVIKING_TIMEOUT_MS, 15000))),
   recallLimit: Math.max(1, Math.floor(num(process.env.OPENVIKING_RECALL_LIMIT, 6))),
   scoreThreshold: Math.min(1, Math.max(0, num(process.env.OPENVIKING_SCORE_THRESHOLD, 0.01))),
+  recallResources: process.env.OPENVIKING_RECALL_RESOURCES === "1"
+    || process.env.OPENVIKING_RECALL_RESOURCES === "true",
 }
 
 class OpenVikingClient {
@@ -302,16 +304,18 @@ server.tool(
   {
     query: z.string().describe("Search query"),
     target_uri: z.string().optional().describe("Search scope URI, default searches user and agent memories"),
+    include_resources: z.boolean().optional().describe("Also search viking://resources for unscoped recall"),
     limit: z.number().optional().describe("Max results, default 6"),
     score_threshold: z.number().optional().describe("Minimum relevance score 0-1, default 0.01"),
   },
-  async ({ query, target_uri, limit, score_threshold }) => {
+  async ({ query, target_uri, include_resources, limit, score_threshold }) => {
     const recallLimit = limit ?? config.recallLimit
     const threshold = score_threshold ?? config.scoreThreshold
     const result = await searchMemoryScopes(client, query, {
       targetUri: target_uri,
       limit: recallLimit,
       scoreThreshold: threshold,
+      includeResources: include_resources ?? config.recallResources,
     })
 
     return { content: [{ type: "text" as const, text: buildRecallResponseText(query, result) }] }

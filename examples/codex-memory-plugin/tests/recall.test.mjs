@@ -29,9 +29,70 @@ describe("Codex recall parity helpers", () => {
     const text = buildRecallResponseText("agent fact", result)
 
     assert.equal(result.memories.length, 1)
+    assert.equal(result.resources.length, 0)
     assert.equal(result.failedScopes.length, 1)
     assert.match(text, /Agent fact/)
     assert.match(text, /Partial OpenViking memory results/)
+  })
+
+  it("returns resources for an explicit resource target", async () => {
+    const client = {
+      async find(_query, targetUri) {
+        assert.equal(targetUri, "viking://resources/docs")
+        return {
+          resources: [
+            { uri: "viking://resources/docs/api.md", level: 2, abstract: "API notes", score: 0.8 },
+          ],
+        }
+      },
+    }
+
+    const result = await searchMemoryScopes(client, "api notes", {
+      targetUri: "viking://resources/docs",
+      limit: 6,
+      scoreThreshold: 0.01,
+    })
+    const text = buildRecallResponseText("api notes", result)
+
+    assert.equal(result.memories.length, 0)
+    assert.equal(result.resources.length, 1)
+    assert.equal(result.resources[0].context_type, "resource")
+    assert.match(text, /Relevant resources/)
+    assert.match(text, /API notes/)
+  })
+
+  it("does not treat resource-like prefixes as resource scopes", async () => {
+    const client = {
+      async find(_query, targetUri) {
+        assert.equal(targetUri, "viking://resourcesFoo/docs")
+        return {
+          resources: [
+            { uri: "viking://resourcesFoo/docs/api.md", level: 2, abstract: "API notes", score: 0.8 },
+          ],
+        }
+      },
+    }
+
+    const result = await searchMemoryScopes(client, "api notes", {
+      targetUri: "viking://resourcesFoo/docs",
+      limit: 6,
+      scoreThreshold: 0.01,
+    })
+
+    assert.equal(result.resources.length, 0)
+  })
+
+  it("keeps default unscoped recall memory-only unless resources are requested", async () => {
+    const seen = []
+    const client = {
+      async find(_query, targetUri) {
+        seen.push(targetUri)
+        return { memories: [], resources: [] }
+      },
+    }
+
+    await searchMemoryScopes(client, "api notes", { limit: 6, scoreThreshold: 0.01 })
+    assert.deepEqual(seen, ["viking://user/memories", "viking://agent/memories"])
   })
 
   it("filters non-leaf memories when level is present", async () => {
@@ -43,6 +104,7 @@ describe("Codex recall parity helpers", () => {
   it("adds a source note for order-like queries", () => {
     const text = buildRecallResponseText("what was the amazon order?", {
       memories: [],
+      resources: [],
       failedScopes: [],
     })
 

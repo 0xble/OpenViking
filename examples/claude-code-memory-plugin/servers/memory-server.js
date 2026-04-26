@@ -138,6 +138,9 @@ const config = {
     timeoutMs: Math.max(1000, Math.floor(num(clientFile.timeoutMs, 15000))),
     recallLimit: Math.max(1, Math.floor(num(clientFile.recallLimit, 6))),
     scoreThreshold: Math.min(1, Math.max(0, num(clientFile.scoreThreshold, 0.01))),
+    recallResources: clientFile.recallResources === true,
+    recallReadLineLimit: Math.max(1, Math.floor(num(clientFile.recallReadLineLimit, 120))),
+    recallContentMaxChars: Math.max(200, Math.floor(num(clientFile.recallContentMaxChars, 4000))),
 };
 // ---------------------------------------------------------------------------
 // OpenViking HTTP Client (ported from openclaw-plugin/client.ts)
@@ -292,8 +295,8 @@ class OpenVikingClient {
             }),
         });
     }
-    async read(uri) {
-        return this.request(`/api/v1/content/read?uri=${encodeURIComponent(uri)}`);
+    async read(uri, limit = -1) {
+        return this.request(`/api/v1/content/read?uri=${encodeURIComponent(uri)}&limit=${encodeURIComponent(String(limit))}`);
     }
     async createSession() {
         const result = await this.request("/api/v1/sessions", {
@@ -413,6 +416,24 @@ function formatMemoryLines(items) {
     })
         .join("\n");
 }
+function truncateContent(content, maxChars) {
+    const trimmed = content.trim();
+    if (trimmed.length <= maxChars)
+        return trimmed;
+    return `${trimmed.slice(0, maxChars).trimEnd()}\n[truncated to ${maxChars} characters]`;
+}
+async function formatRecallItemContent(item) {
+    const category = item.category ?? item.context_type ?? "memory";
+    if (item.level === 2) {
+        try {
+            const content = await client.read(item.uri, config.recallReadLineLimit);
+            if (content?.trim())
+                return `- [${category}] ${truncateContent(content, config.recallContentMaxChars)}`;
+        }
+        catch { /* fallback */ }
+    }
+    return `- [${category}] ${item.abstract ?? item.overview ?? item.uri}`;
+}
 // Query-aware ranking (ported from openclaw-plugin/memory-ranking.ts)
 const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i;
 const TEMPORAL_QUERY_RE = /when|what time|date|day|month|year|yesterday|today|tomorrow|last|next|什么时候|何时|哪天|几月|几年|昨天|今天|明天/i;
@@ -503,7 +524,8 @@ server.tool("memory_recall", "Search long-term memories from OpenViking. Use whe
     limit: z.number().optional().describe("Max results to return (default: 6)"),
     score_threshold: z.number().optional().describe("Min relevance score 0-1 (default: 0.01)"),
     target_uri: z.string().optional().describe("Search scope URI, e.g. viking://user/memories"),
-}, async ({ query, limit, score_threshold, target_uri }) => {
+    include_resources: z.boolean().optional().describe("Also search viking://resources for unscoped recall"),
+}, async ({ query, limit, score_threshold, target_uri, include_resources }) => {
     const recallLimit = limit ?? config.recallLimit;
     const threshold = score_threshold ?? config.scoreThreshold;
     const candidateLimit = Math.max(recallLimit * 4, 20);
@@ -511,38 +533,31 @@ server.tool("memory_recall", "Search long-term memories from OpenViking. Use whe
         targetUri: target_uri,
         limit: candidateLimit,
         scoreThreshold: threshold,
+        includeResources: include_resources ?? config.recallResources,
     });
     const processed = postProcessMemories(searchResult.memories, { limit: candidateLimit, scoreThreshold: threshold });
+    const processedResources = postProcessMemories(searchResult.resources, { limit: candidateLimit, scoreThreshold: threshold });
     const memories = pickMemoriesForInjection(processed, recallLimit, query);
+    const resources = pickMemoriesForInjection(processedResources, recallLimit, query);
+    const recallItems = [...memories, ...resources].slice(0, recallLimit);
     const notes = [
         formatScopeFailures(searchResult.failedScopes),
         formatOrderSourceNote(query),
     ].filter(Boolean);
-    if (memories.length === 0) {
+    if (recallItems.length === 0) {
         return {
             content: [{
                     type: "text",
-                    text: ["No relevant memories found in OpenViking.", ...notes].join("\n\n"),
+                    text: ["No relevant OpenViking context found.", ...notes].join("\n\n"),
                 }],
         };
     }
-    // Read full content for leaf memories
-    const lines = await Promise.all(memories.map(async (item) => {
-        if (item.level === 2) {
-            try {
-                const content = await client.read(item.uri);
-                if (content?.trim())
-                    return `- [${item.category ?? "memory"}] ${content.trim()}`;
-            }
-            catch { /* fallback */ }
-        }
-        return `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`;
-    }));
+    const lines = await Promise.all(recallItems.map(formatRecallItemContent));
     return {
         content: [{
                 type: "text",
                 text: [
-                    `Found ${memories.length} relevant memories:\n\n${lines.join("\n")}\n\n---\n${formatMemoryLines(memories)}`,
+                    `Found ${recallItems.length} relevant OpenViking item(s):\n\n${lines.join("\n")}\n\n---\n${formatMemoryLines(recallItems)}`,
                     ...notes,
                 ].join("\n\n"),
             }],
