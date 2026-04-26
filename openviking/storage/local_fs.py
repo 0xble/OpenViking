@@ -8,6 +8,7 @@ import zipfile
 
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.identity import RequestContext
+from openviking.storage.memory_maintenance_control import is_memory_maintenance_control_uri
 from openviking.utils.embedding_utils import vectorize_directory_meta, vectorize_file
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.utils.logger import get_logger
@@ -99,6 +100,8 @@ def _validate_import_target_uri(uri: str) -> None:
         raise InvalidArgumentError(f"cannot import derived semantic file: {uri}")
     if is_watch_task_control_uri(uri):
         raise InvalidArgumentError(f"cannot import watch task control file: {uri}")
+    if is_memory_maintenance_control_uri(uri):
+        raise InvalidArgumentError(f"cannot import memory maintenance control file: {uri}")
 
 
 async def _enqueue_direct_vectorization(viking_fs, uri: str, ctx: RequestContext) -> None:

@@ -12,6 +12,7 @@ from openviking.session.memory_archiver import (
 )
 from openviking.session.memory_deduplicator import (
     DedupDecision,
+    DedupDiagnostics,
     DedupResult,
     ExistingMemoryAction,
     MemoryActionDecision,
@@ -94,5 +95,6 @@ __all__ = [
     "DedupDecision",
     "MemoryActionDecision",
     "ExistingMemoryAction",
+    "DedupDiagnostics",
     "DedupResult",
 ]

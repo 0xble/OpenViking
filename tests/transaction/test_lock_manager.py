@@ -49,6 +49,35 @@ class TestLockManagerBasic:
 
         await lm.release(handle)
 
+    async def test_acquire_subtree_batch_releases_partial_on_failure(self):
+        class FakePathLock:
+            def __init__(self):
+                self.released_paths = []
+
+            async def acquire_subtree(self, path, handle, timeout=None):
+                del timeout
+                if path == "/b":
+                    return False
+                handle.add_lock(f"{path}/{LOCK_FILE_NAME}")
+                return True
+
+            async def release_selected(self, handle, lock_paths):
+                self.released_paths.extend(lock_paths)
+                for lock_path in lock_paths:
+                    handle.remove_lock(lock_path)
+
+        manager = object.__new__(LockManager)
+        manager._path_lock = FakePathLock()
+        manager._handles = {}
+        handle = manager.create_handle()
+        handle.add_lock(f"/preexisting/{LOCK_FILE_NAME}")
+
+        ok = await manager.acquire_subtree_batch(handle, ["/a", "/b"], timeout=0.1)
+
+        assert ok is False
+        assert manager._path_lock.released_paths == [f"/a/{LOCK_FILE_NAME}"]
+        assert handle.locks == [f"/preexisting/{LOCK_FILE_NAME}"]
+
     async def test_acquire_mv(self, agfs_client, lm, test_dir):
         src = f"{test_dir}/mv-src-{uuid.uuid4().hex}"
         dst = f"{test_dir}/mv-dst-{uuid.uuid4().hex}"

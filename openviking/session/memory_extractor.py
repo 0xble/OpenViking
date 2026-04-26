@@ -223,6 +223,12 @@ class MemoryExtractor:
 
         return "\n".join(lines) if lines else ""
 
+    @staticmethod
+    def _should_include_in_extraction(msg) -> bool:
+        """Return whether a message role may contain user/assistant memory signal."""
+        role = str(getattr(msg, "role", "") or "").strip().lower()
+        return role not in {"system", "developer"}
+
     async def extract(
         self,
         context: dict,
@@ -268,6 +274,8 @@ class MemoryExtractor:
 
             formatted_lines = []
             for m in messages:
+                if not self._should_include_in_extraction(m):
+                    continue
                 msg_content = self._format_message_with_parts(m)
                 if msg_content:
                     formatted_lines.append(f"[{m.role}]: {msg_content}")

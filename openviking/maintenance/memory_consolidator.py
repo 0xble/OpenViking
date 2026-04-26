@@ -1,23 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Memory Consolidator -- periodic background "dream"-style consolidation.
+"""Memory lifecycle maintenance for OpenViking.
 
-Sweeps a memory scope to merge semantic duplicates that escaped per-write
-dedup, resolve contradictions, archive stale entries, and refresh the
-scope's overview. Models Claude Code's autoDream service but adapted to
-OpenViking's primitives:
-
-    Dream                          | OpenViking equivalent
-    ------------------------------ | -----------------------------------
-    autoDream.ts gate chain        | MemoryConsolidationScheduler (Phase B)
-    tryAcquireConsolidationLock    | LockContext(point) on scope path
-    buildConsolidationPrompt 4-ph  | _orient -> _gather -> _consolidate ->
-                                   |   _archive -> _reindex -> _record
-    forked Sonnet agent            | MemoryDeduplicator.consolidate_cluster
-    rollbackConsolidationLock      | run-record mtime drives time gate
-
-Engine is callable from a scheduler (Phase B) or an HTTP endpoint
-(Phase C) via run(scope_uri, ctx, dry_run=False).
+Sweeps one memory scope on demand to inspect duplicate clusters, archive
+cold entries, and refresh derived semantic artifacts. The consolidator is
+manual-first and bounded; schedulers decide when to call it.
 """
 
 import json
@@ -36,13 +23,11 @@ from openviking.session.memory_deduplicator import (
 )
 from openviking.storage import VikingDBManager
 from openviking.storage.expr import And, Eq
-from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
-# Cosine threshold for clustering existing memories. Mirrors dream's
-# implicit "obviously similar" bar -- chosen empirically to catch true
+# Cosine threshold for clustering existing memories. Chosen to catch true
 # paraphrases while skipping merely-related memories.
 DEFAULT_CLUSTER_THRESHOLD = 0.85
 
@@ -172,12 +157,13 @@ class MemoryConsolidator:
         *,
         dry_run: bool = False,
         canaries: Optional[List[Canary]] = None,
+        target_uris: Optional[List[str]] = None,
     ) -> ConsolidationResult:
         """Execute the full consolidation pass for one scope.
 
-        Acquires a point lock on the scope path for the entire run.
-        Phases commit per-cluster transactions internally so a bad
-        cluster decision does not poison the rest of the scope.
+        LLM planning happens outside write locks. VikingFS write/move
+        operations acquire their own short locks when concrete changes
+        are applied, so a slow model call does not hold a scope lock.
 
         Args:
             scope_uri: Memory scope to consolidate (e.g.
@@ -195,46 +181,43 @@ class MemoryConsolidator:
             started_at=datetime.now(timezone.utc).isoformat(),
         )
 
-        path = self.viking_fs._uri_to_path(scope_uri, ctx=ctx)
-        async with LockContext(get_lock_manager(), [path], lock_mode="point") as lock_handle:
-            try:
-                overview = await self._orient(scope_uri, ctx, result)
-                clusters, archive_candidates = await self._gather(scope_uri, ctx, result)
+        try:
+            overview = await self._orient(scope_uri, ctx, result)
+            clusters, archive_candidates = await self._gather(
+                scope_uri,
+                ctx,
+                result,
+                target_uris=target_uris,
+            )
 
-                if not dry_run:
-                    if canaries:
-                        result.canaries_pre = await self._run_canaries(
-                            scope_uri, canaries, ctx
-                        )
-                    await self._consolidate(
-                        clusters, scope_uri, overview, ctx, result, lock_handle
+            if not dry_run:
+                if canaries:
+                    result.canaries_pre = await self._run_canaries(scope_uri, canaries, ctx)
+                await self._consolidate(clusters, scope_uri, overview, ctx, result)
+                await self._archive(archive_candidates, ctx, result)
+                await self._reindex(scope_uri, ctx, result)
+                if canaries:
+                    result.canaries_post = await self._run_canaries(scope_uri, canaries, ctx)
+                    result.canary_failed = self._canary_regressed(
+                        result.canaries_pre, result.canaries_post
                     )
-                    await self._archive(archive_candidates, ctx, result)
-                    await self._reindex(scope_uri, ctx, result)
-                    if canaries:
-                        result.canaries_post = await self._run_canaries(
-                            scope_uri, canaries, ctx
-                        )
-                        result.canary_failed = self._canary_regressed(
-                            result.canaries_pre, result.canaries_post
-                        )
-                else:
-                    result.candidates["merge_clusters"] = len(clusters)
-                    result.candidates["archive"] = len(archive_candidates)
+            else:
+                result.candidates["merge_clusters"] = len(clusters)
+                result.candidates["archive"] = len(archive_candidates)
 
-                result.completed_at = datetime.now(timezone.utc).isoformat()
+            result.completed_at = datetime.now(timezone.utc).isoformat()
+            await self._record(result, ctx)
+        except Exception as e:
+            logger.exception(f"[MemoryConsolidator] run failed for {scope_uri}")
+            result.errors.append(str(e))
+            result.partial = True
+            result.completed_at = datetime.now(timezone.utc).isoformat()
+            # Best-effort audit even on failure -- rethrow original.
+            try:
                 await self._record(result, ctx)
-            except Exception as e:
-                logger.exception(f"[MemoryConsolidator] run failed for {scope_uri}")
-                result.errors.append(str(e))
-                result.partial = True
-                result.completed_at = datetime.now(timezone.utc).isoformat()
-                # Best-effort audit even on failure -- rethrow original.
-                try:
-                    await self._record(result, ctx)
-                except Exception:
-                    logger.warning("[MemoryConsolidator] audit record write failed")
-                raise
+            except Exception:
+                logger.warning("[MemoryConsolidator] audit record write failed")
+            raise
 
         return result
 
@@ -262,16 +245,21 @@ class MemoryConsolidator:
         scope_uri: str,
         ctx: RequestContext,
         result: ConsolidationResult,
+        *,
+        target_uris: Optional[List[str]] = None,
     ) -> tuple[List[List[Context]], List[ArchivalCandidate]]:
         """Phase 2: cluster duplicates + identify archive candidates."""
         t0 = time.perf_counter()
 
-        # Archive candidates: reuse MemoryArchiver.scan().
-        archive_candidates = await self.archiver.scan(scope_uri, ctx=ctx)
+        # Dirty-scope maintenance should stay bounded to the changed memories.
+        # Cold archival over the full scope is left for explicit full-scope runs.
+        archive_candidates = []
+        if target_uris is None:
+            archive_candidates = await self.archiver.scan(scope_uri, ctx=ctx)
 
         # Merge clusters: scroll L2 memories under the scope, query
         # similarity for each, build adjacency, extract components >= 2.
-        clusters = await self._cluster_scope(scope_uri, ctx)
+        clusters = await self._cluster_scope(scope_uri, ctx, target_uris=target_uris)
 
         result.candidates["archive"] = len(archive_candidates)
         result.candidates["merge_clusters"] = len(clusters)
@@ -282,6 +270,8 @@ class MemoryConsolidator:
         self,
         scope_uri: str,
         ctx: RequestContext,
+        *,
+        target_uris: Optional[List[str]] = None,
     ) -> List[List[Context]]:
         """Build clusters of similar existing memories under the scope.
 
@@ -293,6 +283,9 @@ class MemoryConsolidator:
            top-K with cosine >= threshold OR vice versa.
         4. Connected components of size >= 2 are merge clusters.
         """
+        if target_uris is not None:
+            return await self._cluster_target_uris(scope_uri, target_uris, ctx)
+
         members: Dict[str, Context] = {}
         filter_expr = And(conds=[Eq("level", 2)])
 
@@ -414,6 +407,87 @@ class MemoryConsolidator:
 
         return [g for g in groups.values() if len(g) >= 2]
 
+    async def _cluster_target_uris(
+        self,
+        scope_uri: str,
+        target_uris: List[str],
+        ctx: RequestContext,
+    ) -> List[List[Context]]:
+        """Build duplicate clusters around specific changed memory URIs."""
+        embedder = getattr(self.dedup, "embedder", None)
+        if embedder is None:
+            logger.info(
+                "[MemoryConsolidator] no embedder configured; skipping target cluster "
+                f"build under {scope_uri}"
+            )
+            return []
+
+        try:
+            from openviking.models.embedder.base import embed_compat
+        except Exception as e:
+            logger.warning(f"[MemoryConsolidator] cannot import embedder: {e}")
+            return []
+
+        clusters: List[List[Context]] = []
+        seen_clusters: set[frozenset[str]] = set()
+        for uri in dict.fromkeys(target_uris):
+            if not uri.startswith(scope_uri) or "/_archive/" in uri:
+                continue
+            try:
+                body = await self.viking_fs.read(uri, ctx=ctx)
+                if isinstance(body, bytes):
+                    body = body.decode("utf-8", errors="replace")
+            except Exception as e:
+                logger.debug(f"[MemoryConsolidator] target read failed for {uri}: {e}")
+                continue
+
+            query_text = (str(body or "")).strip()[:512]
+            if not query_text:
+                continue
+            try:
+                embed_result = await embed_compat(embedder, query_text, is_query=True)
+                query_vector = embed_result.dense_vector
+            except Exception as e:
+                logger.debug(f"[MemoryConsolidator] target embed failed for {uri}: {e}")
+                continue
+
+            try:
+                hits = await self.vikingdb.search_similar_memories(
+                    owner_space=None,
+                    category_uri_prefix=scope_uri,
+                    query_vector=query_vector,
+                    limit=self.top_k,
+                )
+            except Exception as e:
+                logger.debug(f"[MemoryConsolidator] target similarity query failed for {uri}: {e}")
+                continue
+
+            cluster_by_uri: Dict[str, Context] = {
+                uri: Context(uri=uri, abstract=query_text, level=2, user=getattr(ctx, "user", None))
+            }
+            for hit in hits:
+                hit_uri = hit.get("uri", "")
+                if not hit_uri or hit_uri == uri or not hit_uri.startswith(scope_uri):
+                    continue
+                if "/_archive/" in hit_uri:
+                    continue
+                score = float(hit.get("_score", hit.get("score", 0)) or 0)
+                if score < self.cluster_threshold:
+                    continue
+                context = Context.from_dict(hit)
+                context.meta = {**(context.meta or {}), "_dedup_score": score}
+                cluster_by_uri[hit_uri] = context
+
+            if len(cluster_by_uri) < 2:
+                continue
+            key = frozenset(cluster_by_uri)
+            if key in seen_clusters:
+                continue
+            seen_clusters.add(key)
+            clusters.append(list(cluster_by_uri.values()))
+
+        return clusters
+
     async def _consolidate(
         self,
         clusters: List[List[Context]],
@@ -421,15 +495,8 @@ class MemoryConsolidator:
         overview: str,
         ctx: RequestContext,
         result: ConsolidationResult,
-        lock_handle=None,
     ) -> None:
-        """Phase 3: per-cluster LLM decision and apply ops.
-
-        lock_handle is the scope-level handle from LockContext; passed
-        through to viking_fs.rm so per-file deletions reuse the held
-        lock instead of timing out trying to re-acquire it (the scope
-        lock covers all child paths, and LockContext is not reentrant).
-        """
+        """Phase 3: per-cluster LLM decision and apply ops."""
         t0 = time.perf_counter()
 
         for cluster in clusters:
@@ -442,7 +509,7 @@ class MemoryConsolidator:
                     cluster_contents=contents,
                 )
                 result.cluster_decisions.append(self._summarize_decision(decision))
-                await self._apply_decision(decision, ctx, result, lock_handle)
+                await self._apply_decision(decision, ctx, result)
             except Exception as e:
                 logger.exception(f"[MemoryConsolidator] cluster failed under {scope_uri}")
                 result.errors.append(f"cluster_failed: {e}")
@@ -455,7 +522,6 @@ class MemoryConsolidator:
         decision: ClusterDecision,
         ctx: RequestContext,
         result: ConsolidationResult,
-        lock_handle=None,
     ) -> None:
         """Apply ops from one ClusterDecision. Tracks applied URIs.
 
@@ -500,33 +566,31 @@ class MemoryConsolidator:
                     result.applied_uris = sorted(applied)
                     return
 
-            await self._delete_uris(
+            await self._archive_uris(
                 decision.merge_into,
                 applied,
                 op_key="merged",
-                error_label="merge_delete_failed",
+                error_label="merge_archive_failed",
                 keeper_uri=decision.keeper_uri,
                 ctx=ctx,
                 result=result,
-                lock_handle=lock_handle,
             )
 
-        # Delete: drop fully-invalidated members.
+        # Delete decisions are applied as reversible archive moves by default.
         if decision.decision == ClusterDecisionType.KEEP_AND_DELETE:
-            await self._delete_uris(
+            await self._archive_uris(
                 decision.delete,
                 applied,
-                op_key="deleted",
-                error_label="delete_failed",
+                op_key="archived",
+                error_label="delete_archive_failed",
                 keeper_uri=decision.keeper_uri,
                 ctx=ctx,
                 result=result,
-                lock_handle=lock_handle,
             )
 
         result.applied_uris = sorted(applied)
 
-    async def _delete_uris(
+    async def _archive_uris(
         self,
         uris: List[str],
         applied: set,
@@ -536,20 +600,26 @@ class MemoryConsolidator:
         keeper_uri: str,
         ctx: RequestContext,
         result: ConsolidationResult,
-        lock_handle=None,
     ) -> None:
-        """Delete a set of URIs, updating applied/ops_applied/errors in place."""
-        for uri in uris:
-            if uri in applied or uri == keeper_uri:
-                continue
-            try:
-                await self.viking_fs.rm(uri, ctx=ctx, lock_handle=lock_handle)
-                applied.add(uri)
-                result.ops_applied[op_key] += 1
-            except Exception as e:
-                logger.warning(f"[MemoryConsolidator] {error_label}: {e}")
-                result.errors.append(f"{error_label}: {e}")
-                result.partial = True
+        """Archive a set of URIs, updating applied/ops/errors in place."""
+        candidates = [
+            ArchivalCandidate(
+                uri=uri,
+                active_count=0,
+                updated_at=None,
+                score=0.0,
+            )
+            for uri in uris
+            if uri not in applied and uri != keeper_uri
+        ]
+        if not candidates:
+            return
+        archive_result = await self.archiver.archive(candidates, ctx=ctx, dry_run=False)
+        applied.update(archive_result.archived_uris)
+        result.ops_applied[op_key] += archive_result.archived
+        if archive_result.errors > 0:
+            result.partial = True
+            result.errors.append(f"{error_label}: {archive_result.errors}")
 
     async def _archive(
         self,
@@ -561,7 +631,7 @@ class MemoryConsolidator:
         t0 = time.perf_counter()
         if candidates:
             archive_result = await self.archiver.archive(candidates, ctx=ctx, dry_run=False)
-            result.ops_applied["archived"] = archive_result.archived
+            result.ops_applied["archived"] += archive_result.archived
             if archive_result.errors > 0:
                 result.partial = True
                 result.errors.append(f"archive_errors: {archive_result.errors}")
@@ -573,7 +643,7 @@ class MemoryConsolidator:
         ctx: RequestContext,
         result: ConsolidationResult,
     ) -> None:
-        """Phase 5: rebuild scope overview/abstract under the existing lock.
+        """Phase 5: rebuild scope overview/abstract after maintenance.
 
         Only force VLM-backed regeneration when this pass actually mutated the
         scope. Idle passes re-embed only, which keeps periodic consolidation
@@ -591,7 +661,7 @@ class MemoryConsolidator:
                 mode=mode,
                 wait=True,
                 ctx=ctx,
-                lock_already_held=True,
+                lock_already_held=False,
             )
         except Exception as e:
             logger.warning(f"[MemoryConsolidator] reindex failed: {e}")
@@ -770,4 +840,3 @@ class MemoryConsolidator:
             except Exception as e:
                 logger.debug(f"[MemoryConsolidator] read failed for {mem.uri}: {e}")
         return contents
-

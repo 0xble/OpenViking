@@ -8,7 +8,7 @@ Data in, Context out.
 
 from typing import TYPE_CHECKING
 
-FORK_VERSION_SUFFIX = "-0xble.1.2.0"
+FORK_VERSION_SUFFIX = "-0xble.1.2.2"
 
 try:
     from ._version import version as __version__

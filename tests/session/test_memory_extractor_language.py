@@ -58,6 +58,13 @@ def _msg(role: str, content: str):
     return SimpleNamespace(role=role, content=content)
 
 
+def test_system_and_developer_messages_are_not_extraction_inputs():
+    assert not MemoryExtractor._should_include_in_extraction(_msg("system", "policy"))
+    assert not MemoryExtractor._should_include_in_extraction(_msg("developer", "policy"))
+    assert MemoryExtractor._should_include_in_extraction(_msg("user", "remember this"))
+    assert MemoryExtractor._should_include_in_extraction(_msg("assistant", "noted"))
+
+
 def test_detect_output_language_japanese_kana_and_kanji():
     messages = [
         _msg(

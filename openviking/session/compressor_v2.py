@@ -404,6 +404,22 @@ class SessionCompressorV2:
             diff_json = json.dumps(diff, ensure_ascii=False, indent=2)
             diff_uri = f"{archive_uri}/memory_diff.json"
             await viking_fs.write_file(diff_uri, diff_json, ctx=ctx)
+            try:
+                from openviking.maintenance import MemoryMaintenanceManager
+
+                manager = MemoryMaintenanceManager(viking_fs=viking_fs)
+                changed = await manager.record_memory_diff(diff, ctx)
+                if changed:
+                    logger.info(
+                        "Recorded memory maintenance dirty scopes from %s: %s",
+                        diff_uri,
+                        [scope.scope_uri for scope in changed],
+                    )
+            except Exception as manager_exc:
+                logger.warning(
+                    "Failed to record memory maintenance dirty scopes: %s",
+                    manager_exc,
+                )
             logger.info(f"Wrote memory_diff.json to {diff_uri}: "
                         f"adds={diff['summary']['total_adds']}, "
                         f"updates={diff['summary']['total_updates']}, "

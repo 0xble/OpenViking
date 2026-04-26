@@ -45,6 +45,7 @@ class ArchivalResult:
     skipped: int = 0
     errors: int = 0
     candidates: List[ArchivalCandidate] = field(default_factory=list)
+    archived_uris: List[str] = field(default_factory=list)
 
 
 class MemoryArchiver:
@@ -225,6 +226,7 @@ class MemoryArchiver:
             try:
                 await self.viking_fs.mv(candidate.uri, archive_uri, ctx=ctx)
                 result.archived += 1
+                result.archived_uris.append(candidate.uri)
                 logger.info(
                     f"[MemoryArchiver] Archived {candidate.uri} "
                     f"(score={candidate.score:.4f}) -> {archive_uri}"

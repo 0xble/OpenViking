@@ -199,6 +199,7 @@ async def vectorize_directory_meta(
     Creates Context objects for abstract and overview and enqueues them.
     """
     enqueued = 0
+    expected = 0
     try:
         if not ctx:
             logger.warning("No context provided for vectorization")
@@ -240,35 +241,38 @@ async def vectorize_directory_meta(
                     exc_info=True,
                 )
 
-        # Vectorize L1: .overview.md (overview)
-        context_overview = Context(
-            uri=uri,
-            parent_uri=parent_uri,
-            is_leaf=False,
-            abstract=abstract,
-            context_type=context_type,
-            level=ContextLevel.OVERVIEW,
-            created_at=created_at,
-            updated_at=updated_at,
-            user=ctx.user,
-            account_id=ctx.account_id,
-            owner_space=owner_space,
-        )
-        context_overview.set_vectorize(Vectorize(text=overview))
-        msg_overview = EmbeddingMsgConverter.from_context(context_overview)
-        if msg_overview:
-            msg_overview.semantic_msg_id = semantic_msg_id
-            try:
-                await embedding_queue.enqueue(msg_overview)
-                enqueued += 1
-                logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
-            except Exception as e:
-                logger.error(
-                    f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
-                    exc_info=True,
-                )
+        expected = 1
+        if overview:
+            expected += 1
+            # Vectorize L1: .overview.md (overview)
+            context_overview = Context(
+                uri=uri,
+                parent_uri=parent_uri,
+                is_leaf=False,
+                abstract=abstract,
+                context_type=context_type,
+                level=ContextLevel.OVERVIEW,
+                created_at=created_at,
+                updated_at=updated_at,
+                user=ctx.user,
+                account_id=ctx.account_id,
+                owner_space=owner_space,
+            )
+            context_overview.set_vectorize(Vectorize(text=overview))
+            msg_overview = EmbeddingMsgConverter.from_context(context_overview)
+            if msg_overview:
+                msg_overview.semantic_msg_id = semantic_msg_id
+                try:
+                    await embedding_queue.enqueue(msg_overview)
+                    enqueued += 1
+                    logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
+                except Exception as e:
+                    logger.error(
+                        f"Failed to enqueue directory L1 (overview) for vectorization: {uri}: {e}",
+                        exc_info=True,
+                    )
     finally:
-        await _decrement_embedding_tracker(semantic_msg_id, 2 - enqueued)
+        await _decrement_embedding_tracker(semantic_msg_id, expected - enqueued)
 
 
 async def vectorize_file(

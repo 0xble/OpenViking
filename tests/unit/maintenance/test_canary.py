@@ -2,16 +2,15 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for the canary phase of MemoryConsolidator (Phase D)."""
 
-from unittest.mock import MagicMock, patch
-
 import pytest
 
-from openviking.maintenance import Canary, CanaryResult
+from openviking.maintenance import Canary
 from openviking.maintenance.memory_consolidator import MemoryConsolidator
 from tests.unit.maintenance.conftest import (
     make_consolidator as _make_consolidator,
+)
+from tests.unit.maintenance.conftest import (
     make_request_ctx as _make_request_ctx,
-    noop_lock as _noop_lock,
 )
 
 
@@ -213,18 +212,11 @@ class TestMultiCanaryOutcomes:
             Canary(query="a", expected_top_uri="viking://x/a.md"),
             Canary(query="b", expected_top_uri="viking://x/b.md"),
         ]
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch(
-                "openviking.maintenance.memory_consolidator.get_lock_manager",
-                return_value=MagicMock(),
-            ),
-        ):
-            result = await consolidator.run(
-                "viking://x/",
-                _make_request_ctx(),
-                canaries=canaries,
-            )
+        result = await consolidator.run(
+            "viking://x/",
+            _make_request_ctx(),
+            canaries=canaries,
+        )
         assert result.canary_failed is True
         # The "a" canary was satisfied both pre and post; only "b" regressed.
         pre_b = next(r for r in result.canaries_pre if r["query"] == "b")
@@ -280,18 +272,11 @@ class TestMergedIntoKeeperLimitation:
         consolidator = _make_consolidator(search_results=search)
         canaries = [Canary(query="q", expected_top_uri="viking://x/source.md")]
 
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch(
-                "openviking.maintenance.memory_consolidator.get_lock_manager",
-                return_value=MagicMock(),
-            ),
-        ):
-            result = await consolidator.run(
-                "viking://x/",
-                _make_request_ctx(),
-                canaries=canaries,
-            )
+        result = await consolidator.run(
+            "viking://x/",
+            _make_request_ctx(),
+            canaries=canaries,
+        )
         # Target behavior: canary should NOT fail when source migrated.
         assert result.canary_failed is False
 
@@ -326,18 +311,11 @@ class TestRunWithCanaries:
             search_results={"memories": [{"uri": "viking://x/m/keeper.md"}]}
         )
         canaries = [Canary(query="x", expected_top_uri="viking://x/m/keeper.md")]
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch(
-                "openviking.maintenance.memory_consolidator.get_lock_manager",
-                return_value=MagicMock(),
-            ),
-        ):
-            result = await consolidator.run(
-                "viking://x/m/",
-                _make_request_ctx(),
-                canaries=canaries,
-            )
+        result = await consolidator.run(
+            "viking://x/m/",
+            _make_request_ctx(),
+            canaries=canaries,
+        )
         assert len(result.canaries_pre) == 1
         assert len(result.canaries_post) == 1
         assert result.canary_failed is False
@@ -346,18 +324,11 @@ class TestRunWithCanaries:
     async def test_dry_run_skips_canaries(self):
         consolidator = _make_consolidator()
         canaries = [Canary(query="x", expected_top_uri="viking://x")]
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch(
-                "openviking.maintenance.memory_consolidator.get_lock_manager",
-                return_value=MagicMock(),
-            ),
-        ):
-            result = await consolidator.run(
-                "viking://x/m/",
-                _make_request_ctx(),
-                dry_run=True,
-                canaries=canaries,
-            )
+        result = await consolidator.run(
+            "viking://x/m/",
+            _make_request_ctx(),
+            dry_run=True,
+            canaries=canaries,
+        )
         assert result.canaries_pre == []
         assert result.canaries_post == []

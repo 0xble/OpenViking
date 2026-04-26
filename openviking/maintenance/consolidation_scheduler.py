@@ -1,20 +1,16 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Background scheduler that drives MemoryConsolidator on a cadence.
+"""Optional background scheduler that drives MemoryConsolidator on a cadence.
 
-Modeled on openviking/resource/watch_scheduler.py. Per-scope gates mirror
-Claude Code dream's autoDream.ts gate chain (24h time gate, scan-throttle,
-volume gate). Scopes are enumerated per-account from the vector index.
-
-Phase B of the OV memory consolidation rollout. Phase A's
-MemoryConsolidator.run() is the inner unit; this layer just decides when
-to call it.
+Modeled on openviking/resource/watch_scheduler.py. This is intentionally
+not wired into service startup; the maintainer-aligned path is manual
+maintenance first, with persisted dirty-scope state deciding what is due.
 """
 
 import asyncio
 import time
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from typing import Awaitable, Callable, Dict, List, Optional, Set
 
 from openviking.maintenance.memory_consolidator import MemoryConsolidator
 from openviking.server.identity import RequestContext, Role, UserIdentifier
@@ -25,7 +21,7 @@ logger = get_logger(__name__)
 
 @dataclass
 class SchedulerGates:
-    """Per-scope gating thresholds. Mirrors dream's gate-chain knobs."""
+    """Per-scope gating thresholds."""
 
     min_hours_since_last: float = 24.0
     min_writes_since_last: int = 5
@@ -50,7 +46,6 @@ class ScopeStatus:
     last_seen_writes: int = 0
 
 
-# Mirrors dream's SESSION_SCAN_INTERVAL_MS = 10*60*1000 (autoDream.ts:144).
 DEFAULT_SCAN_INTERVAL_SECONDS = 600.0
 DEFAULT_CHECK_INTERVAL_SECONDS = 60.0
 DEFAULT_MAX_CONCURRENCY = 4

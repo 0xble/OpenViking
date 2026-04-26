@@ -66,9 +66,16 @@ def make_consolidator(
 
     archiver = MagicMock()
     archiver.scan = AsyncMock(return_value=archive_candidates or [])
-    archiver.archive = AsyncMock(
-        return_value=ArchivalResult(scanned=0, archived=0, skipped=0, errors=0)
-    )
+
+    async def _archive(candidates, **_kwargs):
+        return ArchivalResult(
+            scanned=len(candidates),
+            archived=len(candidates),
+            skipped=0,
+            errors=0,
+        )
+
+    archiver.archive = AsyncMock(side_effect=_archive)
 
     service = None
     if with_service:

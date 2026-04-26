@@ -3,7 +3,9 @@
 """Maintenance endpoints for OpenViking HTTP Server."""
 
 import asyncio
-from typing import List, Optional
+import hashlib
+import json
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Body
 from pydantic import BaseModel, Field
@@ -21,6 +23,7 @@ router = APIRouter(prefix="/api/v1/maintenance", tags=["maintenance"])
 # ---------- Memory consolidation (Phase C + D) ----------
 
 CONSOLIDATE_TASK_TYPE = "memory_consolidation"
+MEMORY_MAINTENANCE_TASK_TYPE = "memory_maintenance"
 
 
 class CanarySpec(BaseModel):
@@ -45,6 +48,16 @@ class ConsolidateRequest(BaseModel):
     canaries: Optional[List[CanarySpec]] = None
 
 
+class MemoryMaintenanceRequest(BaseModel):
+    """Request a manual memory maintenance pass."""
+
+    scope: Optional[str] = None
+    dry_run: bool = True
+    wait: bool = True
+    limit: int = Field(default=10, ge=1, le=50)
+    canaries: Optional[List[CanarySpec]] = None
+
+
 def _build_consolidator(service, ctx: RequestContext):
     """Construct a MemoryConsolidator wired to the live service."""
     from openviking.maintenance import MemoryConsolidator
@@ -65,6 +78,12 @@ def _build_consolidator(service, ctx: RequestContext):
     )
 
 
+def _build_maintenance_manager(service):
+    from openviking.maintenance import MemoryMaintenanceManager
+
+    return MemoryMaintenanceManager(viking_fs=service.viking_fs)
+
+
 @router.post("/consolidate")
 async def consolidate(
     request: ConsolidateRequest = Body(...),
@@ -72,7 +91,7 @@ async def consolidate(
 ):
     """Consolidate memories under a scope URI.
 
-    Runs the dream-style janitor pass: cluster duplicates, LLM-merge,
+    Runs a manual memory lifecycle pass: cluster duplicates, LLM-merge,
     archive cold entries, refresh overview. dry_run=true returns the
     plan without writes. wait=false enqueues and returns a task_id for
     polling via the task API. Optional canaries run pre/post and set
@@ -228,6 +247,202 @@ async def _background_consolidate_tracked(
     except Exception as exc:
         tracker.fail(task_id, str(exc))
         logger.exception("Background consolidation failed: uri=%s task=%s", uri, task_id)
+
+
+@router.get("/memory/scopes")
+async def list_memory_maintenance_scopes(
+    active_only: bool = True,
+    limit: int = 100,
+    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+):
+    """List persisted dirty memory scopes from memory_diff.json processing."""
+    service = get_service()
+    manager = _build_maintenance_manager(service)
+    scopes = await manager.list_scopes(
+        active_only=active_only,
+        account_id=_ctx.account_id,
+        user_id=_ctx.user.user_id,
+        limit=limit,
+    )
+    return Response(
+        status="ok",
+        result={
+            "scopes": [scope.to_dict() for scope in scopes],
+            "active_only": active_only,
+        },
+    )
+
+
+@router.post("/memory/run")
+async def run_memory_maintenance(
+    request: MemoryMaintenanceRequest = Body(...),
+    _ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+):
+    """Run manual memory maintenance for one scope or the current dirty scopes."""
+    from openviking.service.task_tracker import get_task_tracker
+
+    service = get_service()
+    manager = _build_maintenance_manager(service)
+    scope_uris = await _resolve_maintenance_scopes(manager, request, _ctx)
+    if not scope_uris:
+        return Response(
+            status="ok",
+            result={"status": "noop", "scopes": [], "dry_run": request.dry_run},
+        )
+
+    resource_id = _maintenance_resource_id(scope_uris)
+    tracker = get_task_tracker()
+    if request.wait:
+        if tracker.has_running(
+            MEMORY_MAINTENANCE_TASK_TYPE,
+            resource_id,
+            owner_account_id=_ctx.account_id,
+            owner_user_id=_ctx.user.user_id,
+        ):
+            return Response(
+                status="error",
+                error=ErrorInfo(
+                    code="CONFLICT",
+                    message="Selected memory scopes already have maintenance in progress",
+                ),
+            )
+        runs = await _run_memory_maintenance_scopes(
+            service,
+            manager,
+            scope_uris,
+            request.dry_run,
+            _ctx,
+            _canaries_from_request(request.canaries),
+        )
+        return Response(
+            status="ok",
+            result={"status": "completed", "dry_run": request.dry_run, "runs": runs},
+        )
+
+    task = tracker.create_if_no_running(
+        MEMORY_MAINTENANCE_TASK_TYPE,
+        resource_id,
+        owner_account_id=_ctx.account_id,
+        owner_user_id=_ctx.user.user_id,
+    )
+    if task is None:
+        return Response(
+            status="error",
+            error=ErrorInfo(
+                code="CONFLICT",
+                message="Selected memory scopes already have maintenance in progress",
+            ),
+        )
+
+    asyncio.create_task(
+        _background_memory_maintenance_tracked(
+            service,
+            scope_uris,
+            request.dry_run,
+            _ctx,
+            task.task_id,
+            _canaries_from_request(request.canaries),
+        )
+    )
+    return Response(
+        status="ok",
+        result={
+            "status": "accepted",
+            "task_id": task.task_id,
+            "scopes": scope_uris,
+            "dry_run": request.dry_run,
+        },
+    )
+
+
+async def _resolve_maintenance_scopes(
+    manager,
+    request: MemoryMaintenanceRequest,
+    ctx: RequestContext,
+) -> List[str]:
+    if request.scope:
+        return [request.scope]
+    scopes = await manager.list_scopes(
+        active_only=True,
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+        limit=request.limit,
+    )
+    return [scope.scope_uri for scope in scopes]
+
+
+def _maintenance_resource_id(scope_uris: List[str]) -> str:
+    encoded = json.dumps(sorted(scope_uris), ensure_ascii=False, separators=(",", ":"))
+    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
+    return f"memory-scopes:{digest}"
+
+
+async def _run_memory_maintenance_scopes(
+    service,
+    manager,
+    scope_uris: List[str],
+    dry_run: bool,
+    ctx: RequestContext,
+    canaries=None,
+) -> List[dict[str, Any]]:
+    consolidator = _build_consolidator(service, ctx)
+    runs: List[dict[str, Any]] = []
+    errors: List[tuple[str, str]] = []
+    for scope_uri in scope_uris:
+        try:
+            scope_state = await manager.get_scope(scope_uri)
+            result = await consolidator.run(
+                scope_uri,
+                ctx,
+                dry_run=dry_run,
+                canaries=canaries,
+                target_uris=scope_state.dirty_uris if scope_state else None,
+            )
+            await manager.mark_run_complete(
+                scope_uri,
+                audit_uri=result.audit_uri,
+                dry_run=dry_run,
+            )
+            runs.append(_consolidation_payload(result))
+        except Exception as exc:
+            await manager.mark_run_failed(scope_uri, str(exc))
+            errors.append((scope_uri, str(exc)))
+            continue
+    if errors:
+        detail = "; ".join(f"{scope_uri}: {message}" for scope_uri, message in errors)
+        raise RuntimeError(f"Memory maintenance failed for {len(errors)} scope(s): {detail}")
+    return runs
+
+
+async def _background_memory_maintenance_tracked(
+    service,
+    scope_uris: List[str],
+    dry_run: bool,
+    ctx: RequestContext,
+    task_id: str,
+    canaries=None,
+) -> None:
+    from openviking.service.task_tracker import get_task_tracker
+
+    tracker = get_task_tracker()
+    tracker.start(task_id)
+    manager = _build_maintenance_manager(service)
+    try:
+        runs = await _run_memory_maintenance_scopes(
+            service,
+            manager,
+            scope_uris,
+            dry_run,
+            ctx,
+            canaries,
+        )
+        tracker.complete(
+            task_id,
+            {"status": "completed", "dry_run": dry_run, "runs": runs},
+        )
+    except Exception as exc:
+        tracker.fail(task_id, str(exc))
+        logger.exception("Background memory maintenance failed: task=%s", task_id)
 
 
 def _consolidation_payload(result) -> dict:

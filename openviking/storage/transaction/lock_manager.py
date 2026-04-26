@@ -140,10 +140,11 @@ class LockManager:
 
         # 对路径进行排序，确保加锁顺序一致
         sorted_paths = sorted(paths, key=lambda x: (len(x), x))
-        acquired = []
+        acquired_lock_paths: List[str] = []
 
         try:
             for path in sorted_paths:
+                existing_lock_paths = set(handle.locks)
                 success = await self._path_lock.acquire_subtree(
                     path,
                     handle,
@@ -151,18 +152,21 @@ class LockManager:
                 )
                 if not success:
                     # 释放已获得的锁
-                    for p in acquired:
-                        await self._path_lock.release_subtree(p, handle)
+                    await self.release_selected(handle, acquired_lock_paths)
                     return False
-                acquired.append(path)
+                acquired_lock_paths.extend(
+                    lock_path
+                    for lock_path in handle.locks
+                    if lock_path not in existing_lock_paths
+                    and lock_path not in acquired_lock_paths
+                )
 
             self._mark_handle_active(handle)
             return True
 
         except Exception as e:
             logger.error(f"Failed to acquire subtree batch lock: {e}")
-            for p in acquired:
-                await self._path_lock.release_subtree(p, handle)
+            await self.release_selected(handle, acquired_lock_paths)
             return False
 
     async def acquire_mv(

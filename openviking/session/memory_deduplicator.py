@@ -59,6 +59,50 @@ class ExistingMemoryAction:
 
 
 @dataclass
+class DedupDiagnostics:
+    """Operational diagnostics for one dedup attempt.
+
+    This is intentionally compact and JSON-friendly so callers can attach it
+    to task/archive metadata when investigating duplicate-memory reports.
+    """
+
+    category: str = ""
+    owner_space: str | None = None
+    category_uri_prefix: str = ""
+    vikingdb_configured: bool = True
+    embedder_configured: bool = True
+    vector_searches: int = 0
+    vector_scored: int = 0
+    vector_passed: int = 0
+    batch_scored: int = 0
+    batch_passed: int = 0
+    llm_available: bool = False
+    llm_decision: str = ""
+    llm_action_count: int = 0
+    skipped_reason: str = ""
+    error: str = ""
+
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "category": self.category,
+            "owner_space": self.owner_space,
+            "category_uri_prefix": self.category_uri_prefix,
+            "vikingdb_configured": self.vikingdb_configured,
+            "embedder_configured": self.embedder_configured,
+            "vector_searches": self.vector_searches,
+            "vector_scored": self.vector_scored,
+            "vector_passed": self.vector_passed,
+            "batch_scored": self.batch_scored,
+            "batch_passed": self.batch_passed,
+            "llm_available": self.llm_available,
+            "llm_decision": self.llm_decision,
+            "llm_action_count": self.llm_action_count,
+            "skipped_reason": self.skipped_reason,
+            "error": self.error,
+        }
+
+
+@dataclass
 class DedupResult:
     """Result of deduplication decision."""
 
@@ -68,6 +112,7 @@ class DedupResult:
     actions: Optional[List[ExistingMemoryAction]] = None
     reason: str = ""
     query_vector: list[float] | None = None  # For batch-internal dedup tracking
+    diagnostics: DedupDiagnostics | None = None
 
 
 class ClusterDecisionType(str, Enum):
@@ -157,16 +202,22 @@ class MemoryDeduplicator:
         strict_errors: bool = False,
     ) -> DedupResult:
         """Decide how to handle a candidate memory."""
+        diagnostics = DedupDiagnostics(category=candidate.category.value)
+
         # Step 1: Vector pre-filtering - find similar memories in same category
         similar_memories, query_vector = await self._find_similar_memories(
             candidate,
             ctx=ctx,
             batch_memories=batch_memories,
             strict_errors=strict_errors,
+            diagnostics=diagnostics,
         )
 
         if not similar_memories:
             # No similar memories, create directly
+            diagnostics.llm_decision = DedupDecision.CREATE.value
+            if not diagnostics.skipped_reason:
+                diagnostics.skipped_reason = "no_similar_memories"
             return DedupResult(
                 decision=DedupDecision.CREATE,
                 candidate=candidate,
@@ -174,10 +225,17 @@ class MemoryDeduplicator:
                 actions=[],
                 reason="No similar memories found",
                 query_vector=query_vector,
+                diagnostics=diagnostics,
             )
 
         # Step 2: LLM decision
-        decision, reason, actions = await self._llm_decision(candidate, similar_memories)
+        decision, reason, actions = await self._llm_decision(
+            candidate,
+            similar_memories,
+            diagnostics,
+        )
+        diagnostics.llm_decision = decision.value
+        diagnostics.llm_action_count = len(actions)
 
         return DedupResult(
             decision=decision,
@@ -186,6 +244,7 @@ class MemoryDeduplicator:
             actions=None if decision == DedupDecision.SKIP else actions,
             reason=reason,
             query_vector=query_vector,
+            diagnostics=diagnostics,
         )
 
     async def _find_similar_memories(
@@ -195,6 +254,7 @@ class MemoryDeduplicator:
         *,
         batch_memories: list[tuple[list[float], Context]] | None = None,
         strict_errors: bool = False,
+        diagnostics: DedupDiagnostics | None = None,
     ) -> tuple[list[Context], list[float]]:
         """Find similar existing memories using vector search.
 
@@ -203,13 +263,22 @@ class MemoryDeduplicator:
         """
         telemetry = get_current_telemetry()
         query_vector: list[float] = []  # Initialize early for safe returns
+        if diagnostics is None:
+            diagnostics = DedupDiagnostics(category=candidate.category.value)
+        telemetry.set("memory.dedup.category", candidate.category.value)
 
         if self.vikingdb is None:
+            diagnostics.vikingdb_configured = False
+            diagnostics.skipped_reason = "missing_vikingdb"
+            telemetry.count("memory.dedup.skipped.missing_vikingdb", 1)
             if strict_errors:
                 raise RuntimeError("Memory dedup requires VikingDBManager")
             return [], query_vector
 
         if not self.embedder:
+            diagnostics.embedder_configured = False
+            diagnostics.skipped_reason = "missing_embedder"
+            telemetry.count("memory.dedup.skipped.missing_embedder", 1)
             if strict_errors:
                 raise RuntimeError("Memory dedup requires an embedder")
             return [], query_vector
@@ -221,6 +290,8 @@ class MemoryDeduplicator:
 
         owner_space = self._owner_space(candidate.category.value, ctx)
         category_uri_prefix = self._category_uri_prefix(candidate.category.value, ctx)
+        diagnostics.owner_space = owner_space
+        diagnostics.category_uri_prefix = category_uri_prefix
         logger.debug(
             "Dedup prefilter candidate category=%s owner_space=%s uri_prefix=%s",
             candidate.category.value,
@@ -237,9 +308,13 @@ class MemoryDeduplicator:
                 limit=5,
                 ctx=ctx,
             )
+            diagnostics.vector_searches += 1
+            diagnostics.vector_scored += len(results)
             telemetry.count("vector.searches", 1)
             telemetry.count("vector.scored", len(results))
             telemetry.count("vector.scanned", len(results))
+            telemetry.count("memory.dedup.vector.searches", 1)
+            telemetry.count("memory.dedup.vector.scored", len(results))
 
             # Filter by similarity threshold
             similar = []
@@ -257,7 +332,9 @@ class MemoryDeduplicator:
                     result.get("abstract", ""),
                 )
                 if score >= self.SIMILARITY_THRESHOLD:
+                    diagnostics.vector_passed += 1
                     telemetry.count("vector.passed", 1)
+                    telemetry.count("memory.dedup.vector.passed", 1)
                     # Reconstruct Context object
                     context = Context.from_dict(result)
                     if context:
@@ -275,8 +352,12 @@ class MemoryDeduplicator:
                 for batch_vec, batch_ctx in batch_memories:
                     if batch_ctx.uri in seen_uris:
                         continue
+                    diagnostics.batch_scored += 1
+                    telemetry.count("memory.dedup.batch.scored", 1)
                     score = self._cosine_similarity(query_vector, batch_vec)
                     if score >= self.SIMILARITY_THRESHOLD:
+                        diagnostics.batch_passed += 1
+                        telemetry.count("memory.dedup.batch.passed", 1)
                         ctx_copy = copy.copy(batch_ctx)
                         ctx_copy.meta = {**(batch_ctx.meta or {}), "_dedup_score": score}
                         similar.append(ctx_copy)
@@ -286,9 +367,14 @@ class MemoryDeduplicator:
         except asyncio.CancelledError as e:
             if not self._is_shutdown_in_progress():
                 raise
+            diagnostics.error = str(e)
+            diagnostics.skipped_reason = "cancelled_during_shutdown"
             logger.warning(f"Vector search cancelled during dedup prefilter: {e}")
             return [], query_vector
         except Exception as e:
+            diagnostics.error = str(e)
+            diagnostics.skipped_reason = "vector_search_failed"
+            telemetry.count("memory.dedup.vector.errors", 1)
             if strict_errors:
                 raise RuntimeError(f"Memory dedup vector search failed: {e}") from e
             logger.warning(f"Vector search failed: {e}")
@@ -298,12 +384,20 @@ class MemoryDeduplicator:
         self,
         candidate: CandidateMemory,
         similar_memories: List[Context],
+        diagnostics: DedupDiagnostics | None = None,
     ) -> tuple[DedupDecision, str, List[ExistingMemoryAction]]:
         """Use LLM to decide deduplication action."""
+        if diagnostics is None:
+            diagnostics = DedupDiagnostics(category=candidate.category.value)
         vlm = get_openviking_config().vlm
         if not vlm or not vlm.is_available():
             # Without LLM, default to CREATE (conservative)
+            diagnostics.llm_available = False
+            diagnostics.llm_decision = DedupDecision.CREATE.value
+            diagnostics.skipped_reason = "missing_llm"
+            get_current_telemetry().count("memory.dedup.llm.unavailable", 1)
             return DedupDecision.CREATE, "LLM not available, defaulting to CREATE", []
+        diagnostics.llm_available = True
 
         # Format existing memories for prompt
         existing_formatted = []
@@ -357,14 +451,25 @@ class MemoryDeduplicator:
             logger.debug("Dedup LLM raw response: %s", response)
             data = parse_json_from_response(response) or {}
             logger.debug("Dedup LLM parsed payload: %s", data)
-            return self._parse_decision_payload(data, similar_memories, candidate)
+            decision, reason, actions = self._parse_decision_payload(
+                data, similar_memories, candidate
+            )
+            diagnostics.llm_decision = decision.value
+            diagnostics.llm_action_count = len(actions)
+            get_current_telemetry().count(f"memory.dedup.llm.decision.{decision.value}", 1)
+            return decision, reason, actions
 
         except asyncio.CancelledError as e:
             if not self._is_shutdown_in_progress():
                 raise
+            diagnostics.error = str(e)
+            diagnostics.skipped_reason = "llm_cancelled_during_shutdown"
             logger.warning(f"LLM dedup decision cancelled: {e}")
             return DedupDecision.CREATE, f"LLM cancelled: {e}", []
         except Exception as e:
+            diagnostics.error = str(e)
+            diagnostics.skipped_reason = "llm_failed"
+            get_current_telemetry().count("memory.dedup.llm.errors", 1)
             logger.warning(f"LLM dedup decision failed: {e}")
             return DedupDecision.CREATE, f"LLM failed: {e}", []
 

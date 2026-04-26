@@ -95,7 +95,6 @@ async def test_mkdir_with_description_initializes_abstract_and_enqueues_l0(
     assert seen["abstract"] == description
     assert seen["overview"] == ""
     assert seen["context_type"] == "resource"
-    assert seen["include_overview"] is False
     assert seen["ctx"] is not None
 
 

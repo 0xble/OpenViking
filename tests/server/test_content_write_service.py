@@ -140,8 +140,9 @@ async def test_memory_write_vector_refresh_includes_generated_summary(monkeypatc
         ctx,
         semantic_msg_id=None,
         use_summary=False,
+        preserve_existing_created_at=False,
     ):
-        del ctx, semantic_msg_id, use_summary
+        del ctx, semantic_msg_id, use_summary, preserve_existing_created_at
         captured["file_path"] = file_path
         captured["summary_dict"] = summary_dict
         captured["parent_uri"] = parent_uri
@@ -233,12 +234,13 @@ async def test_write_timeout_after_enqueue_does_not_release_resource_lock(monkey
         del kwargs
         return None
 
-    async def _fake_wait_for_queues(*, timeout):
+    async def _fake_wait_for_request(*, telemetry_id, timeout):
+        del telemetry_id
         raise DeadlineExceededError("queue processing", timeout)
 
     monkeypatch.setattr(coordinator, "_prepare_temp_write", _fake_prepare_temp_write)
     monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
-    monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
+    monkeypatch.setattr(coordinator, "_wait_for_request", _fake_wait_for_request)
 
     with pytest.raises(DeadlineExceededError):
         await coordinator.write(
@@ -278,13 +280,14 @@ async def test_memory_write_timeout_after_enqueue_does_not_release_lock(monkeypa
         del kwargs
         return None
 
-    async def _fake_wait_for_queues(*, timeout):
+    async def _fake_wait_for_request(*, telemetry_id, timeout):
+        del telemetry_id
         raise DeadlineExceededError("queue processing", timeout)
 
     monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
     monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
     monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
-    monkeypatch.setattr(coordinator, "_wait_for_queues", _fake_wait_for_queues)
+    monkeypatch.setattr(coordinator, "_wait_for_request", _fake_wait_for_request)
 
     with pytest.raises(DeadlineExceededError):
         await coordinator.write(
@@ -303,10 +306,17 @@ async def test_memory_write_timeout_after_enqueue_does_not_release_lock(monkeypa
 class _FakeVikingFSForCreate:
     """Variant of _FakeVikingFS that supports 'file doesn't exist' scenarios."""
 
-    def __init__(self, file_uri: str, root_uri: str, file_exists: bool = True):
+    def __init__(
+        self,
+        file_uri: str,
+        root_uri: str,
+        file_exists: bool = True,
+        not_found_exception: Exception | None = None,
+    ):
         self._file_uri = file_uri
         self._root_uri = root_uri
         self._file_exists = file_exists
+        self._not_found_exception = not_found_exception
         self.delete_temp_calls = []
         self.write_file_calls = []
 
@@ -315,6 +325,8 @@ class _FakeVikingFSForCreate:
         if uri == self._file_uri:
             if self._file_exists:
                 return {"isDir": False}
+            if self._not_found_exception:
+                raise self._not_found_exception
             raise NotFoundError(uri, "file")
         if uri == self._root_uri:
             return {"isDir": True}
@@ -376,6 +388,42 @@ async def test_create_mode_new_file_success(monkeypatch):
     )
 
     assert result["mode"] == "create"
+
+
+@pytest.mark.asyncio
+async def test_create_mode_treats_runtime_not_found_as_missing(monkeypatch):
+    file_uri = "viking://user/default/memories/new_file.md"
+    root_uri = "viking://user/default/memories"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFSForCreate(
+        file_uri=file_uri,
+        root_uri=root_uri,
+        file_exists=False,
+        not_found_exception=RuntimeError("not found: /default/user/default/memories/new_file.md"),
+    )
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    lock_manager = _FakeLockManager()
+
+    monkeypatch.setattr("openviking.storage.content_write.get_lock_manager", lambda: lock_manager)
+
+    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
+        del uri, context_type, ctx
+        return None
+
+    async def _fake_enqueue_memory_refresh(**kwargs):
+        del kwargs
+        return None
+
+    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
+    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
+
+    result = await coordinator.write(
+        uri=file_uri, content="new content", mode="create", ctx=ctx, wait=False
+    )
+
+    assert result["mode"] == "create"
+    assert result["created"] is True
+    assert viking_fs.write_file_calls == [(file_uri, "new content")]
 
 
 @pytest.mark.asyncio

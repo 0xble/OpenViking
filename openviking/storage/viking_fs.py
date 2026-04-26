@@ -34,6 +34,7 @@ from openviking.pyagfs.exceptions import AGFSClientError, AGFSDirectoryNotEmptyE
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error, map_exception
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.memory_maintenance_control import is_memory_maintenance_control_uri
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.search_filters import matches_entry_time_bounds, resolve_time_bounds
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
@@ -1572,7 +1573,9 @@ class VikingFS:
             return True
         if not parts:
             return True
-        if is_watch_task_control_uri(normalized_uri):
+        if is_watch_task_control_uri(normalized_uri) or is_memory_maintenance_control_uri(
+            normalized_uri
+        ):
             return False
 
         scope = parts[0]

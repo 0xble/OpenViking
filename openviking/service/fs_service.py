@@ -123,7 +123,6 @@ class FSService:
             overview="",
             context_type=get_context_type_for_uri(directory_uri),
             ctx=ctx,
-            include_overview=False,
         )
 
     @staticmethod

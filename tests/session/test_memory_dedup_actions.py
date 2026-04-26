@@ -155,6 +155,45 @@ class TestMemoryDeduplicatorPayload:
         with pytest.raises(RuntimeError, match="Memory dedup vector search failed"):
             await dedup.deduplicate(_make_candidate(), _make_ctx(), strict_errors=True)
 
+    @pytest.mark.asyncio
+    async def test_dedup_result_reports_missing_embedder_diagnostics(self):
+        dedup = _make_dedup(vikingdb=MagicMock(), embedder=None)
+
+        result = await dedup.deduplicate(_make_candidate(), _make_ctx())
+
+        assert result.diagnostics is not None
+        assert result.diagnostics.embedder_configured is False
+        assert result.diagnostics.skipped_reason == "missing_embedder"
+        assert result.diagnostics.llm_decision == "create"
+
+    @pytest.mark.asyncio
+    async def test_dedup_result_reports_vector_and_llm_diagnostics(self):
+        existing = _make_existing("diag.md")
+        vikingdb = MagicMock()
+        vikingdb.search_similar_memories = AsyncMock(
+            return_value=[
+                {
+                    "uri": existing.uri,
+                    "context_type": "memory",
+                    "level": 2,
+                    "abstract": existing.abstract,
+                    "_score": 0.9,
+                }
+            ]
+        )
+        dedup = _make_dedup(vikingdb=vikingdb, embedder=_DummyEmbedder())
+        dedup._llm_decision = AsyncMock(
+            return_value=(DedupDecision.SKIP, "duplicate", [])
+        )
+
+        result = await dedup.deduplicate(_make_candidate(), _make_ctx())
+
+        assert result.diagnostics is not None
+        assert result.diagnostics.vector_searches == 1
+        assert result.diagnostics.vector_scored == 1
+        assert result.diagnostics.vector_passed == 1
+        assert result.diagnostics.llm_decision == "skip"
+
     def test_cross_facet_delete_actions_are_kept(self):
         dedup = MemoryDeduplicator(vikingdb=_DummyVikingDB())
         food = _make_existing("food.md")
@@ -864,9 +903,9 @@ class TestSessionCompressorDedupActions:
         original_llm_decision = compressor.deduplicator._llm_decision
         llm_decision_calls = []
 
-        async def _spy_llm_decision(candidate, similar_memories):
+        async def _spy_llm_decision(candidate, similar_memories, diagnostics=None):
             llm_decision_calls.append(similar_memories)
-            return await original_llm_decision(candidate, similar_memories)
+            return await original_llm_decision(candidate, similar_memories, diagnostics)
 
         compressor.deduplicator._llm_decision = _spy_llm_decision
 

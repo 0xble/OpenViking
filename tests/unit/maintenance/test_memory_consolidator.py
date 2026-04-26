@@ -3,25 +3,20 @@
 """Tests for MemoryConsolidator orchestrator."""
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from openviking.maintenance.memory_consolidator import (
     AUDIT_PATH_FRAGMENT,
     ConsolidationResult,
-    MemoryConsolidator,
 )
 from openviking.session.memory_deduplicator import (
     ClusterDecision,
     ClusterDecisionType,
 )
 from tests.unit.conftest import make_test_context as _ctx
-from tests.unit.maintenance.conftest import (
-    make_consolidator,
-    make_request_ctx,
-    noop_lock,
-)
+from tests.unit.maintenance.conftest import make_consolidator, make_request_ctx
 
 
 # Local aliases keep the existing test bodies untouched.
@@ -30,7 +25,6 @@ def _make_consolidator(**kwargs):
 
 
 _make_request_ctx = make_request_ctx
-_noop_lock = noop_lock
 
 
 class TestRunHappyPath:
@@ -47,15 +41,11 @@ class TestRunHappyPath:
             ]
         )
 
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
-        ):
-            result = await consolidator.run(
-                "viking://agent/a/memories/patterns/",
-                _make_request_ctx(),
-                dry_run=True,
-            )
+        result = await consolidator.run(
+            "viking://agent/a/memories/patterns/",
+            _make_request_ctx(),
+            dry_run=True,
+        )
 
         assert result.dry_run is True
         assert result.candidates["merge_clusters"] == 1
@@ -65,7 +55,28 @@ class TestRunHappyPath:
         consolidator.viking_fs.write.assert_called_once()  # audit only
 
     @pytest.mark.asyncio
-    async def test_keep_and_merge_writes_keeper_and_deletes_sources(self):
+    async def test_targeted_dry_run_skips_full_archive_scan(self):
+        consolidator = _make_consolidator(archive_candidates=[MagicMock()])
+        consolidator._cluster_scope = AsyncMock(return_value=[])
+        target_uris = ["viking://agent/a/memories/skills/changed.md"]
+        ctx = _make_request_ctx()
+
+        await consolidator.run(
+            "viking://agent/a/memories/skills/",
+            ctx,
+            dry_run=True,
+            target_uris=target_uris,
+        )
+
+        consolidator.archiver.scan.assert_not_called()
+        consolidator._cluster_scope.assert_awaited_once_with(
+            "viking://agent/a/memories/skills/",
+            ctx,
+            target_uris=target_uris,
+        )
+
+    @pytest.mark.asyncio
+    async def test_keep_and_merge_writes_keeper_and_archives_sources(self):
         cluster = [
             _ctx("viking://agent/a/memories/patterns/keeper"),
             _ctx("viking://agent/a/memories/patterns/dup"),
@@ -82,22 +93,19 @@ class TestRunHappyPath:
         consolidator = _make_consolidator(cluster_decision=decision)
         consolidator._cluster_scope = AsyncMock(return_value=[cluster])
 
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
-        ):
-            result = await consolidator.run(
-                "viking://agent/a/memories/patterns/",
-                _make_request_ctx(),
-            )
+        result = await consolidator.run(
+            "viking://agent/a/memories/patterns/",
+            _make_request_ctx(),
+        )
 
         # keeper write + audit = 2
         assert consolidator.viking_fs.write.call_count == 2
-        consolidator.viking_fs.rm.assert_called_once()
-        rm_call = consolidator.viking_fs.rm.call_args
-        assert rm_call.args[0] == "viking://agent/a/memories/patterns/dup"
-        assert "ctx" in rm_call.kwargs
-        assert "lock_handle" in rm_call.kwargs
+        consolidator.viking_fs.rm.assert_not_called()
+        consolidator.archiver.archive.assert_awaited_once()
+        archive_candidates = consolidator.archiver.archive.await_args.args[0]
+        assert [c.uri for c in archive_candidates] == [
+            "viking://agent/a/memories/patterns/dup"
+        ]
         assert result.ops_applied["merged"] == 1
         assert "viking://agent/a/memories/patterns/keeper" in result.applied_uris
         assert "viking://agent/a/memories/patterns/dup" in result.applied_uris
@@ -121,14 +129,10 @@ class TestRunHappyPath:
         consolidator = _make_consolidator(cluster_decision=decision)
         consolidator._cluster_scope = AsyncMock(return_value=[cluster])
 
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
-        ):
-            result = await consolidator.run(
-                "viking://agent/a/memories/patterns/",
-                _make_request_ctx(),
-            )
+        result = await consolidator.run(
+            "viking://agent/a/memories/patterns/",
+            _make_request_ctx(),
+        )
 
         consolidator.viking_fs.rm.assert_not_called()
         assert result.ops_applied["merged"] == 0
@@ -136,7 +140,7 @@ class TestRunHappyPath:
         assert any("merge_skipped_empty_content" in e for e in result.errors)
 
     @pytest.mark.asyncio
-    async def test_keep_and_delete_drops_invalidated_members(self):
+    async def test_keep_and_delete_archives_invalidated_members(self):
         cluster = [
             _ctx("viking://agent/a/memories/preferences/k"),
             _ctx("viking://agent/a/memories/preferences/old"),
@@ -151,17 +155,14 @@ class TestRunHappyPath:
         consolidator = _make_consolidator(cluster_decision=decision)
         consolidator._cluster_scope = AsyncMock(return_value=[cluster])
 
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
-        ):
-            result = await consolidator.run(
-                "viking://agent/a/memories/preferences/",
-                _make_request_ctx(),
-            )
+        result = await consolidator.run(
+            "viking://agent/a/memories/preferences/",
+            _make_request_ctx(),
+        )
 
-        consolidator.viking_fs.rm.assert_called_once()
-        assert result.ops_applied["deleted"] == 1
+        consolidator.viking_fs.rm.assert_not_called()
+        assert result.ops_applied["archived"] == 1
+        assert result.ops_applied["deleted"] == 0
         assert result.ops_applied["merged"] == 0
 
 
@@ -170,14 +171,10 @@ class TestEmptyScope:
     async def test_empty_scope_is_clean_noop(self):
         consolidator = _make_consolidator()  # no clusters, no archive
 
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
-        ):
-            result = await consolidator.run(
-                "viking://agent/a/memories/patterns/",
-                _make_request_ctx(),
-            )
+        result = await consolidator.run(
+            "viking://agent/a/memories/patterns/",
+            _make_request_ctx(),
+        )
 
         assert result.candidates["merge_clusters"] == 0
         assert result.candidates["archive"] == 0
@@ -187,6 +184,51 @@ class TestEmptyScope:
         assert not result.partial
         # Audit still written.
         consolidator.viking_fs.write.assert_called_once()
+
+
+class TestTargetedClustering:
+    @pytest.mark.asyncio
+    async def test_targeted_clustering_searches_only_dirty_uri_neighbors(self, monkeypatch):
+        class EmbedResult:
+            dense_vector = [0.1, 0.2, 0.3]
+
+        async def fake_embed_compat(*_args, **_kwargs):
+            return EmbedResult()
+
+        monkeypatch.setattr(
+            "openviking.models.embedder.base.embed_compat",
+            fake_embed_compat,
+        )
+        consolidator = _make_consolidator()
+        consolidator.dedup.embedder = object()
+        consolidator.vikingdb.search_similar_memories = AsyncMock(
+            return_value=[
+                {
+                    "uri": "viking://agent/a/memories/skills/similar.md",
+                    "abstract": "same skill",
+                    "level": 2,
+                    "_score": 0.99,
+                }
+            ]
+        )
+        consolidator.vikingdb.scroll = AsyncMock(
+            side_effect=AssertionError("targeted clustering must not scroll")
+        )
+
+        clusters = await consolidator._cluster_target_uris(
+            "viking://agent/a/memories/skills/",
+            ["viking://agent/a/memories/skills/changed.md"],
+            _make_request_ctx(),
+        )
+
+        assert [[context.uri for context in cluster] for cluster in clusters] == [
+            [
+                "viking://agent/a/memories/skills/changed.md",
+                "viking://agent/a/memories/skills/similar.md",
+            ]
+        ]
+        consolidator.vikingdb.search_similar_memories.assert_awaited_once()
+        consolidator.vikingdb.scroll.assert_not_called()
 
 
 class TestPartialFailure:
@@ -217,19 +259,15 @@ class TestPartialFailure:
 
         consolidator.dedup.consolidate_cluster = AsyncMock(side_effect=consolidate_side_effect)
 
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
-        ):
-            result = await consolidator.run(
-                "viking://agent/a/memories/patterns/",
-                _make_request_ctx(),
-            )
+        result = await consolidator.run(
+            "viking://agent/a/memories/patterns/",
+            _make_request_ctx(),
+        )
 
         assert result.partial is True
         assert any("cluster_failed" in e for e in result.errors)
         # Good cluster's delete still applied.
-        assert result.ops_applied["deleted"] == 1
+        assert result.ops_applied["archived"] == 1
 
 
 class TestAuditRecord:
@@ -237,14 +275,10 @@ class TestAuditRecord:
     async def test_audit_uri_is_account_scoped_and_payload_is_valid_json(self):
         consolidator = _make_consolidator()
 
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
-        ):
-            result = await consolidator.run(
-                "viking://agent/test-account/memories/patterns/",
-                _make_request_ctx("test-account"),
-            )
+        result = await consolidator.run(
+            "viking://agent/test-account/memories/patterns/",
+            _make_request_ctx("test-account"),
+        )
 
         assert result.audit_uri.startswith(
             f"viking://agent/test-account/{AUDIT_PATH_FRAGMENT}/"
@@ -263,14 +297,10 @@ class TestAuditRecord:
         consolidator = _make_consolidator()
         ctx = MagicMock(spec=[])  # no account_id attribute
 
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch("openviking.maintenance.memory_consolidator.get_lock_manager", return_value=MagicMock()),
-        ):
-            result = await consolidator.run(
-                "viking://agent/x/memories/patterns/",
-                ctx,
-            )
+        result = await consolidator.run(
+            "viking://agent/x/memories/patterns/",
+            ctx,
+        )
 
         assert "/agent/default/" in result.audit_uri
 
@@ -297,7 +327,7 @@ class TestReindexRegenerateGate:
         assert consolidator.service.reindex.await_count == 1
         kwargs = consolidator.service.reindex.await_args.kwargs
         assert kwargs["mode"] == expected_mode
-        assert kwargs["lock_already_held"] is True
+        assert kwargs["lock_already_held"] is False
         assert kwargs["uri"] == result.scope_uri
 
     @pytest.mark.asyncio
@@ -307,16 +337,9 @@ class TestReindexRegenerateGate:
         consolidator = make_consolidator(with_service=True)
         consolidator._reindex = AsyncMock()
 
-        with (
-            patch("openviking.maintenance.memory_consolidator.LockContext", _noop_lock),
-            patch(
-                "openviking.maintenance.memory_consolidator.get_lock_manager",
-                return_value=MagicMock(),
-            ),
-        ):
-            await consolidator.run(
-                "viking://agent/a/memories/patterns/",
-                _make_request_ctx("a"),
-            )
+        await consolidator.run(
+            "viking://agent/a/memories/patterns/",
+            _make_request_ctx("a"),
+        )
 
         consolidator._reindex.assert_awaited_once()

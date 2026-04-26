@@ -8,8 +8,10 @@ import os
 from typing import Any, Dict, Optional
 
 from openviking.resource.watch_storage import is_watch_task_control_uri
+from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
 from openviking.session.memory.utils.content import deserialize_full, serialize_with_metadata
+from openviking.storage.memory_maintenance_control import is_memory_maintenance_control_uri
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.transaction import get_lock_manager
@@ -23,6 +25,7 @@ from openviking_cli.exceptions import (
     DeadlineExceededError,
     InvalidArgumentError,
     NotFoundError,
+    PermissionDeniedError,
 )
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
@@ -181,6 +184,10 @@ class ContentWriteCoordinator:
             raise InvalidArgumentError(f"cannot write derived semantic file directly: {uri}")
         if is_watch_task_control_uri(uri):
             raise InvalidArgumentError(f"cannot write watch task control file directly: {uri}")
+        if is_memory_maintenance_control_uri(uri):
+            raise InvalidArgumentError(
+                f"cannot write memory maintenance control file directly: {uri}"
+            )
 
         parsed = VikingURI(uri)
         if parsed.scope not in {"resources", "user", "agent"}:
@@ -190,12 +197,7 @@ class ContentWriteCoordinator:
         """Check if an exception indicates a not-found error."""
         if isinstance(exc, NotFoundError):
             return True
-        try:
-            from openviking.pyagfs import AGFSNotFoundError
-
-            return isinstance(exc, AGFSNotFoundError)
-        except ImportError:
-            return False
+        return is_not_found_error(exc)
 
     async def _safe_stat(
         self,
@@ -206,6 +208,10 @@ class ContentWriteCoordinator:
     ) -> Dict[str, Any]:
         try:
             return await self._viking_fs.stat(uri, ctx=ctx)
+        except PermissionDeniedError as exc:
+            if allow_not_found:
+                raise NotFoundError(uri, "file") from exc
+            raise
         except Exception as exc:
             if self._is_not_found(exc):
                 if allow_not_found:
