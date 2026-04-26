@@ -74,3 +74,34 @@ async def test_process_memory_directory_reuses_summary_cache(monkeypatch):
     file_summaries = generate_overview.await_args.args[1]
     assert file_summaries == [{"name": "a.txt", "summary": "Cached summary"}]
     assert any(path.endswith("/.summary_cache.json") for path, _ in fake_fs.writes)
+
+
+@pytest.mark.asyncio
+async def test_process_memory_directory_rejects_placeholder_semantics(monkeypatch):
+    fake_fs = _FakeVikingFS()
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: fake_fs,
+    )
+
+    processor = SemanticProcessor(max_concurrent_llm=1)
+    monkeypatch.setattr(
+        processor,
+        "_generate_overview",
+        AsyncMock(return_value="# preferences\n\n[Directory overview is not generated]"),
+    )
+    vectorize_directory = AsyncMock()
+    monkeypatch.setattr(processor, "_vectorize_directory", vectorize_directory)
+
+    msg = SemanticMsg(
+        uri="viking://user/default/memories/preferences",
+        context_type="memory",
+        recursive=False,
+        changes={"added": [], "modified": [], "deleted": []},
+    )
+
+    await processor._process_memory_directory(msg)
+
+    assert not any(path.endswith("/.abstract.md") for path, _ in fake_fs.writes)
+    assert not any(path.endswith("/.overview.md") for path, _ in fake_fs.writes)
+    vectorize_directory.assert_not_called()

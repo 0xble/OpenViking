@@ -145,6 +145,53 @@ class TestUriGeneration:
         with pytest.raises(ValueError, match="has None value"):
             generate_uri(memory_type, {"topic": None})
 
+    def test_generate_uri_rejects_none_path_segments_from_helpers(self):
+        """Test error when helper output renders an invalid None path segment."""
+
+        class EmptyExtractContext:
+            def get_year(self, ranges):
+                return None
+
+            def get_month(self, ranges):
+                return None
+
+            def get_day(self, ranges):
+                return None
+
+        memory_type = MemoryTypeSchema(
+            memory_type="events",
+            description="Event memory",
+            directory="viking://user/{{ user_space }}/memories/events",
+            filename_template=(
+                "{{ extract_context.get_year(ranges) }}/"
+                "{{ extract_context.get_month(ranges) }}/"
+                "{{ extract_context.get_day(ranges) }}/"
+                "{{ event_name }}.md"
+            ),
+            fields=[
+                MemoryField(
+                    name="event_name",
+                    field_type=FieldType.STRING,
+                    description="Event name",
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+                MemoryField(
+                    name="ranges",
+                    field_type=FieldType.STRING,
+                    description="Message ranges",
+                    merge_op=MergeOp.IMMUTABLE,
+                ),
+            ],
+        )
+
+        with pytest.raises(ValueError, match="None path segment"):
+            generate_uri(
+                memory_type,
+                {"event_name": "meeting", "ranges": ""},
+                user_space="default",
+                extract_context=EmptyExtractContext(),
+            )
+
     def test_validate_uri_template_valid(self):
         """Test validating a valid URI template."""
         memory_type = MemoryTypeSchema(

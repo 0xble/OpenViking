@@ -105,6 +105,10 @@ def generate_uri(
     if not uri_template:
         raise ValueError("Memory type has neither directory nor filename_template")
 
+    for key, value in fields.items():
+        if value is None:
+            raise ValueError(f"Template variable '{key}' has None value")
+
     # Build the context for Jinja2 rendering - include user_space and agent_space
     context = {
         "user_space": user_space,
@@ -115,8 +119,18 @@ def generate_uri(
 
     # Render using unified render_template method (same as content_template)
     uri = render_template(uri_template, context, extract_context)
+    _validate_generated_uri(uri)
 
     return uri
+
+
+def _validate_generated_uri(uri: str) -> None:
+    if "{{" in uri or "}}" in uri:
+        raise ValueError(f"Missing template variable in generated URI: {uri}")
+
+    segments = [segment for segment in uri.split("/") if segment]
+    if any(segment == "None" for segment in segments):
+        raise ValueError(f"URI template resolved to None path segment: {uri}")
 
 
 def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:
@@ -440,6 +454,25 @@ def resolve_all_operations(
                     # All operations go to unified list - will read existing file first
                     resolved.operations.append(
                         ResolvedOperation(model=item_dict, uri=uri, memory_type=field_name)
+                    )
+                except Exception as e:
+                    resolved.errors.append(f"Failed to resolve {field_name} operation: {e}")
+    else:
+        for field_name in ("write_uris", "edit_uris"):
+            values = getattr(operations, field_name, None) or []
+            for item in values:
+                try:
+                    item_dict = dict(item) if hasattr(item, "model_dump") else dict(item)
+                    uri = resolve_flat_model_uri(
+                        item_dict,
+                        registry,
+                        user_space,
+                        agent_space,
+                        extract_context=extract_context,
+                    )
+                    memory_type = str(item_dict.get("memory_type", ""))
+                    resolved.operations.append(
+                        ResolvedOperation(model=item_dict, uri=uri, memory_type=memory_type)
                     )
                 except Exception as e:
                     resolved.errors.append(f"Failed to resolve {field_name} operation: {e}")

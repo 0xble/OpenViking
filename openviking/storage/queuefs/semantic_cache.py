@@ -13,6 +13,19 @@ MANAGED_HIDDEN_SEMANTIC_FILES = frozenset(
         SUMMARY_CACHE_FILENAME,
     }
 )
+SEMANTIC_PLACEHOLDER_MARKERS = (
+    "[.abstract.md is not ready]",
+    "[Directory abstract is not ready]",
+    "[Directory overview is not ready]",
+    "[Directory overview is not generated]",
+)
+
+
+def is_semantic_placeholder(content: str) -> bool:
+    """Return true for fallback semantic text that must not be persisted or indexed."""
+    if not isinstance(content, str):
+        return False
+    return any(marker in content for marker in SEMANTIC_PLACEHOLDER_MARKERS)
 
 
 def build_summary_cache(file_summaries: List[Dict[str, str]]) -> Dict[str, str]:

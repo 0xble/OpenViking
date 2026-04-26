@@ -23,6 +23,10 @@ from openviking.service.task_tracker import get_task_tracker
 from openviking.session.memory.utils.messages import parse_memory_file_with_fields
 from openviking.storage.collection_schemas import TextEmbeddingHandler
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking.storage.queuefs.semantic_cache import (
+    MANAGED_HIDDEN_SEMANTIC_FILES,
+    is_semantic_placeholder,
+)
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.transaction import LockContext, get_lock_manager
@@ -204,6 +208,19 @@ class ReindexExecutor:
             raise RuntimeError("OpenVikingService not initialized")
 
         path = service.viking_fs._uri_to_path(uri, ctx=ctx)
+        lock_path = path
+        lock_mode = "subtree"
+        target_stat = await self._safe_stat_for_lock(viking_fs=service.viking_fs, uri=uri, ctx=ctx)
+        if target_stat is not None and not target_stat.get("isDir", target_stat.get("is_dir")):
+            parent_uri = VikingURI(uri.split("#", 1)[0]).parent
+            if parent_uri is None:
+                raise OpenVikingError(
+                    f"Could not resolve reindex lock parent for file URI: {uri}",
+                    code="UNSUPPORTED_URI",
+                    details={"uri": uri},
+                )
+            lock_path = service.viking_fs._uri_to_path(parent_uri.uri, ctx=ctx)
+            lock_mode = "point"
         started_at = time.perf_counter()
         counters = _ReindexCounters()
 
@@ -212,7 +229,7 @@ class ReindexExecutor:
             if lock_already_held:
                 yield
                 return
-            async with LockContext(get_lock_manager(), [path], lock_mode="subtree"):
+            async with LockContext(get_lock_manager(), [lock_path], lock_mode=lock_mode):
                 yield
 
         async with _maybe_lock():
@@ -262,6 +279,15 @@ class ReindexExecutor:
             "duration_ms": int((time.perf_counter() - started_at) * 1000),
             "warnings": counters.warnings,
         }
+
+    async def _safe_stat_for_lock(
+        self, *, viking_fs: Any, uri: str, ctx: RequestContext
+    ) -> dict[str, Any] | None:
+        try:
+            return await viking_fs.stat(uri, ctx=ctx)
+        except Exception:
+            logger.debug("Could not stat reindex target before locking: %s", uri, exc_info=True)
+            return None
 
     async def _run_tracked(
         self,
@@ -358,14 +384,21 @@ class ReindexExecutor:
 
         directories = [uri]
         files: list[str] = []
+        hidden_meta_files: list[str] = []
         for entry in entries:
             entry_uri = entry.get("uri")
             if not entry_uri:
                 continue
             if entry.get("isDir"):
                 directories.append(entry_uri)
-            elif not self._is_hidden_meta_file(entry_uri):
+            elif self._is_hidden_meta_file(entry_uri):
+                hidden_meta_files.append(entry_uri)
+            else:
                 files.append(entry_uri)
+
+        delete_from_vector_store = getattr(viking_fs, "_delete_from_vector_store", None)
+        if hidden_meta_files and delete_from_vector_store is not None:
+            await delete_from_vector_store(hidden_meta_files, ctx=ctx)
 
         await self._reindex_resource_vectors_from_entries(
             root_uri=uri,
@@ -1008,13 +1041,15 @@ class ReindexExecutor:
 
     async def _read_directory_abstract(self, uri: str, *, ctx: RequestContext) -> str:
         try:
-            return await get_viking_fs().abstract(uri, ctx=ctx)
+            abstract = await get_viking_fs().abstract(uri, ctx=ctx)
+            return "" if is_semantic_placeholder(abstract) else abstract
         except Exception:
             return ""
 
     async def _read_directory_overview(self, uri: str, *, ctx: RequestContext) -> str:
         try:
-            return await get_viking_fs().overview(uri, ctx=ctx)
+            overview = await get_viking_fs().overview(uri, ctx=ctx)
+            return "" if is_semantic_placeholder(overview) else overview
         except Exception:
             return ""
 
@@ -1155,10 +1190,11 @@ class ReindexExecutor:
     def _record_abstract(self, record: Optional[dict[str, Any]]) -> str:
         if not record:
             return ""
-        return str(record.get("abstract") or "")
+        abstract = str(record.get("abstract") or "")
+        return "" if is_semantic_placeholder(abstract) else abstract
 
     def _is_hidden_meta_file(self, uri: str) -> bool:
-        return uri.endswith("/.abstract.md") or uri.endswith("/.overview.md")
+        return uri.rsplit("/", 1)[-1] in MANAGED_HIDDEN_SEMANTIC_FILES
 
     def _truncate_embedding_text(self, value: str) -> str:
         max_input_chars = int(

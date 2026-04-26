@@ -32,6 +32,7 @@ from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_cache import (
     MANAGED_HIDDEN_SEMANTIC_FILES,
     SUMMARY_CACHE_FILENAME,
+    is_semantic_placeholder,
     parse_summary_cache,
     serialize_summary_cache,
 )
@@ -52,6 +53,10 @@ from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class SemanticGenerationError(RuntimeError):
+    """Raised when semantic artifacts cannot be generated safely."""
 
 
 @dataclass
@@ -595,9 +600,17 @@ class SemanticProcessor(DequeueHandlerBase):
 
         file_summaries = [s for s in file_summaries if s is not None]
 
-        overview = await self._generate_overview(dir_uri, file_summaries, [], llm_sem=llm_sem)
-        abstract = self._extract_abstract_from_overview(overview)
-        overview, abstract = self._enforce_size_limits(overview, abstract)
+        try:
+            overview = await self._generate_overview(dir_uri, file_summaries, [], llm_sem=llm_sem)
+            abstract = self._extract_abstract_from_overview(overview)
+            overview, abstract = self._enforce_size_limits(overview, abstract)
+            self._validate_semantic_artifacts(dir_uri, overview, abstract)
+        except Exception as e:
+            logger.error(f"Failed to generate abstract/overview for {dir_uri}: {e}", exc_info=True)
+            _mark_failed(str(e))
+            if msg.lifecycle_lock_handle_id:
+                await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
+            return
 
         try:
             await viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=ctx)
@@ -1120,8 +1133,7 @@ class SemanticProcessor(DequeueHandlerBase):
         semantic = config.semantic
 
         if not vlm.is_available():
-            logger.warning("VLM not available, using default overview")
-            return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not ready]"
+            raise SemanticGenerationError(f"VLM not available for semantic overview: {dir_uri}")
 
         from openviking.session.memory.utils.language import resolve_output_language
 
@@ -1236,7 +1248,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 f"Failed to generate overview for {dir_uri}: {e}",
                 exc_info=True,
             )
-            return f"# {dir_uri.split('/')[-1]}\n\n[Directory overview is not generated]"
+            raise SemanticGenerationError(f"Failed to generate overview for {dir_uri}: {e}") from e
 
     async def _batched_generate_overview(
         self,
@@ -1328,7 +1340,7 @@ class SemanticProcessor(DequeueHandlerBase):
         partial_overviews = [p for p in partial_overviews if p is not None]
 
         if not partial_overviews:
-            return f"# {dir_name}\n\n[Directory overview is not generated]"
+            raise SemanticGenerationError(f"Failed to generate any overview batches for {dir_uri}")
 
         # If only one batch succeeded, use it directly
         if len(partial_overviews) == 1:
@@ -1355,6 +1367,14 @@ class SemanticProcessor(DequeueHandlerBase):
                 exc_info=True,
             )
             return partial_overviews[0]
+
+    def _validate_semantic_artifacts(self, uri: str, overview: str, abstract: str) -> None:
+        if not overview.strip():
+            raise SemanticGenerationError(f"Generated blank overview for {uri}")
+        if not abstract.strip():
+            raise SemanticGenerationError(f"Generated blank abstract for {uri}")
+        if is_semantic_placeholder(overview) or is_semantic_placeholder(abstract):
+            raise SemanticGenerationError(f"Generated placeholder semantic artifact for {uri}")
 
     async def _vectorize_directory(
         self,
