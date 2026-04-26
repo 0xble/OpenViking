@@ -177,12 +177,13 @@ class _FakeLockManager:
     def __init__(self):
         self.handle = _FakeHandle("lock-1")
         self.release_calls = []
+        self.acquire_calls = []
 
     def create_handle(self):
         return self.handle
 
-    async def acquire_subtree(self, handle, path):
-        del handle, path
+    async def acquire_subtree(self, handle, path, timeout=None):
+        self.acquire_calls.append({"handle": handle.id, "path": path, "timeout": timeout})
         return True
 
     async def release(self, handle):
@@ -255,6 +256,47 @@ async def test_write_timeout_after_enqueue_does_not_release_resource_lock(monkey
 
 
 @pytest.mark.asyncio
+async def test_resource_write_passes_timeout_to_lock_acquisition(monkeypatch):
+    file_uri = "viking://resources/demo/doc.md"
+    root_uri = "viking://resources/demo"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    lock_manager = _FakeLockManager()
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_lock_manager",
+        lambda: lock_manager,
+    )
+
+    async def _fake_prepare_temp_write(**kwargs):
+        del kwargs
+        return "viking://temp/demo", "viking://temp/demo/doc.md"
+
+    async def _fake_enqueue_semantic_refresh(**kwargs):
+        del kwargs
+        return None
+
+    monkeypatch.setattr(coordinator, "_prepare_temp_write", _fake_prepare_temp_write)
+    monkeypatch.setattr(coordinator, "_enqueue_semantic_refresh", _fake_enqueue_semantic_refresh)
+
+    await coordinator.write(
+        uri=file_uri,
+        content="updated",
+        ctx=ctx,
+        timeout=7.5,
+    )
+
+    assert lock_manager.acquire_calls == [
+        {
+            "handle": "lock-1",
+            "path": "/fake/viking/resources/demo",
+            "timeout": 7.5,
+        }
+    ]
+
+
+@pytest.mark.asyncio
 async def test_memory_write_timeout_after_enqueue_does_not_release_lock(monkeypatch):
     file_uri = "viking://user/default/memories/preferences/theme.md"
     root_uri = "viking://user/default/memories/preferences"
@@ -298,6 +340,52 @@ async def test_memory_write_timeout_after_enqueue_does_not_release_lock(monkeypa
         )
 
     assert lock_manager.release_calls == []
+
+
+@pytest.mark.asyncio
+async def test_memory_write_passes_timeout_to_lock_acquisition(monkeypatch):
+    file_uri = "viking://user/default/memories/preferences/theme.md"
+    root_uri = "viking://user/default/memories/preferences"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    lock_manager = _FakeLockManager()
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_lock_manager",
+        lambda: lock_manager,
+    )
+
+    async def _fake_write_in_place(uri, content, *, mode, ctx):
+        del uri, content, mode, ctx
+        return None
+
+    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
+        del uri, context_type, ctx
+        return None
+
+    async def _fake_enqueue_memory_refresh(**kwargs):
+        del kwargs
+        return None
+
+    monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
+    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
+    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
+
+    await coordinator.write(
+        uri=file_uri,
+        content="updated",
+        ctx=ctx,
+        timeout=4.0,
+    )
+
+    assert lock_manager.acquire_calls == [
+        {
+            "handle": "lock-1",
+            "path": "/fake/viking/user/default/memories/preferences",
+            "timeout": 4.0,
+        }
+    ]
 
 
 # Create-mode test helpers

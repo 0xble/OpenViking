@@ -117,7 +117,7 @@ class ContentWriteCoordinator:
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
         lock_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-        acquired = await lock_manager.acquire_subtree(handle, lock_path)
+        acquired = await lock_manager.acquire_subtree(handle, lock_path, timeout=timeout)
         if not acquired:
             await lock_manager.release(handle)
             raise InvalidArgumentError(
@@ -450,7 +450,7 @@ class ContentWriteCoordinator:
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
         lock_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-        acquired = await lock_manager.acquire_subtree(handle, lock_path)
+        acquired = await lock_manager.acquire_subtree(handle, lock_path, timeout=timeout)
         if not acquired:
             await lock_manager.release(handle)
             raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
@@ -619,7 +619,7 @@ class ContentWriteCoordinator:
         lock_manager = get_lock_manager()
         handle = lock_manager.create_handle()
         lock_path = self._viking_fs._uri_to_path(root_uri, ctx=ctx)
-        acquired = await lock_manager.acquire_subtree(handle, lock_path)
+        acquired = await lock_manager.acquire_subtree(handle, lock_path, timeout=timeout)
         if not acquired:
             await lock_manager.release(handle)
             raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")

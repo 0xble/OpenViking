@@ -195,7 +195,7 @@ class MemoryConsolidator:
                     result.canaries_pre = await self._run_canaries(scope_uri, canaries, ctx)
                 await self._consolidate(clusters, scope_uri, overview, ctx, result)
                 await self._archive(archive_candidates, ctx, result)
-                await self._reindex(scope_uri, ctx, result)
+                await self._reindex(scope_uri, ctx, result, target_uris=target_uris)
                 if canaries:
                     result.canaries_post = await self._run_canaries(scope_uri, canaries, ctx)
                     result.canary_failed = self._canary_regressed(
@@ -314,6 +314,8 @@ class MemoryConsolidator:
                 uri = record.get("uri", "")
                 if not uri.startswith(scope_uri):
                     continue
+                if "#" in uri:
+                    continue
                 if "/_archive/" in uri:
                     continue
                 members[uri] = Context.from_dict(record)
@@ -431,7 +433,7 @@ class MemoryConsolidator:
         clusters: List[List[Context]] = []
         seen_clusters: set[frozenset[str]] = set()
         for uri in dict.fromkeys(target_uris):
-            if not uri.startswith(scope_uri) or "/_archive/" in uri:
+            if not uri.startswith(scope_uri) or "#" in uri or "/_archive/" in uri:
                 continue
             try:
                 body = await self.viking_fs.read(uri, ctx=ctx)
@@ -468,6 +470,8 @@ class MemoryConsolidator:
             for hit in hits:
                 hit_uri = hit.get("uri", "")
                 if not hit_uri or hit_uri == uri or not hit_uri.startswith(scope_uri):
+                    continue
+                if "#" in hit_uri:
                     continue
                 if "/_archive/" in hit_uri:
                     continue
@@ -544,9 +548,7 @@ class MemoryConsolidator:
                     f"for keeper {decision.keeper_uri}; "
                     f"skipping merge to avoid losing sources {decision.merge_into}"
                 )
-                result.errors.append(
-                    f"merge_skipped_empty_content: keeper={decision.keeper_uri}"
-                )
+                result.errors.append(f"merge_skipped_empty_content: keeper={decision.keeper_uri}")
                 result.partial = True
                 result.applied_uris = sorted(applied)
                 return
@@ -615,7 +617,10 @@ class MemoryConsolidator:
         if not candidates:
             return
         archive_result = await self.archiver.archive(candidates, ctx=ctx, dry_run=False)
-        applied.update(archive_result.archived_uris)
+        archived_uris = archive_result.archived_uris or [
+            candidate.uri for candidate in candidates[: archive_result.archived]
+        ]
+        applied.update(archived_uris)
         result.ops_applied[op_key] += archive_result.archived
         if archive_result.errors > 0:
             result.partial = True
@@ -642,27 +647,46 @@ class MemoryConsolidator:
         scope_uri: str,
         ctx: RequestContext,
         result: ConsolidationResult,
+        *,
+        target_uris: Optional[List[str]] = None,
     ) -> None:
-        """Phase 5: rebuild scope overview/abstract after maintenance.
-
-        Only force VLM-backed regeneration when this pass actually mutated the
-        scope. Idle passes re-embed only, which keeps periodic consolidation
-        cheap while still catching genuine staleness on the next mutating pass.
-        """
+        """Phase 5: rebuild scope overview/abstract after maintenance."""
         t0 = time.perf_counter()
+        if not self._has_writes(result):
+            logger.debug("[MemoryConsolidator] no writes applied; skipping reindex")
+            result.phase_durations["reindex"] = 0.0
+            return
         if self.service is None:
             logger.debug("[MemoryConsolidator] no service handle; skipping reindex")
             result.phase_durations["reindex"] = 0.0
             return
-        mode = "semantic_and_vectors" if self._has_writes(result) else "vectors_only"
+        reindex_uris = [scope_uri]
+        if target_uris is not None:
+            reindex_uris = []
+            for uri in result.applied_uris:
+                if "#" in uri:
+                    continue
+                try:
+                    if await self.viking_fs.exists(uri, ctx=ctx):
+                        reindex_uris.append(uri)
+                except Exception as e:
+                    logger.debug(
+                        f"[MemoryConsolidator] reindex existence check failed for {uri}: {e}"
+                    )
+            reindex_uris = sorted(set(reindex_uris))
+            if not reindex_uris:
+                logger.debug("[MemoryConsolidator] no existing applied URIs; skipping reindex")
+                result.phase_durations["reindex"] = 0.0
+                return
         try:
-            await self.service.reindex(
-                uri=scope_uri,
-                mode=mode,
-                wait=True,
-                ctx=ctx,
-                lock_already_held=False,
-            )
+            for uri in reindex_uris:
+                await self.service.reindex(
+                    uri=uri,
+                    mode="semantic_and_vectors",
+                    wait=True,
+                    ctx=ctx,
+                    lock_already_held=False,
+                )
         except Exception as e:
             logger.warning(f"[MemoryConsolidator] reindex failed: {e}")
             result.errors.append(f"reindex_failed: {e}")
@@ -691,18 +715,14 @@ class MemoryConsolidator:
                 top_n=canary.top_n,
             )
             try:
-                hits = await self._search_top_uris(
-                    scope_uri, canary.query, ctx, canary.top_n
-                )
+                hits = await self._search_top_uris(scope_uri, canary.query, ctx, canary.top_n)
                 if hits:
                     result.found_top_uri = hits[0]
                     if canary.expected_top_uri in hits:
                         result.found_in_top_n = True
                         result.found_position = hits.index(canary.expected_top_uri)
             except Exception as e:
-                logger.debug(
-                    f"[MemoryConsolidator] canary query failed: {canary.query!r}: {e}"
-                )
+                logger.debug(f"[MemoryConsolidator] canary query failed: {canary.query!r}: {e}")
             results.append(asdict(result))
         return results
 

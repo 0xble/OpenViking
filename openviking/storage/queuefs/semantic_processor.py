@@ -496,16 +496,19 @@ class SemanticProcessor(DequeueHandlerBase):
             return
 
         file_paths: List[str] = []
+        child_dirs: List[str] = []
         for entry in entries:
             name = entry.get("name", "")
             if not name or name.startswith(".") or name in [".", ".."]:
                 continue
-            if not entry.get("isDir", False):
-                item_uri = VikingURI(dir_uri).join(name).uri
+            item_uri = VikingURI(dir_uri).join(name).uri
+            if entry.get("isDir", False):
+                child_dirs.append(item_uri)
+            else:
                 file_paths.append(item_uri)
 
-        if not file_paths:
-            logger.info(f"No memory files found in {dir_uri}")
+        if not file_paths and not child_dirs:
+            logger.info(f"No memory files or child directories found in {dir_uri}")
             _mark_done()
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
@@ -601,7 +604,16 @@ class SemanticProcessor(DequeueHandlerBase):
         file_summaries = [s for s in file_summaries if s is not None]
 
         try:
-            overview = await self._generate_overview(dir_uri, file_summaries, [], llm_sem=llm_sem)
+            children_abstracts = []
+            if child_dirs:
+                children_abstracts = await self._collect_children_abstracts(child_dirs, ctx=ctx)
+
+            overview = await self._generate_overview(
+                dir_uri,
+                file_summaries,
+                children_abstracts,
+                llm_sem=llm_sem,
+            )
             abstract = self._extract_abstract_from_overview(overview)
             overview, abstract = self._enforce_size_limits(overview, abstract)
             self._validate_semantic_artifacts(dir_uri, overview, abstract)
@@ -1157,13 +1169,14 @@ class SemanticProcessor(DequeueHandlerBase):
         # Budget guard: check if prompt would be oversized
         estimated_size = len(file_summaries_str) + len(children_abstracts_str)
         over_budget = estimated_size > semantic.max_overview_prompt_chars
-        many_files = len(file_summaries) > semantic.overview_batch_size
+        many_items = (len(file_summaries) + len(children_abstracts)) > semantic.overview_batch_size
 
-        if over_budget and many_files:
-            # Many files, oversized prompt → batch and merge
+        if over_budget and many_items:
+            # Many items, oversized prompt -> batch and merge.
             logger.info(
                 f"Overview prompt for {dir_uri} exceeds budget "
-                f"({estimated_size} chars, {len(file_summaries)} files). "
+                f"({estimated_size} chars, {len(file_summaries)} files, "
+                f"{len(children_abstracts)} child dirs). "
                 f"Splitting into batches of {semantic.overview_batch_size}."
             )
             overview = await self._batched_generate_overview(
@@ -1175,20 +1188,26 @@ class SemanticProcessor(DequeueHandlerBase):
                 output_language=output_language,
             )
         elif over_budget:
-            # Few files but long summaries → truncate summaries to fit budget
+            # Few items but long summaries -> truncate summaries to fit budget.
             logger.info(
                 f"Overview prompt for {dir_uri} exceeds budget "
-                f"({estimated_size} chars) with {len(file_summaries)} files. "
+                f"({estimated_size} chars) with {len(file_summaries)} files and "
+                f"{len(children_abstracts)} child dirs. "
                 f"Truncating summaries to fit."
             )
             budget = semantic.max_overview_prompt_chars
-            budget -= len(children_abstracts_str)
-            per_file = max(100, budget // max(len(file_summaries), 1))
+            item_count = max(len(file_summaries) + len(children_abstracts), 1)
+            per_item = max(100, budget // item_count)
             truncated_lines = []
             for idx, item in enumerate(file_summaries, 1):
-                summary = item["summary"][:per_file]
+                summary = item["summary"][:per_item]
                 truncated_lines.append(f"[{idx}] {item['name']}: {summary}")
             file_summaries_str = "\n".join(truncated_lines)
+            child_lines = []
+            for item in children_abstracts:
+                abstract = item["abstract"][:per_item]
+                child_lines.append(f"- {item['name']}/: {abstract}")
+            children_abstracts_str = "\n".join(child_lines) if child_lines else "None"
             overview = await self._single_generate_overview(
                 dir_uri,
                 file_summaries_str,
@@ -1259,9 +1278,9 @@ class SemanticProcessor(DequeueHandlerBase):
         llm_sem: Optional[asyncio.Semaphore] = None,
         output_language: str = "en",
     ) -> str:
-        """Generate overview by batching file summaries and merging.
+        """Generate overview by batching files/child directories and merging.
 
-        Splits file summaries into batches, generates a partial overview per
+        Splits summaries into batches, generates a partial overview per
         batch, then merges all partials into a final overview.
         """
         import re
@@ -1271,18 +1290,17 @@ class SemanticProcessor(DequeueHandlerBase):
         batch_size = semantic.overview_batch_size
         dir_name = dir_uri.split("/")[-1]
 
-        # Split file summaries into batches
+        summary_items = [
+            {"kind": "file", "name": item["name"], "summary": item["summary"]}
+            for item in file_summaries
+        ] + [
+            {"kind": "child", "name": item["name"], "summary": item["abstract"]}
+            for item in children_abstracts
+        ]
         batches = [
-            file_summaries[i : i + batch_size] for i in range(0, len(file_summaries), batch_size)
+            summary_items[i : i + batch_size] for i in range(0, len(summary_items), batch_size)
         ]
         logger.info(f"Generating overview for {dir_uri} in {len(batches)} batches")
-
-        # Build children abstracts string (used in first batch + merge)
-        children_abstracts_str = (
-            "\n".join(f"- {item['name']}/: {item['abstract']}" for item in children_abstracts)
-            if children_abstracts
-            else "None"
-        )
 
         # Generate partial overview per batch concurrently using global file indices
         if llm_sem is None:
@@ -1294,16 +1312,18 @@ class SemanticProcessor(DequeueHandlerBase):
         for batch_idx, batch in enumerate(batches):
             # Build per-batch index map using global offsets
             batch_lines = []
+            child_lines = []
             batch_index_map = {}
             for local_idx, item in enumerate(batch):
                 global_idx = global_offset + local_idx + 1
-                batch_index_map[global_idx] = item["name"]
-                batch_lines.append(f"[{global_idx}] {item['name']}: {item['summary']}")
+                if item["kind"] == "file":
+                    batch_index_map[global_idx] = item["name"]
+                    batch_lines.append(f"[{global_idx}] {item['name']}: {item['summary']}")
+                else:
+                    child_lines.append(f"- {item['name']}/: {item['summary']}")
             batch_str = "\n".join(batch_lines)
             global_offset += len(batch)
-
-            # Include children abstracts in the first batch
-            children_str = children_abstracts_str if batch_idx == 0 else "None"
+            children_str = "\n".join(child_lines) if child_lines else "None"
 
             prompt = render_prompt(
                 "semantic.overview_generation",
@@ -1346,15 +1366,18 @@ class SemanticProcessor(DequeueHandlerBase):
         if len(partial_overviews) == 1:
             return partial_overviews[0]
 
-        # Merge partials into a final overview (include children for context)
-        combined = "\n\n---\n\n".join(partial_overviews)
+        # Merge partials into a final overview.
+        combined = "\n\n---\n\n".join(
+            f"[{idx}] overview_batch_{idx}: {partial}"
+            for idx, partial in enumerate(partial_overviews, 1)
+        )
         try:
             prompt = render_prompt(
                 "semantic.overview_generation",
                 {
                     "dir_name": dir_name,
                     "file_summaries": combined,
-                    "children_abstracts": children_abstracts_str,
+                    "children_abstracts": "None",
                     "output_language": output_language,
                 },
             )

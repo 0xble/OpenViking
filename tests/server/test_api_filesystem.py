@@ -3,6 +3,9 @@
 
 """Tests for filesystem endpoints: ls, tree, stat, mkdir, rm, mv."""
 
+import asyncio
+import time
+
 import httpx
 
 from openviking.pyagfs.exceptions import AGFSHTTPError
@@ -184,6 +187,31 @@ async def test_rm_maps_resource_busy_to_conflict(client, service, monkeypatch):
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "CONFLICT"
+
+
+async def test_rm_does_not_block_health_endpoint(client, service, monkeypatch):
+    async def blocking_rm(uri, ctx=None, recursive=False):
+        time.sleep(0.2)
+        return {}
+
+    monkeypatch.setattr(service.fs, "rm", blocking_rm)
+
+    start = time.perf_counter()
+    rm_task = asyncio.create_task(
+        client.request(
+            "DELETE",
+            "/api/v1/fs",
+            params={"uri": "viking://resources/slow-delete", "recursive": True},
+        )
+    )
+    await asyncio.sleep(0.05)
+    health = await client.get("/health")
+    elapsed = time.perf_counter() - start
+    rm_resp = await rm_task
+
+    assert health.status_code == 200
+    assert elapsed < 0.25
+    assert rm_resp.status_code == 200
 
 
 async def test_rm_agfs_internal_error_does_not_look_successful(client, service, monkeypatch):

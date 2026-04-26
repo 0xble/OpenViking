@@ -459,3 +459,26 @@ VERSION: 1.0.0
         &self.config_params
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn write_truncate_replaces_shorter_content() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let fs = LocalFileSystem::new(temp_dir.path().to_str().unwrap()).unwrap();
+
+        fs.write("/test.md", b"abcdef", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        fs.write("/test.md", b"xy", 0, WriteFlag::Truncate)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(temp_dir.path().join("test.md")).unwrap(),
+            b"xy"
+        );
+    }
+}

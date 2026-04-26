@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
+from openviking.server.async_worker import run_async_in_worker
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
@@ -215,16 +216,18 @@ async def grep(
     service = get_service()
     _validate_time_bounds(request.since, request.until)
     try:
-        result = await service.fs.grep(
-            request.uri,
-            request.pattern,
-            ctx=_ctx,
-            exclude_uri=request.exclude_uri,
-            case_insensitive=request.case_insensitive,
-            node_limit=request.node_limit,
-            level_limit=request.level_limit,
-            since=request.since,
-            until=request.until,
+        result = await run_async_in_worker(
+            lambda: service.fs.grep(
+                request.uri,
+                request.pattern,
+                ctx=_ctx,
+                exclude_uri=request.exclude_uri,
+                case_insensitive=request.case_insensitive,
+                node_limit=request.node_limit,
+                level_limit=request.level_limit,
+                since=request.since,
+                until=request.until,
+            )
         )
     except AGFSNotFoundError:
         raise NotFoundError(request.uri, "file")
@@ -250,12 +253,14 @@ async def glob(
     """File pattern matching."""
     service = get_service()
     _validate_time_bounds(request.since, request.until)
-    result = await service.fs.glob(
-        request.pattern,
-        ctx=_ctx,
-        uri=request.uri,
-        node_limit=request.node_limit,
-        since=request.since,
-        until=request.until,
+    result = await run_async_in_worker(
+        lambda: service.fs.glob(
+            request.pattern,
+            ctx=_ctx,
+            uri=request.uri,
+            node_limit=request.node_limit,
+            since=request.since,
+            until=request.until,
+        )
     )
     return Response(status="ok", result=result)

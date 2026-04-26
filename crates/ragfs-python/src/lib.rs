@@ -279,7 +279,7 @@ impl RAGFSBindingClient {
         let fs = self.fs.clone();
         let len = data.len();
         self.rt
-            .block_on(async move { fs.write(&path, &data, 0, WriteFlag::Create).await })
+            .block_on(async move { fs.write(&path, &data, 0, WriteFlag::Truncate).await })
             .map_err(to_py_err)?;
 
         Ok(format!("Written {} bytes", len))

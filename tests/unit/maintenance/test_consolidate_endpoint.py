@@ -223,6 +223,47 @@ async def test_run_memory_maintenance_passes_dirty_uris_to_consolidator(monkeypa
     }
 
 
+@pytest.mark.asyncio
+async def test_run_memory_maintenance_keeps_dirty_scope_on_partial_result(monkeypatch):
+    class FakeConsolidator:
+        async def run(self, scope_uri, ctx, *, dry_run, canaries, target_uris=None):
+            result = ConsolidationResult(
+                scope_uri=scope_uri,
+                dry_run=dry_run,
+                started_at="2026-04-19T23:00:00",
+                completed_at="2026-04-19T23:00:01",
+            )
+            result.partial = True
+            result.errors.append("merge_archive_failed: 1")
+            return result
+
+    scope = MagicMock()
+    scope.dirty_uris = ["viking://agent/a/memories/skills/changed.md"]
+    manager = MagicMock()
+    manager.get_scope = AsyncMock(return_value=scope)
+    manager.mark_run_complete = AsyncMock()
+    manager.mark_run_failed = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.server.routers.maintenance._build_consolidator",
+        lambda service, ctx: FakeConsolidator(),
+    )
+
+    with pytest.raises(RuntimeError, match="merge_archive_failed"):
+        await _run_memory_maintenance_scopes(
+            MagicMock(),
+            manager,
+            ["viking://agent/a/memories/skills/"],
+            False,
+            MagicMock(),
+        )
+
+    manager.mark_run_failed.assert_awaited_once_with(
+        "viking://agent/a/memories/skills/",
+        "merge_archive_failed: 1",
+    )
+    manager.mark_run_complete.assert_not_called()
+
+
 class TestListRunsParsesViking_FSEntries:
     """Regression: viking_fs.ls returns List[Dict] with 'uri' key, not bare strings.
 

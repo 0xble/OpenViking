@@ -9,6 +9,7 @@ import pytest
 
 from openviking import AsyncOpenViking
 from openviking.storage.transaction import release_all_locks
+from openviking.storage.viking_fs import VikingFS
 
 
 class TestRm:
@@ -99,6 +100,35 @@ class TestGrep:
         assert isinstance(result, dict)
         matches = result.get("matches", [])
         assert len(matches) == 0
+
+    async def test_grep_node_limit_bounds_files_scanned(self):
+        class FakeAGFS:
+            def stat(self, path):
+                return {"isDir": True}
+
+            def ls(self, path):
+                return [
+                    {
+                        "name": f"file-{index}.md",
+                        "isDir": False,
+                        "modTime": "2026-04-26T00:00:00Z",
+                    }
+                    for index in range(1001)
+                ]
+
+            def read(self, path, offset=0, size=-1):
+                return b"no match here\n"
+
+        result = await VikingFS(FakeAGFS()).grep(
+            "viking://resources",
+            "needle",
+            node_limit=1,
+        )
+
+        assert result["matches"] == []
+        assert result["files_scanned"] == 1000
+        assert result["scan_limit"] == 1000
+        assert result["truncated"] is True
 
 
 class TestGlob:

@@ -398,6 +398,12 @@ async def _run_memory_maintenance_scopes(
                 canaries=canaries,
                 target_uris=scope_state.dirty_uris if scope_state else None,
             )
+            if result.partial or result.errors:
+                error = "; ".join(result.errors) or "partial maintenance result"
+                await manager.mark_run_failed(scope_uri, error)
+                runs.append(_consolidation_payload(result))
+                errors.append((scope_uri, error))
+                continue
             await manager.mark_run_complete(
                 scope_uri,
                 audit_uri=result.audit_uri,

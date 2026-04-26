@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from openviking.pyagfs.exceptions import AGFSClientError, AGFSNotFoundError
+from openviking.server.async_worker import run_async_in_worker
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
@@ -34,15 +35,17 @@ async def ls(
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
     try:
-        result = await service.fs.ls(
-            uri,
-            ctx=_ctx,
-            recursive=recursive,
-            simple=simple,
-            output=output,
-            abs_limit=abs_limit,
-            show_all_hidden=show_all_hidden,
-            node_limit=actual_node_limit,
+        result = await run_async_in_worker(
+            lambda: service.fs.ls(
+                uri,
+                ctx=_ctx,
+                recursive=recursive,
+                simple=simple,
+                output=output,
+                abs_limit=abs_limit,
+                show_all_hidden=show_all_hidden,
+                node_limit=actual_node_limit,
+            )
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -70,14 +73,16 @@ async def tree(
     service = get_service()
     actual_node_limit = limit if limit is not None else node_limit
     try:
-        result = await service.fs.tree(
-            uri,
-            ctx=_ctx,
-            output=output,
-            abs_limit=abs_limit,
-            show_all_hidden=show_all_hidden,
-            node_limit=actual_node_limit,
-            level_limit=level_limit,
+        result = await run_async_in_worker(
+            lambda: service.fs.tree(
+                uri,
+                ctx=_ctx,
+                output=output,
+                abs_limit=abs_limit,
+                show_all_hidden=show_all_hidden,
+                node_limit=actual_node_limit,
+                level_limit=level_limit,
+            )
         )
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -98,7 +103,7 @@ async def stat(
     """Get resource status."""
     service = get_service()
     try:
-        result = await service.fs.stat(uri, ctx=_ctx)
+        result = await run_async_in_worker(lambda: service.fs.stat(uri, ctx=_ctx))
         return Response(status="ok", result=result)
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
@@ -137,7 +142,9 @@ async def mkdir(
     """Create directory."""
     service = get_service()
     try:
-        await service.fs.mkdir(request.uri, ctx=_ctx, description=request.description)
+        await run_async_in_worker(
+            lambda: service.fs.mkdir(request.uri, ctx=_ctx, description=request.description)
+        )
     except AGFSClientError as e:
         # Handle common AGFS errors
         err_msg = str(e).lower()
@@ -155,7 +162,9 @@ async def patch_metadata(
     """Patch opaque metadata for a resource root."""
     service = get_service()
     try:
-        result = await service.fs.patch_metadata(request.uri, request.metadata, ctx=_ctx)
+        result = await run_async_in_worker(
+            lambda: service.fs.patch_metadata(request.uri, request.metadata, ctx=_ctx)
+        )
     except AGFSNotFoundError:
         raise NotFoundError(request.uri, "file")
     except AGFSClientError as e:
@@ -180,7 +189,7 @@ async def rm(
     """Remove resource."""
     service = get_service()
     try:
-        await service.fs.rm(uri, ctx=_ctx, recursive=recursive)
+        await run_async_in_worker(lambda: service.fs.rm(uri, ctx=_ctx, recursive=recursive))
     except AGFSNotFoundError:
         raise NotFoundError(uri, "file")
     except AGFSClientError as e:
@@ -211,7 +220,7 @@ async def mv(
     """Move resource."""
     service = get_service()
     try:
-        await service.fs.mv(request.from_uri, request.to_uri, ctx=_ctx)
+        await run_async_in_worker(lambda: service.fs.mv(request.from_uri, request.to_uri, ctx=_ctx))
     except AGFSNotFoundError:
         raise NotFoundError(request.from_uri, "file")
     except AGFSClientError as e:

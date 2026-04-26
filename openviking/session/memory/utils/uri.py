@@ -470,7 +470,8 @@ def resolve_all_operations(
                         agent_space,
                         extract_context=extract_context,
                     )
-                    memory_type = str(item_dict.get("memory_type", ""))
+                    memory_type_value = item_dict.get("memory_type")
+                    memory_type = str(memory_type_value) if memory_type_value is not None else ""
                     resolved.operations.append(
                         ResolvedOperation(model=item_dict, uri=uri, memory_type=memory_type)
                     )

@@ -73,7 +73,9 @@ def _trim_find_result_to_limit(find_result, limit: int):
     find_result.memories = [ctx for ctx in find_result.memories if id(ctx) in selected]
     find_result.resources = [ctx for ctx in find_result.resources if id(ctx) in selected]
     find_result.skills = [ctx for ctx in find_result.skills if id(ctx) in selected]
-    find_result.total = len(find_result.memories) + len(find_result.resources) + len(find_result.skills)
+    find_result.total = (
+        len(find_result.memories) + len(find_result.resources) + len(find_result.skills)
+    )
     return find_result
 
 
@@ -664,9 +666,15 @@ class VikingFS:
 
         results = []
         files_scanned = 0
+        scan_limit = max(node_limit * 1000, node_limit) if node_limit else None
+        scan_truncated = False
 
         async def search_recursive(current_uri: str, current_depth: int):
+            nonlocal files_scanned, scan_truncated
             if node_limit and len(results) >= node_limit:
+                return
+            if scan_limit and files_scanned >= scan_limit:
+                scan_truncated = True
                 return
 
             if current_depth > level_limit:
@@ -690,6 +698,9 @@ class VikingFS:
             for entry in entries:
                 if node_limit and len(results) >= node_limit:
                     break
+                if scan_limit and files_scanned >= scan_limit:
+                    scan_truncated = True
+                    break
 
                 entry_uri = f"{normalized_current_uri.rstrip('/')}/{entry['name']}"
                 if excluded_prefix and (
@@ -703,7 +714,6 @@ class VikingFS:
                 else:
                     if not matches_entry_time_bounds(entry, since_dt, until_dt):
                         continue
-                    nonlocal files_scanned
                     files_scanned += 1
                     try:
                         content = await self.read(entry_uri, ctx=ctx)
@@ -732,6 +742,8 @@ class VikingFS:
             "count": len(results),
             "match_count": len(results),
             "files_scanned": files_scanned,
+            "scan_limit": scan_limit,
+            "truncated": scan_truncated,
         }
 
     async def stat(

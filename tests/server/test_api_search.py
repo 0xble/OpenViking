@@ -3,6 +3,8 @@
 
 """Tests for search endpoints: find, search, grep, glob."""
 
+import asyncio
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -399,6 +401,30 @@ async def test_grep(client_with_resource):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+async def test_grep_does_not_block_health_endpoint(client: httpx.AsyncClient, service, monkeypatch):
+    async def blocking_grep(*args, **kwargs):
+        time.sleep(0.2)
+        return {"matches": [], "count": 0, "match_count": 0, "files_scanned": 0}
+
+    monkeypatch.setattr(service.fs, "grep", blocking_grep)
+
+    start = time.perf_counter()
+    grep_task = asyncio.create_task(
+        client.post(
+            "/api/v1/search/grep",
+            json={"uri": "viking://resources", "pattern": "slow"},
+        )
+    )
+    await asyncio.sleep(0.02)
+    health = await client.get("/health")
+    elapsed = time.perf_counter() - start
+    grep_resp = await grep_task
+
+    assert health.status_code == 200
+    assert grep_resp.status_code == 200
+    assert elapsed < 0.25
 
 
 async def test_grep_time_filter_includes_recent_files(client, service, sample_markdown_file):
