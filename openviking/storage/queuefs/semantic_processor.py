@@ -489,11 +489,9 @@ class SemanticProcessor(DequeueHandlerBase):
         try:
             entries = await viking_fs.ls(dir_uri, ctx=ctx)
         except Exception as e:
-            logger.warning(f"Failed to list memory directory {dir_uri}: {e}")
-            _mark_failed(str(e))
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
-            return
+            raise RuntimeError(f"Failed to list memory directory {dir_uri}: {e}") from e
 
         file_paths: List[str] = []
         child_dirs: List[str] = []
@@ -628,11 +626,9 @@ class SemanticProcessor(DequeueHandlerBase):
             await viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=ctx)
             logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
         except Exception as e:
-            logger.error(f"Failed to write abstract/overview for {dir_uri}: {e}")
-            _mark_failed(str(e))
             if msg.lifecycle_lock_handle_id:
                 await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
-            return
+            raise RuntimeError(f"Failed to write abstract/overview for {dir_uri}: {e}") from e
 
         try:
             await viking_fs.write_file(

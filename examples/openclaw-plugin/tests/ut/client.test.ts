@@ -403,6 +403,64 @@ describe("OpenVikingClient resource and skill import", () => {
     });
   });
 
+  it("adds a default lock wait timeout to manual content writes", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(okResponse({
+      uri: "viking://user/alice/memories/preferences/lease.md",
+      root_uri: "viking://user/alice/memories/preferences",
+      context_type: "memory",
+      mode: "replace",
+      created: false,
+      written_bytes: 42,
+      semantic_updated: true,
+      vector_updated: true,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = makeClient();
+    await client.writeContent(
+      "viking://user/alice/memories/preferences/lease.md",
+      "lease terms",
+    );
+
+    expect(JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body))).toMatchObject({
+      uri: "viking://user/alice/memories/preferences/lease.md",
+      timeout: 30,
+      wait: true,
+    });
+  });
+
+  it("retries brief busy responses for manual content writes", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(errorResponse("resource is busy and cannot be written now"))
+      .mockResolvedValueOnce(okResponse({
+        uri: "viking://user/alice/memories/preferences/lease.md",
+        root_uri: "viking://user/alice/memories/preferences",
+        context_type: "memory",
+        mode: "replace",
+        created: false,
+        written_bytes: 42,
+        semantic_updated: true,
+        vector_updated: true,
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = makeClient();
+    const pending = client.writeContent(
+      "viking://user/alice/memories/preferences/lease.md",
+      "lease terms",
+    );
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(pending).resolves.toMatchObject({
+      uri: "viking://user/alice/memories/preferences/lease.md",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps polling wait=true commit long enough for slow Phase 2 completion", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((url: string) => {

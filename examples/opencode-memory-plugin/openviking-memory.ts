@@ -374,6 +374,67 @@ const DEFAULT_CONFIG: OpenVikingConfig = {
   },
 }
 
+const MANUAL_WRITE_LOCK_TIMEOUT_SECONDS = 30
+const MANUAL_WRITE_BUSY_RETRIES = 5
+const MANUAL_WRITE_REQUEST_TIMEOUT_MS = 120000
+const manualWriteQueues = new Map<string, Promise<void>>()
+
+function manualWriteRootKey(uri: string): string {
+  const parts = uri.split("/")
+  const memoriesIdx = parts.indexOf("memories")
+  if (memoriesIdx < 0) return uri
+  const tail = parts.slice(memoriesIdx + 1).filter(Boolean)
+  const end = tail.length <= 1 ? memoriesIdx + 1 : memoriesIdx + 2
+  return parts.slice(0, end).join("/")
+}
+
+function isBusyWriteError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return message.includes("resource is busy") || message.includes("cannot be written now")
+}
+
+function busyRetryDelayMs(attempt: number): number {
+  const base = Math.min(1000 * 2 ** attempt, 5000)
+  return base + Math.floor(Math.random() * 250)
+}
+
+async function enqueueManualWrite<T>(rootKey: string, operation: () => Promise<T>): Promise<T> {
+  const previous = manualWriteQueues.get(rootKey) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const queued = previous.catch(() => undefined).then(() => current)
+  manualWriteQueues.set(rootKey, queued)
+
+  await previous.catch(() => undefined)
+  try {
+    return await operation()
+  } finally {
+    release()
+    if (manualWriteQueues.get(rootKey) === queued) {
+      manualWriteQueues.delete(rootKey)
+    }
+  }
+}
+
+async function withManualWriteRetry<T>(
+  rootKey: string,
+  abortSignal: AbortSignal | undefined,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return enqueueManualWrite(rootKey, async () => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await operation()
+      } catch (error) {
+        if (!isBusyWriteError(error) || attempt >= MANUAL_WRITE_BUSY_RETRIES) throw error
+        await sleep(busyRetryDelayMs(attempt), abortSignal)
+      }
+    }
+  })
+}
+
 function totalMemoriesExtracted(memories?: MemoryCounts): number {
   if (typeof memories === "number") {
     return memories
@@ -2219,19 +2280,30 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
 
           const mode = args.mode ?? "replace"
           try {
-            const response = await makeRequest<
-              OpenVikingResponse<{
-                uri: string
-                created?: boolean
-                mode: string
-                written_bytes: number
-              }>
-            >(config, {
-              method: "POST",
-              endpoint: "/api/v1/content/write",
-              body: { uri: args.uri, content: args.content, mode, wait: true },
-              abortSignal: context.abort,
-            })
+            const response = await withManualWriteRetry(
+              manualWriteRootKey(args.uri),
+              context.abort,
+              () => makeRequest<
+                OpenVikingResponse<{
+                  uri: string
+                  created?: boolean
+                  mode: string
+                  written_bytes: number
+                }>
+              >(config, {
+                method: "POST",
+                endpoint: "/api/v1/content/write",
+                body: {
+                  uri: args.uri,
+                  content: args.content,
+                  mode,
+                  wait: true,
+                  timeout: MANUAL_WRITE_LOCK_TIMEOUT_SECONDS,
+                },
+                timeoutMs: Math.max(config.timeoutMs, MANUAL_WRITE_REQUEST_TIMEOUT_MS),
+                abortSignal: context.abort,
+              }),
+            )
             const result = unwrapResponse(response)
             if (!result) {
               return "Error: /content/write returned no result"

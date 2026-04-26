@@ -166,6 +166,7 @@ class OpenVikingClient {
     timeoutMs;
     resolvedSpaceByScope = {};
     runtimeIdentity = null;
+    manualWriteQueues = new Map();
     constructor(baseUrl, apiKey, accountId, userId, agentId, timeoutMs) {
         this.baseUrl = baseUrl;
         this.apiKey = apiKey;
@@ -362,9 +363,43 @@ class OpenVikingClient {
      * Creates the file (and missing parent dirs) when it does not yet exist.
      */
     async writeContent(uri, content, mode = "replace") {
+        return this.enqueueManualWrite(manualWriteRootKey(uri), () => this.writeContentWithRetry(uri, content, mode));
+    }
+    async enqueueManualWrite(rootKey, operation) {
+        const previous = this.manualWriteQueues.get(rootKey) ?? Promise.resolve();
+        let release;
+        const current = new Promise((resolve) => {
+            release = resolve;
+        });
+        const queued = previous.catch(() => undefined).then(() => current);
+        this.manualWriteQueues.set(rootKey, queued);
+        await previous.catch(() => undefined);
+        try {
+            return await operation();
+        }
+        finally {
+            release();
+            if (this.manualWriteQueues.get(rootKey) === queued) {
+                this.manualWriteQueues.delete(rootKey);
+            }
+        }
+    }
+    async writeContentWithRetry(uri, content, mode) {
+        for (let attempt = 0;; attempt += 1) {
+            try {
+                return await this.writeContentOnce(uri, content, mode);
+            }
+            catch (error) {
+                if (!isBusyWriteError(error) || attempt >= MANUAL_WRITE_BUSY_RETRIES)
+                    throw error;
+                await sleep(busyRetryDelayMs(attempt));
+            }
+        }
+    }
+    async writeContentOnce(uri, content, mode) {
         const r = await this.request("/api/v1/content/write", {
             method: "POST",
-            body: JSON.stringify({ uri, content, mode, wait: true }),
+            body: JSON.stringify({ uri, content, mode, wait: true, timeout: MANUAL_WRITE_LOCK_TIMEOUT_SECONDS }),
         }, extendedWriteTimeoutMs(this.timeoutMs));
         return {
             uri: String(r.uri),
@@ -511,8 +546,27 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 const DEFAULT_WRITE_REQUEST_TIMEOUT_MS = 120_000;
+const MANUAL_WRITE_LOCK_TIMEOUT_SECONDS = 30;
+const MANUAL_WRITE_BUSY_RETRIES = 5;
 function extendedWriteTimeoutMs(timeoutMs) {
     return Math.max(timeoutMs, DEFAULT_WRITE_REQUEST_TIMEOUT_MS);
+}
+function manualWriteRootKey(uri) {
+    const parts = uri.split("/");
+    const memoriesIdx = parts.indexOf("memories");
+    if (memoriesIdx < 0)
+        return uri;
+    const tail = parts.slice(memoriesIdx + 1).filter(Boolean);
+    const end = tail.length <= 1 ? memoriesIdx + 1 : memoriesIdx + 2;
+    return parts.slice(0, end).join("/");
+}
+function isBusyWriteError(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes("resource is busy") || message.includes("cannot be written now");
+}
+function busyRetryDelayMs(attempt) {
+    const base = Math.min(1000 * 2 ** attempt, 5000);
+    return base + Math.floor(Math.random() * 250);
 }
 // ---------------------------------------------------------------------------
 // MCP Server

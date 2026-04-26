@@ -168,16 +168,39 @@ def test_classify_permanent_errors():
     assert classify_api_error(RuntimeError("Forbidden")) == "permanent"
 
 
+def test_classify_filesystem_errors_as_permanent():
+    from openviking.utils.circuit_breaker import classify_api_error
+
+    assert classify_api_error(FileNotFoundError("/missing")) == "permanent"
+    assert classify_api_error(PermissionError("Permission denied")) == "permanent"
+    assert classify_api_error(IsADirectoryError("Is a directory")) == "permanent"
+    assert classify_api_error(NotADirectoryError("Not a directory")) == "permanent"
+
+
+def test_classify_chained_filesystem_error_as_permanent():
+    from openviking.utils.circuit_breaker import classify_api_error
+
+    cause = FileNotFoundError("/missing")
+    wrapper = RuntimeError("storage layer failed")
+    wrapper.__cause__ = cause
+    assert classify_api_error(wrapper) == "permanent"
+
+
 def test_classify_transient_errors():
     from openviking.utils.circuit_breaker import classify_api_error
 
-    assert classify_api_error(RuntimeError("429 TooManyRequests")) == "transient"
-    assert classify_api_error(RuntimeError("RateLimitError")) == "transient"
     assert classify_api_error(RuntimeError("500 Internal Server Error")) == "transient"
     assert classify_api_error(RuntimeError("502 Bad Gateway")) == "transient"
     assert classify_api_error(RuntimeError("503 Service Unavailable")) == "transient"
     assert classify_api_error(RuntimeError("Connection timeout")) == "transient"
     assert classify_api_error(RuntimeError("ConnectionError: refused")) == "transient"
+
+
+def test_classify_rate_limit_errors():
+    from openviking.utils.circuit_breaker import classify_api_error
+
+    assert classify_api_error(RuntimeError("429 TooManyRequests")) == "rate_limit"
+    assert classify_api_error(RuntimeError("RateLimitError")) == "rate_limit"
 
 
 def test_classify_unknown_errors():

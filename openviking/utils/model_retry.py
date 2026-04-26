@@ -11,6 +11,8 @@ T = TypeVar("T")
 
 ErrorClass = Literal["permanent", "rate_limit", "transient", "unknown"]
 
+PERMANENT_IO_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError)
+
 PERMANENT_API_ERROR_PATTERNS = (
     "400",
     "401",
@@ -46,6 +48,10 @@ RATE_LIMIT_ERROR_PATTERNS = (
 
 def classify_api_error(error: Exception) -> ErrorClass:
     """Classify an API error as permanent, rate_limit, transient, or unknown."""
+    for exc in (error, getattr(error, "__cause__", None)):
+        if exc is not None and isinstance(exc, PERMANENT_IO_ERRORS):
+            return "permanent"
+
     texts = [str(error)]
     if error.__cause__ is not None:
         texts.append(str(error.__cause__))

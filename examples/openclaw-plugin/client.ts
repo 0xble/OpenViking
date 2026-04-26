@@ -173,6 +173,8 @@ export type AddSkillResult = {
 const DEFAULT_WAIT_REQUEST_TIMEOUT_MS = 120_000;
 export const DEFAULT_PHASE2_POLL_TIMEOUT_MS = 300_000;
 const WAIT_REQUEST_TIMEOUT_BUFFER_MS = 5_000;
+const MANUAL_WRITE_LOCK_TIMEOUT_SECONDS = 30;
+const MANUAL_WRITE_BUSY_RETRIES = 5;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -230,6 +232,25 @@ function resolveWaitRequestTimeoutMs(defaultTimeoutMs: number, waitTimeoutSecond
   return Math.max(defaultTimeoutMs, requestedMs);
 }
 
+function manualWriteRootKey(uri: string): string {
+  const parts = uri.split("/");
+  const memoriesIdx = parts.indexOf("memories");
+  if (memoriesIdx < 0) return uri;
+  const tail = parts.slice(memoriesIdx + 1).filter(Boolean);
+  const end = tail.length <= 1 ? memoriesIdx + 1 : memoriesIdx + 2;
+  return parts.slice(0, end).join("/");
+}
+
+function isBusyWriteError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("resource is busy") || message.includes("cannot be written now");
+}
+
+function busyRetryDelayMs(attempt: number): number {
+  const base = Math.min(1000 * 2 ** attempt, 5000);
+  return base + Math.floor(Math.random() * 250);
+}
+
 function requiresTenantIdentity(path: string): boolean {
   const pathname = path.split("?", 1)[0] ?? path;
   if (IMPLICIT_TENANT_PATHS.has(pathname)) {
@@ -252,6 +273,7 @@ async function cleanupUploadTempPath(path?: string): Promise<void> {
 export class OpenVikingClient {
   private identityCache = new Map<string, RuntimeIdentity>();
   private spaceCache = new Map<string, Partial<Record<ScopeName, string>>>();
+  private manualWriteQueues = new Map<string, Promise<void>>();
 
   constructor(
     private readonly baseUrl: string,
@@ -882,15 +904,59 @@ export class OpenVikingClient {
     content: string,
     options?: { mode?: "replace" | "append"; wait?: boolean; timeout?: number; agentId?: string },
   ): Promise<ContentWriteResult> {
+    return this.enqueueManualWrite(manualWriteRootKey(uri), () => this.writeContentWithRetry(uri, content, options));
+  }
+
+  private async enqueueManualWrite<T>(rootKey: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.manualWriteQueues.get(rootKey) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const queued = previous.catch(() => undefined).then(() => current);
+    this.manualWriteQueues.set(rootKey, queued);
+
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.manualWriteQueues.get(rootKey) === queued) {
+        this.manualWriteQueues.delete(rootKey);
+      }
+    }
+  }
+
+  private async writeContentWithRetry(
+    uri: string,
+    content: string,
+    options?: { mode?: "replace" | "append"; wait?: boolean; timeout?: number; agentId?: string },
+  ): Promise<ContentWriteResult> {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.writeContentOnce(uri, content, options);
+      } catch (error) {
+        if (!isBusyWriteError(error) || attempt >= MANUAL_WRITE_BUSY_RETRIES) throw error;
+        await sleep(busyRetryDelayMs(attempt));
+      }
+    }
+  }
+
+  private async writeContentOnce(
+    uri: string,
+    content: string,
+    options?: { mode?: "replace" | "append"; wait?: boolean; timeout?: number; agentId?: string },
+  ): Promise<ContentWriteResult> {
+    const timeout = options?.timeout ?? MANUAL_WRITE_LOCK_TIMEOUT_SECONDS;
     const body = {
       uri,
       content,
       mode: options?.mode ?? "replace",
       wait: options?.wait ?? true,
-      ...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
+      timeout,
     };
     const requestTimeoutMs =
-      body.wait ? resolveWaitRequestTimeoutMs(this.timeoutMs, options?.timeout) : undefined;
+      body.wait ? resolveWaitRequestTimeoutMs(this.timeoutMs, timeout) : undefined;
     return this.request<ContentWriteResult>(
       "/api/v1/content/write",
       { method: "POST", body: JSON.stringify(body) },
