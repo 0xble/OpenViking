@@ -156,7 +156,9 @@ async def test_memory_write_filesystem_error_reports_error():
             "_generate_single_file_summary",
             new=AsyncMock(return_value={"name": "file1.md", "summary": "test summary"}),
         ),
-        patch.object(processor, "_generate_overview", new=AsyncMock(return_value="# Overview\nbody")),
+        patch.object(
+            processor, "_generate_overview", new=AsyncMock(return_value="# Overview\nbody")
+        ),
     ):
         await processor.on_dequeue(_make_msg().to_dict())
 
