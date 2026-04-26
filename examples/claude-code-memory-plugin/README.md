@@ -40,6 +40,7 @@ Long-term semantic memory for Claude Code, powered by [OpenViking](https://githu
   │  MCP Server (memory-server.ts)       │
   │  Tools for explicit use:             │
   │  • memory_recall (manual search)     │
+  │  • resource_recall (resource search) │
   │  • memory_store  (manual store)      │
   │  • memory_forget (delete memories)   │
   │  • memory_health (health check)      │
@@ -84,6 +85,7 @@ into the plugin source tree.
 
 The MCP server provides tools for when Claude or the user needs explicit memory operations:
 - **memory_recall** — manual semantic search
+- **resource_recall** — search indexed resources such as docs, Slack, email, calendar, and Drive
 - **memory_store** — manual memory storage
 - **memory_forget** — delete memories by URI or query
 - **memory_health** — check server status

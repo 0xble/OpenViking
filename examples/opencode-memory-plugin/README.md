@@ -18,7 +18,8 @@ This example focuses on explicit memory access, filesystem-style browsing, and s
 
 ## What It Does
 
-- Exposes four memory tools for OpenCode agents:
+- Exposes five memory tools for OpenCode agents:
+  - `resource_recall`
   - `memsearch`
   - `memread`
   - `membrowse`
@@ -107,6 +108,17 @@ After installation, the plugin creates these local files next to the plugin file
 These are runtime artifacts and should not be committed.
 
 ## Tools
+
+### `resource_recall`
+
+Search indexed OpenViking resources such as docs, Slack, email, calendar, and Drive.
+
+Parameters:
+
+- `query`: search query
+- `target_uri?`: resource scope URI, default `viking://resources`
+- `limit?`: max results
+- `score_threshold?`: optional minimum score
 
 ### `memsearch`
 

@@ -6,6 +6,7 @@ import {
   formatScopeFailures,
   isRecallCandidate,
   searchMemoryScopes,
+  searchResourceScope,
 } from "../servers/recall.js"
 
 describe("Claude Code MCP recall parity helpers", () => {
@@ -48,6 +49,28 @@ describe("Claude Code MCP recall parity helpers", () => {
 
     const result = await searchMemoryScopes(client, "api notes", {
       targetUri: "viking://resources/docs",
+      limit: 6,
+      scoreThreshold: 0.01,
+    })
+
+    assert.equal(result.memories.length, 0)
+    assert.equal(result.resources.length, 1)
+    assert.equal(result.resources[0].context_type, "resource")
+  })
+
+  it("searches viking resources by default for resource recall", async () => {
+    const client = {
+      async find(_query, options) {
+        assert.equal(options.targetUri, "viking://resources")
+        return {
+          resources: [
+            { uri: "viking://resources/slack/messages.json", level: 2, abstract: "Slack evidence", score: 0.9 },
+          ],
+        }
+      },
+    }
+
+    const result = await searchResourceScope(client, "slack evidence", {
       limit: 6,
       scoreThreshold: 0.01,
     })

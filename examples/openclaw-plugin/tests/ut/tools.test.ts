@@ -319,6 +319,19 @@ describe("Tool: ov_import and ov_search (registration)", () => {
     expect(props).toHaveProperty("uri");
     expect(props).toHaveProperty("limit");
   });
+
+  it("registers resource recall tool with resource-only scope", () => {
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const tool = tools.get("resource_recall");
+    expect(tool).toBeDefined();
+    expect(tool!.description).toContain("Search OpenViking resources only");
+    expect(tool!.description).toContain("Slack");
+    const props = (tool!.parameters as any).properties;
+    expect(props).toHaveProperty("query");
+    expect(props).toHaveProperty("targetUri");
+    expect(props).toHaveProperty("limit");
+  });
 });
 
 describe("Tool: ov_search (behavioral)", () => {
@@ -538,6 +551,53 @@ describe("Tool: ov_search (behavioral)", () => {
   });
 });
 
+describe("Tool: resource_recall (behavioral)", () => {
+  it("searches viking resources by default", async () => {
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/v1/system/status")) {
+        return okResponse({ user: "default" });
+      }
+      if (url.includes("/api/v1/fs/ls")) {
+        return okResponse([]);
+      }
+      if (url.endsWith("/api/v1/search/find")) {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        expect(body.target_uri).toBe("viking://resources");
+        return okResponse({
+          memories: [],
+          resources: [
+            {
+              context_type: "resource",
+              uri: "viking://resources/meridian/slack/general/thread.md",
+              level: 2,
+              score: 0.84,
+              category: "",
+              match_reason: "",
+              relations: [],
+              abstract: "Slack thread about Meridian booking workflow",
+              overview: null,
+            },
+          ],
+          skills: [],
+          total: 1,
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { tools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const recall = tools.get("resource_recall")!;
+    const result = await recall.execute("tc1", { query: "Meridian booking workflow" }) as ToolResult;
+
+    expect(result.content[0]!.text).toContain("resource");
+    expect(result.content[0]!.text).toContain("Slack thread about Meridian booking workflow");
+    expect(result.details.resources).toHaveLength(1);
+    expect(result.details.skills).toHaveLength(0);
+  });
+});
+
 describe("Tool: memory_recall (behavioral)", () => {
   it("returns unavailable without searching when health fails", async () => {
     const fetchMock = vi.fn(async (url: string) => {
@@ -749,10 +809,10 @@ describe("OpenViking search command parsing", () => {
 });
 
 describe("Plugin registration", () => {
-  it("registers all 8 tools", () => {
+  it("registers all 9 tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(8);
+    expect(api.registerTool).toHaveBeenCalledTimes(9);
   });
 
   it("registers import and search commands", () => {

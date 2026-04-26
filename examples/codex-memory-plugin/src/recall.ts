@@ -122,6 +122,20 @@ function isResourceScope(uri: string | undefined): boolean {
   return normalized === DEFAULT_RESOURCE_SCOPE || normalized.startsWith(`${DEFAULT_RESOURCE_SCOPE}/`)
 }
 
+export async function searchResourceScope(
+  client: RecallClient,
+  query: string,
+  options: { targetUri?: string; limit: number; scoreThreshold: number },
+): Promise<RecallSearchResult> {
+  const targetUri = options.targetUri?.trim() || DEFAULT_RESOURCE_SCOPE
+  const result = await client.find(query, targetUri, options.limit, 0)
+  return {
+    memories: [],
+    resources: finalizeResources(withContextType(result.resources ?? [], "resource"), options),
+    failedScopes: [],
+  }
+}
+
 export async function searchMemoryScopes(
   client: RecallClient,
   query: string,
@@ -191,4 +205,12 @@ export function buildRecallResponseText(query: string, result: RecallSearchResul
     sections.push(`Relevant resources:\n\n${formatResourceResults(result.resources)}`)
   }
   return [...sections, ...notes].join("\n\n")
+}
+
+export function buildResourceRecallResponseText(query: string, result: RecallSearchResult): string {
+  const notes = [formatScopeFailures(result.failedScopes)].filter(Boolean)
+  if (result.resources.length === 0) {
+    return [`No relevant OpenViking resources found for "${query}".`, ...notes].join("\n\n")
+  }
+  return [`Relevant resources:\n\n${formatResourceResults(result.resources)}`, ...notes].join("\n\n")
 }

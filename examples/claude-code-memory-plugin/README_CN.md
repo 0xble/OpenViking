@@ -40,6 +40,7 @@
   │  MCP Server (memory-server.ts)       │
   │  显式使用的工具:                      │
   │  • memory_recall (手动搜索)          │
+  │  • resource_recall (资源搜索)        │
   │  • memory_store  (手动存储)          │
   │  • memory_forget (删除记忆)          │
   │  • memory_health (健康检查)          │
@@ -81,6 +82,7 @@
 
 MCP 服务器提供工具，用于 Claude 或用户需要显式记忆操作时：
 - **memory_recall** — 手动语义搜索
+- **resource_recall** — 搜索文档、Slack、邮件、日历、Drive 等已索引资源
 - **memory_store** — 手动记忆存储
 - **memory_forget** — 按 URI 或查询删除记忆
 - **memory_health** — 检查服务器状态

@@ -146,9 +146,10 @@ Session 是这套设计的主轴。当前实现里，它覆盖了“历史组装
 
 ## 工具层与可展开能力
 
-这套插件除了自动行为，还直接暴露了 6 个工具：
+这套插件除了自动行为，还直接暴露了 7 个工具：
 
 - `memory_recall`：显式检索长期记忆
+- `resource_recall`：显式检索文档、Slack、邮件、日历、Drive 等已索引资源
 - `memory_store`：把文本写入 OpenViking session 并立即触发 commit
 - `memory_forget`：按 URI 删除，或先搜索再删除唯一高置信候选
 - `ov_archive_expand`：展开某个 archive 的原始消息
@@ -159,6 +160,7 @@ Session 是这套设计的主轴。当前实现里，它覆盖了“历史组装
 
 - 自动 recall 解决“模型不知道该先查什么”的默认场景。
 - `memory_recall` 给模型一个显式补查入口。
+- `resource_recall` 给模型一个专门检索非记忆资源的补查入口。
 - `memory_store` 适合把一段明确的重要信息立刻落入记忆管线。
 - `ov_archive_expand` 负责在 summary 不够细时回到 archive 级原文。
 - `ov_import` 让 agent 在用户明确提出导入需求时直接完成操作，不要求用户记住 slash command。

@@ -1187,6 +1187,33 @@ const contextEnginePlugin = {
       { name: "ov_search" },
     );
 
+    api.registerTool(
+      (ctx: ToolContext) => ({
+        name: "resource_recall",
+        label: "Resource Recall (OpenViking)",
+        description:
+          "Search OpenViking resources only. Use when you need evidence from indexed documents, files, email, Slack, calendar, Drive, or other viking://resources content.",
+        parameters: Type.Object({
+          query: Type.String({ description: "Search query" }),
+          targetUri: Type.Optional(Type.String({ description: "Resource scope URI. Default: viking://resources" })),
+          limit: Type.Optional(Type.Number({ description: "Max results. Default: 10" })),
+        }),
+        async execute(_toolCallId: string, params: Record<string, unknown>) {
+          if (isBypassedSession(ctx)) {
+            return makeBypassedToolResult("resource_recall");
+          }
+          rememberSessionAgentId(ctx);
+          const agentId = resolveAgentId(ctx.sessionId, ctx.sessionKey);
+          return searchOpenViking({
+            query: String((params as { query?: unknown }).query ?? ""),
+            uri: typeof params.targetUri === "string" ? params.targetUri : "viking://resources",
+            limit: typeof params.limit === "number" ? params.limit : undefined,
+          }, agentId);
+        },
+      }),
+      { name: "resource_recall" },
+    );
+
     api.registerCommand?.({
       name: "ov-import",
       description: "Import a resource or skill into OpenViking.",

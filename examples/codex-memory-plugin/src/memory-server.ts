@@ -6,7 +6,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod"
 import type { FindResult } from "./recall.js"
-import { buildRecallResponseText, searchMemoryScopes } from "./recall.js"
+import {
+  buildRecallResponseText,
+  buildResourceRecallResponseText,
+  searchMemoryScopes,
+  searchResourceScope,
+} from "./recall.js"
 
 type CommitSessionResult = {
   task_id?: string
@@ -319,6 +324,28 @@ server.tool(
     })
 
     return { content: [{ type: "text" as const, text: buildRecallResponseText(query, result) }] }
+  },
+)
+
+server.tool(
+  "resource_recall",
+  "Search OpenViking resources. Use when you need evidence from indexed documents, files, email, Slack, calendar, Drive, or other viking://resources content.",
+  {
+    query: z.string().describe("Search query"),
+    target_uri: z.string().optional().describe("Resource scope URI, default viking://resources"),
+    limit: z.number().optional().describe("Max results, default 6"),
+    score_threshold: z.number().optional().describe("Minimum relevance score 0-1, default 0.01"),
+  },
+  async ({ query, target_uri, limit, score_threshold }) => {
+    const recallLimit = limit ?? config.recallLimit
+    const threshold = score_threshold ?? config.scoreThreshold
+    const result = await searchResourceScope(client, query, {
+      targetUri: target_uri,
+      limit: recallLimit,
+      scoreThreshold: threshold,
+    })
+
+    return { content: [{ type: "text" as const, text: buildResourceRecallResponseText(query, result) }] }
   },
 )
 

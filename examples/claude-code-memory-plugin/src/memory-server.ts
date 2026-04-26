@@ -21,6 +21,7 @@ import {
   formatOrderSourceNote,
   formatScopeFailures,
   searchMemoryScopes,
+  searchResourceScope,
 } from "./recall.js";
 
 // ---------------------------------------------------------------------------
@@ -673,6 +674,44 @@ server.tool(
           `Found ${recallItems.length} relevant OpenViking item(s):\n\n${lines.join("\n")}\n\n---\n${formatMemoryLines(recallItems)}`,
           ...notes,
         ].join("\n\n"),
+      }],
+    };
+  },
+);
+
+server.tool(
+  "resource_recall",
+  "Search OpenViking resources. Use when you need evidence from indexed documents, files, email, Slack, calendar, Drive, or other viking://resources content.",
+  {
+    query: z.string().describe("Search query — describe the resource evidence you want to find"),
+    limit: z.number().optional().describe("Max results to return (default: 6)"),
+    score_threshold: z.number().optional().describe("Min relevance score 0-1 (default: 0.01)"),
+    target_uri: z.string().optional().describe("Resource scope URI, e.g. viking://resources/email"),
+  },
+  async ({ query, limit, score_threshold, target_uri }) => {
+    const recallLimit = limit ?? config.recallLimit;
+    const threshold = score_threshold ?? config.scoreThreshold;
+    const candidateLimit = Math.max(recallLimit * 4, 20);
+    const searchResult = await searchResourceScope(client, query, {
+      targetUri: target_uri,
+      limit: candidateLimit,
+      scoreThreshold: threshold,
+    });
+    const processedResources = postProcessMemories(searchResult.resources, { limit: candidateLimit, scoreThreshold: threshold });
+    const resources = pickMemoriesForInjection(processedResources, recallLimit, query);
+    if (resources.length === 0) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: `No relevant OpenViking resources found for "${query}".`,
+        }],
+      };
+    }
+    const lines = await Promise.all(resources.map(formatRecallItemContent));
+    return {
+      content: [{
+        type: "text" as const,
+        text: `Found ${resources.length} relevant OpenViking resource(s):\n\n${lines.join("\n")}\n\n---\n${formatMemoryLines(resources)}`,
       }],
     };
   },

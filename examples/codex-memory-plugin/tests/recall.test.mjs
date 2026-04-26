@@ -3,8 +3,10 @@ import assert from "node:assert/strict"
 
 import {
   buildRecallResponseText,
+  buildResourceRecallResponseText,
   isRecallCandidate,
   searchMemoryScopes,
+  searchResourceScope,
 } from "../servers/recall.js"
 
 describe("Codex recall parity helpers", () => {
@@ -59,6 +61,31 @@ describe("Codex recall parity helpers", () => {
     assert.equal(result.resources[0].context_type, "resource")
     assert.match(text, /Relevant resources/)
     assert.match(text, /API notes/)
+  })
+
+  it("searches viking resources by default for resource recall", async () => {
+    const client = {
+      async find(_query, targetUri) {
+        assert.equal(targetUri, "viking://resources")
+        return {
+          resources: [
+            { uri: "viking://resources/slack/messages.json", level: 2, abstract: "Slack evidence", score: 0.9 },
+          ],
+        }
+      },
+    }
+
+    const result = await searchResourceScope(client, "slack evidence", {
+      limit: 6,
+      scoreThreshold: 0.01,
+    })
+    const text = buildResourceRecallResponseText("slack evidence", result)
+
+    assert.equal(result.memories.length, 0)
+    assert.equal(result.resources.length, 1)
+    assert.equal(result.resources[0].context_type, "resource")
+    assert.match(text, /Relevant resources/)
+    assert.match(text, /Slack evidence/)
   })
 
   it("does not treat resource-like prefixes as resource scopes", async () => {

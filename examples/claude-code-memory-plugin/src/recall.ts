@@ -109,6 +109,24 @@ function isResourceScope(uri: string | undefined): boolean {
   return normalized === DEFAULT_RESOURCE_SCOPE || normalized.startsWith(`${DEFAULT_RESOURCE_SCOPE}/`);
 }
 
+export async function searchResourceScope(
+  client: RecallClient,
+  query: string,
+  options: { targetUri?: string; limit: number; scoreThreshold: number },
+): Promise<RecallSearchResult> {
+  const targetUri = options.targetUri?.trim() || DEFAULT_RESOURCE_SCOPE;
+  const result = await client.find(query, {
+    targetUri,
+    limit: options.limit,
+    scoreThreshold: 0,
+  });
+  return {
+    memories: [],
+    resources: finalizeResources(withContextType(result.resources ?? [], "resource"), options),
+    failedScopes: [],
+  };
+}
+
 export async function searchMemoryScopes(
   client: RecallClient,
   query: string,

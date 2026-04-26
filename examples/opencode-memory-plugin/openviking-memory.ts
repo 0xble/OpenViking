@@ -2250,6 +2250,49 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
         },
       }),
 
+      resource_recall: tool({
+        description:
+          "Search OpenViking resources only. Use when you need evidence from indexed documents, files, email, Slack, calendar, Drive, or other viking://resources content.",
+        args: {
+          query: z.string().describe("Search query"),
+          target_uri: z
+            .string()
+            .optional()
+            .describe("Resource scope URI. Default: viking://resources"),
+          limit: z.number().optional().describe("Max results (default: 10)"),
+          score_threshold: z.number().optional().describe("Optional minimum score threshold"),
+        },
+        async execute(args, context) {
+          log("INFO", "resource_recall", "Executing resource recall", { args })
+          const requestBody: {
+            query: string
+            limit: number
+            target_uri: string
+            score_threshold?: number
+          } = {
+            query: args.query,
+            limit: args.limit ?? 10,
+            target_uri: args.target_uri ?? "viking://resources",
+          }
+          if (args.score_threshold !== undefined) requestBody.score_threshold = args.score_threshold
+
+          try {
+            const response = await makeRequest<OpenVikingResponse<SearchResult>>(config, {
+              method: "POST",
+              endpoint: "/api/v1/search/find",
+              body: requestBody,
+              abortSignal: context.abort,
+            })
+            const result = unwrapResponse(response) ?? { memories: [], resources: [], skills: [], total: 0 }
+            const resources = result.resources ?? []
+            return formatSearchResults({ resources, total: resources.length }, "resource_recall", args.query)
+          } catch (error: any) {
+            log("ERROR", "resource_recall", "Resource recall failed", { error: error.message, args })
+            return `Error: ${error.message}`
+          }
+        },
+      }),
+
       memsearch: tool(
         {
           description:

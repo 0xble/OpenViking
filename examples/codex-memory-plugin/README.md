@@ -9,9 +9,10 @@ This example intentionally stays MCP-only:
 - no writes to `~/.codex`
 - no checked-in build output
 
-Codex gets five tools:
+Codex gets six tools:
 
 - `memory_recall`
+- `resource_recall`
 - `memory_store`
 - `memory_write`
 - `memory_forget`

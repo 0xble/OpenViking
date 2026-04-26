@@ -144,9 +144,10 @@ So `afterTurn()` is closer to “incremental append plus threshold-triggered asy
 
 ## Tools and Expandability
 
-Beyond automatic behavior, the plugin exposes six tools directly:
+Beyond automatic behavior, the plugin exposes seven tools directly:
 
 - `memory_recall`: explicit long-term memory search
+- `resource_recall`: explicit search over indexed OpenViking resources such as docs, Slack, email, calendar, and Drive
 - `memory_store`: write text into an OpenViking session and trigger commit
 - `memory_forget`: delete by URI, or search first and remove a single strong match
 - `ov_archive_expand`: expand a concrete archive back into raw messages
@@ -157,6 +158,7 @@ They serve different roles:
 
 - automatic recall covers the default case where the model does not know what to search yet
 - `memory_recall` gives the model an explicit follow-up search path
+- `resource_recall` gives the model a dedicated follow-up path for indexed non-memory resources
 - `memory_store` is for immediately persisting clearly important information
 - `ov_archive_expand` is the “go back to archive detail” escape hatch when summaries are not enough
 - `ov_import` lets the agent complete explicit import requests without asking the user to remember slash commands
