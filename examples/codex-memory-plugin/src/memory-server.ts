@@ -84,6 +84,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+const DEFAULT_WRITE_REQUEST_TIMEOUT_MS = 120_000
+
+function extendedWriteTimeoutMs(timeoutMs: number): number {
+  return Math.max(timeoutMs, DEFAULT_WRITE_REQUEST_TIMEOUT_MS)
+}
+
 const ovConf = loadOvConf()
 const serverConfig = (ovConf.server ?? {}) as Record<string, unknown>
 const host = str(serverConfig.host, "127.0.0.1").replace("0.0.0.0", "127.0.0.1")
@@ -114,9 +120,13 @@ class OpenVikingClient {
     private readonly timeoutMs: number,
   ) {}
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(
+    path: string,
+    init: RequestInit = {},
+    requestTimeoutMs = this.timeoutMs,
+  ): Promise<T> {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    const timer = setTimeout(() => controller.abort(), requestTimeoutMs)
 
     try {
       const headers = new Headers(init.headers ?? {})
@@ -283,6 +293,7 @@ class OpenVikingClient {
         method: "POST",
         body: JSON.stringify({ uri, content, mode, wait: true }),
       },
+      extendedWriteTimeoutMs(this.timeoutMs),
     )
     return {
       uri: String(r.uri),

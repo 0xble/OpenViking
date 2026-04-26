@@ -224,9 +224,13 @@ class OpenVikingClient {
     private readonly timeoutMs: number,
   ) {}
 
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(
+    path: string,
+    init: RequestInit = {},
+    requestTimeoutMs = this.timeoutMs,
+  ): Promise<T> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
     try {
       const headers = new Headers(init.headers ?? {});
       if (this.apiKey) headers.set("X-API-Key", this.apiKey);
@@ -452,6 +456,7 @@ class OpenVikingClient {
         method: "POST",
         body: JSON.stringify({ uri, content, mode, wait: true }),
       },
+      extendedWriteTimeoutMs(this.timeoutMs),
     );
     return {
       uri: String(r.uri),
@@ -603,6 +608,12 @@ function totalCommitMemories(result: CommitSessionResult): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+const DEFAULT_WRITE_REQUEST_TIMEOUT_MS = 120_000;
+
+function extendedWriteTimeoutMs(timeoutMs: number): number {
+  return Math.max(timeoutMs, DEFAULT_WRITE_REQUEST_TIMEOUT_MS);
 }
 
 // ---------------------------------------------------------------------------

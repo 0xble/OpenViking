@@ -174,9 +174,9 @@ class OpenVikingClient {
         this.agentId = agentId;
         this.timeoutMs = timeoutMs;
     }
-    async request(path, init = {}) {
+    async request(path, init = {}, requestTimeoutMs = this.timeoutMs) {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+        const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
         try {
             const headers = new Headers(init.headers ?? {});
             if (this.apiKey)
@@ -365,7 +365,7 @@ class OpenVikingClient {
         const r = await this.request("/api/v1/content/write", {
             method: "POST",
             body: JSON.stringify({ uri, content, mode, wait: true }),
-        });
+        }, extendedWriteTimeoutMs(this.timeoutMs));
         return {
             uri: String(r.uri),
             created: Boolean(r.created),
@@ -509,6 +509,10 @@ function totalCommitMemories(result) {
 }
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+const DEFAULT_WRITE_REQUEST_TIMEOUT_MS = 120_000;
+function extendedWriteTimeoutMs(timeoutMs) {
+    return Math.max(timeoutMs, DEFAULT_WRITE_REQUEST_TIMEOUT_MS);
 }
 // ---------------------------------------------------------------------------
 // MCP Server

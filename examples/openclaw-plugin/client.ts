@@ -889,10 +889,13 @@ export class OpenVikingClient {
       wait: options?.wait ?? true,
       ...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
     };
+    const requestTimeoutMs =
+      body.wait ? resolveWaitRequestTimeoutMs(this.timeoutMs, options?.timeout) : undefined;
     return this.request<ContentWriteResult>(
       "/api/v1/content/write",
       { method: "POST", body: JSON.stringify(body) },
       options?.agentId,
+      requestTimeoutMs,
     );
   }
 

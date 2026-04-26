@@ -369,6 +369,40 @@ describe("OpenVikingClient resource and skill import", () => {
     await assertion;
   });
 
+  it("uses an extended request timeout for wait=true content writes", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+      setTimeout(() => {
+        resolve(okResponse({
+          uri: "viking://user/alice/memories/preferences/lease.md",
+          root_uri: "viking://user/alice/memories/preferences",
+          context_type: "memory",
+          mode: "replace",
+          created: true,
+          written_bytes: 42,
+          semantic_updated: true,
+          vector_updated: true,
+        }));
+      }, 20_000);
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = makeClient(15_000);
+    const pending = client.writeContent(
+      "viking://user/alice/memories/preferences/lease.md",
+      "lease terms",
+      { wait: true, timeout: 60 },
+    );
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    await expect(pending).resolves.toMatchObject({
+      uri: "viking://user/alice/memories/preferences/lease.md",
+      created: true,
+    });
+  });
+
   it("keeps polling wait=true commit long enough for slow Phase 2 completion", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((url: string) => {
