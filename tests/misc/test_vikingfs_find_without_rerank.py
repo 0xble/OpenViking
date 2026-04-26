@@ -89,3 +89,43 @@ async def test_find_works_without_rerank_config(monkeypatch) -> None:
     assert captured["score_threshold"] == 0.2
     assert captured["scope_dsl"] == {"category": "doc"}
     fs._ensure_access.assert_called_once_with("viking://resources/docs", request_ctx)
+
+
+@pytest.mark.asyncio
+async def test_unscoped_search_applies_limit_across_context_types(monkeypatch) -> None:
+    fs = _make_viking_fs()
+    request_ctx = _ctx()
+
+    class FakeRetriever:
+        def __init__(self, storage, embedder, rerank_config):
+            pass
+
+        async def retrieve(self, typed_query, ctx, limit, score_threshold, scope_dsl):
+            scores = {
+                ContextType.MEMORY: 0.9,
+                ContextType.RESOURCE: 0.8,
+                ContextType.SKILL: 0.7,
+            }
+            return QueryResult(
+                query=typed_query,
+                matched_contexts=[
+                    MatchedContext(
+                        uri=f"viking://{typed_query.context_type.value}/item.md",
+                        context_type=typed_query.context_type,
+                        score=scores[typed_query.context_type],
+                    )
+                ],
+                searched_directories=[],
+            )
+
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.HierarchicalRetriever",
+        FakeRetriever,
+    )
+
+    result = await fs.search("guide", limit=2, ctx=request_ctx)
+
+    assert result.total == 2
+    assert [ctx.uri for ctx in result.memories] == ["viking://memory/item.md"]
+    assert [ctx.uri for ctx in result.resources] == ["viking://resource/item.md"]
+    assert result.skills == []
