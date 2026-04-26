@@ -224,6 +224,32 @@ class ReindexExecutor:
         started_at = time.perf_counter()
         counters = _ReindexCounters()
 
+        if (
+            object_type == "memory"
+            and target_stat is not None
+            and target_stat.get("isDir", target_stat.get("is_dir"))
+            and not lock_already_held
+        ):
+            await self._run_memory_directory_reindex(
+                uri=uri,
+                mode=mode,
+                counters=counters,
+                ctx=ctx,
+                lock_path=lock_path,
+            )
+            return {
+                "status": "completed",
+                "uri": uri,
+                "object_type": object_type,
+                "mode": mode,
+                "scanned_records": counters.scanned_records,
+                "rebuilt_records": counters.rebuilt_records,
+                "unsupported_records": counters.unsupported_records,
+                "failed_records": counters.failed_records,
+                "duration_ms": int((time.perf_counter() - started_at) * 1000),
+                "warnings": counters.warnings,
+            }
+
         @asynccontextmanager
         async def _maybe_lock():
             if lock_already_held:
@@ -279,6 +305,30 @@ class ReindexExecutor:
             "duration_ms": int((time.perf_counter() - started_at) * 1000),
             "warnings": counters.warnings,
         }
+
+    async def _run_memory_directory_reindex(
+        self,
+        *,
+        uri: str,
+        mode: str,
+        counters: _ReindexCounters,
+        ctx: RequestContext,
+        lock_path: str,
+    ) -> None:
+        """Reindex a memory directory without a long-held subtree lock.
+
+        Semantic repair writes `.abstract.md` and `.overview.md`, so it
+        still needs a short point lock on the directory being repaired.
+        Vector rebuilding only reads VikingFS content and updates the
+        vector store, so it must not hold the filesystem subtree lock
+        across every descendant file in a heavy event-day tree.
+        """
+        if mode == "semantic_and_vectors":
+            async with LockContext(get_lock_manager(), [lock_path], lock_mode="point"):
+                await self._run_semantic_processor(uri=uri, context_type="memory", ctx=ctx)
+            await asyncio.sleep(0)
+
+        await self._reindex_memory_vectors(uri=uri, counters=counters, ctx=ctx)
 
     async def _safe_stat_for_lock(
         self, *, viking_fs: Any, uri: str, ctx: RequestContext

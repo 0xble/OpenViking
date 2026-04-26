@@ -602,7 +602,6 @@ class SemanticProcessor(DequeueHandlerBase):
                 await asyncio.gather(*[_gen(i, fp) for i, fp in batch])
 
         file_summaries = [s for s in file_summaries if s is not None]
-
         try:
             children_abstracts = []
             if child_dirs:
