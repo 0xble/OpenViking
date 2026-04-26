@@ -366,3 +366,38 @@ async def test_quick_mode_skips_rerank(monkeypatch):
         "viking://resources/file-a",
     ]
     assert fake_client.calls == []
+
+
+@pytest.mark.asyncio
+async def test_result_quality_prefers_concrete_leaf_over_placeholder_directory():
+    retriever = HierarchicalRetriever(
+        storage=DummyStorage(),
+        embedder=None,
+        rerank_config=None,
+    )
+
+    result = await retriever._convert_to_matched_contexts(
+        [
+            {
+                "uri": "viking://resources/docs",
+                "abstract": "[Directory overview is not generated]",
+                "_final_score": 0.80,
+                "level": 1,
+                "context_type": "resource",
+            },
+            {
+                "uri": "viking://resources/docs/api-guide.md",
+                "abstract": "API guide reference",
+                "_final_score": 0.72,
+                "level": 2,
+                "context_type": "resource",
+            },
+        ],
+        ctx=_ctx(),
+        query="api guide",
+    )
+
+    assert [ctx.uri for ctx in result] == [
+        "viking://resources/docs/api-guide.md",
+        "viking://resources/docs/.overview.md",
+    ]

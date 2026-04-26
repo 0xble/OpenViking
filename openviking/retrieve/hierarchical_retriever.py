@@ -10,6 +10,7 @@ and rerank-based relevance scoring.
 import heapq
 import logging
 import math
+import re
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -52,6 +53,43 @@ class HierarchicalRetriever:
     GLOBAL_SEARCH_TOPK = 10  # Global retrieval count (more candidates = better rerank precision)
     HOTNESS_ALPHA = 0.2  # Weight for hotness score in final ranking (0 = disabled)
     LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
+    PLACEHOLDER_SUMMARY_RE = re.compile(
+        r"(abstract is not ready|overview is not ready|overview is not generated|directory overview is not generated)",
+        re.IGNORECASE,
+    )
+    QUERY_TOKEN_RE = re.compile(r"[a-z0-9]{2,}", re.IGNORECASE)
+    QUERY_TOKEN_STOPWORDS = frozenset(
+        {
+            "and",
+            "are",
+            "did",
+            "does",
+            "for",
+            "from",
+            "how",
+            "is",
+            "that",
+            "the",
+            "this",
+            "was",
+            "were",
+            "what",
+            "when",
+            "where",
+            "which",
+            "who",
+            "whom",
+            "whose",
+            "why",
+            "with",
+            "you",
+            "your",
+        }
+    )
+    RESULT_QUALITY_LEAF_BOOST = 0.03
+    RESULT_QUALITY_PLACEHOLDER_PENALTY = 0.25
+    RESULT_QUALITY_NON_LEAF_NO_MATCH_PENALTY = 0.04
+    RESULT_QUALITY_MAX_TOKEN_BOOST = 0.08
 
     def __init__(
         self,
@@ -203,7 +241,7 @@ class HierarchicalRetriever:
         )
 
         # Step 6: Convert results
-        matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
+        matched = await self._convert_to_matched_contexts(candidates, ctx=ctx, query=query.query)
 
         final = matched[:limit]
 
@@ -501,6 +539,7 @@ class HierarchicalRetriever:
         self,
         candidates: List[Dict[str, Any]],
         ctx: RequestContext,
+        query: str = "",
     ) -> List[MatchedContext]:
         """Convert candidate results to MatchedContext list.
 
@@ -552,6 +591,7 @@ class HierarchicalRetriever:
             if not math.isfinite(final_score):
                 final_score = 0.0
             level = c.get("level", 2)
+            final_score = self._adjust_score_for_result_quality(final_score, c, level, query)
             display_uri = self._append_level_suffix(c.get("uri", ""), level)
 
             results.append(
@@ -571,6 +611,38 @@ class HierarchicalRetriever:
         # Re-sort by blended score so hotness boost can change ranking
         results.sort(key=lambda x: x.score, reverse=True)
         return results
+
+    @classmethod
+    def _adjust_score_for_result_quality(
+        cls,
+        score: float,
+        candidate: Dict[str, Any],
+        level: int,
+        query: str,
+    ) -> float:
+        """Prefer concrete content nodes over generated or missing summaries."""
+        adjusted = score
+        abstract = str(candidate.get("abstract") or "")
+        haystack = f"{candidate.get('uri', '')} {abstract}".lower()
+        haystack_tokens = set(cls.QUERY_TOKEN_RE.findall(haystack))
+        tokens = [
+            token
+            for token in cls.QUERY_TOKEN_RE.findall(query.lower())
+            if token not in cls.QUERY_TOKEN_STOPWORDS
+        ]
+        matched_tokens = sum(1 for token in tokens[:8] if token in haystack_tokens)
+
+        if cls.PLACEHOLDER_SUMMARY_RE.search(abstract):
+            adjusted -= cls.RESULT_QUALITY_PLACEHOLDER_PENALTY
+        if level == 2:
+            adjusted += cls.RESULT_QUALITY_LEAF_BOOST
+        elif tokens and matched_tokens == 0:
+            adjusted -= cls.RESULT_QUALITY_NON_LEAF_NO_MATCH_PENALTY
+        if matched_tokens:
+            denominator = min(len(tokens), 4)
+            adjusted += (matched_tokens / denominator) * cls.RESULT_QUALITY_MAX_TOKEN_BOOST
+
+        return max(0.0, min(1.0, adjusted))
 
     @classmethod
     def _append_level_suffix(cls, uri: str, level: int) -> str:
