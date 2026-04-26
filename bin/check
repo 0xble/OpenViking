@@ -128,7 +128,18 @@ install_test_deps() {
   run uv pip install setuptools setuptools_scm cmake wheel
 }
 
+clean_native_artifacts() {
+  rm -f \
+    openviking/lib/ragfs_python*.so \
+    openviking/lib/ragfs_python*.pyd \
+    openviking/lib/ragfs_python*.dll \
+    openviking/storage/vectordb/engine/*.so \
+    openviking/storage/vectordb/engine/*.pyd \
+    openviking/storage/vectordb/engine/*.dll
+}
+
 build_cpp_extensions_for_ci() {
+  clean_native_artifacts
   export OV_SKIP_OV_BUILD=1
   mkdir -p openviking/bin
   touch openviking/bin/ov
@@ -308,6 +319,7 @@ check_build() {
   export OPENVIKING_VERSION="$version"
   export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="$version"
   run cargo build --release -p ov_cli
+  clean_native_artifacts
   run rm -rf dist build openviking.egg-info
   run uv build --sdist
   build_cpp_extensions_for_ci
