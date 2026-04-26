@@ -403,7 +403,7 @@ describe("OpenVikingClient resource and skill import", () => {
     });
   });
 
-  it("adds a default lock wait timeout to manual content writes", async () => {
+  it("adds a default lock wait timeout without waiting on semantic queues", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({
       uri: "viking://user/alice/memories/preferences/lease.md",
       root_uri: "viking://user/alice/memories/preferences",
@@ -425,7 +425,7 @@ describe("OpenVikingClient resource and skill import", () => {
     expect(JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body))).toMatchObject({
       uri: "viking://user/alice/memories/preferences/lease.md",
       timeout: 30,
-      wait: true,
+      wait: false,
     });
   });
 

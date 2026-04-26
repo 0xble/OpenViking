@@ -399,7 +399,7 @@ class OpenVikingClient {
     async writeContentOnce(uri, content, mode) {
         const r = await this.request("/api/v1/content/write", {
             method: "POST",
-            body: JSON.stringify({ uri, content, mode, wait: true, timeout: MANUAL_WRITE_LOCK_TIMEOUT_SECONDS }),
+            body: JSON.stringify({ uri, content, mode, wait: false, timeout: MANUAL_WRITE_LOCK_TIMEOUT_SECONDS }),
         }, extendedWriteTimeoutMs(this.timeoutMs));
         return {
             uri: String(r.uri),

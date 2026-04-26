@@ -1728,7 +1728,7 @@ const contextEnginePlugin = {
             const c = await getClient();
             const result = await c.writeContent(uri, content, {
               mode,
-              wait: true,
+              wait: false,
               agentId: writeAgentId,
             });
             const verb = result.created ? "created" : "updated";

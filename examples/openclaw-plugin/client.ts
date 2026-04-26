@@ -952,7 +952,7 @@ export class OpenVikingClient {
       uri,
       content,
       mode: options?.mode ?? "replace",
-      wait: options?.wait ?? true,
+      wait: options?.wait ?? false,
       timeout,
     };
     const requestTimeoutMs =

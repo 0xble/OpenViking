@@ -2297,7 +2297,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
                   uri: args.uri,
                   content: args.content,
                   mode,
-                  wait: true,
+                  wait: false,
                   timeout: MANUAL_WRITE_LOCK_TIMEOUT_SECONDS,
                 },
                 timeoutMs: Math.max(config.timeoutMs, MANUAL_WRITE_REQUEST_TIMEOUT_MS),
