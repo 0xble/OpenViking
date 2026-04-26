@@ -306,11 +306,11 @@ def _default_system_context(scope_uri: str) -> RequestContext:
     account_id = "default"
     user_id = "system"
     if scope_uri.startswith("viking://agent/"):
-        parts = scope_uri[len("viking://agent/"):].split("/", 1)
+        parts = scope_uri[len("viking://agent/") :].split("/", 1)
         if parts and parts[0]:
             account_id = parts[0]
     elif scope_uri.startswith("viking://user/"):
-        parts = scope_uri[len("viking://user/"):].split("/", 1)
+        parts = scope_uri[len("viking://user/") :].split("/", 1)
         if parts and parts[0]:
             user_id = parts[0]
 

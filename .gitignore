@@ -116,6 +116,7 @@ docker-compose.override.yml
 /benchmark_data/*
 .claude
 .openviking
+.local-ci/
 *.code-workspace
 .openviking.pid
 exports/

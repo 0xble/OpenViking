@@ -40,18 +40,17 @@ pip install -r requirements.txt
 
 #### 一键本地测试（推荐）
 
-使用提供的脚本模拟完整的 CI 流水线流程：
+使用仓库本地 CI 入口运行 API 测试：
 
 ```bash
-cd tests/api_test
-./local-test.sh
+bin/check api
 ```
 
-这个脚本会自动：
+这个命令会自动：
 1. 检查 Python 版本
-2. 安装 OpenViking
+2. 安装 OpenViking 测试依赖
 3. 安装测试依赖
-4. 启动 OpenViking Server（自动找可用端口）
+4. 使用临时 `ov.conf` 启动 OpenViking Server（自动找可用端口）
 5. 运行所有 API 测试
 6. 停止服务并清理
 
@@ -94,28 +93,20 @@ export EMBEDDING_API_KEY=your-embedding-key
 python -m pytest retrieval/ -v
 ```
 
-## CI/CD 流水线
+## 本地 CI
 
-### 工作流文件
+### 特性
 
-`.github/workflows/api_test.yml` - API 集成测试流水线
+- 本地执行：`bin/check api`
+- 动态端口：自动查找可用端口避免冲突
+- Secrets 支持：通过环境变量传递 API 密钥
+- 上游一致性：`bin/check upstream-parity` 检查本地 CI 是否仍匹配上游 workflow 合约
 
-### 流水线特性
+### 配置密钥
 
-- ✅ 智能构建复用：只在依赖变更时重新构建
-- ✅ 并发安全：同一 PR 自动取消旧的运行
-- ✅ 动态端口：自动查找可用端口避免冲突
-- ✅ Secrets 支持：安全传递 API 密钥
+为了运行完整的检索测试，需要设置以下环境变量：
 
-### 配置 GitHub Secrets
-
-为了运行完整的检索测试，需要在仓库中配置以下 Secrets：
-
-1. 进入仓库 **Settings** → **Secrets and variables** → **Actions**
-2. 点击 **New repository secret**
-3. 添加以下 Secrets：
-
-| Secret 名称 | 说明 |
+| 环境变量 | 说明 |
 |------------|------|
 | `VLM_API_KEY` | VLM 模型 API 密钥 |
 | `EMBEDDING_API_KEY` | Embedding 模型 API 密钥 |
@@ -143,4 +134,4 @@ python -m pytest retrieval/ -v
 ## 相关文档
 
 - OpenViking API 文档：`docs/zh/api/`
-- CI/CD 配置：`.github/workflows/api_test.yml`
+- 本地 CI 配置：`bin/check`

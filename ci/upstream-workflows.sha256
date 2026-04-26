@@ -1,0 +1,23 @@
+# Hashes of upstream/main .github/workflows files at the time local CI replaced
+# fork-local GitHub Actions. `bin/check upstream-parity` refreshes upstream/main
+# and fails when upstream changes this workflow contract.
+f0359a174429243382bd904e42e6c15943fa9f26e2725420c7fddf057adf240b  .github/workflows/_build.yml
+fd4b89719379eedb83b2d5a564c93b35c07809965295fc13b29bed3760467b6a  .github/workflows/_codeql.yml
+f23b4e6401ea7fe0746828811a6eb96f4837d3a9a5ca01d17b10ebecc6a0b2f4  .github/workflows/_docs-deploy.yml
+5462648c9d588dba07c22a68a23a0f3b3b45f969871a131fb46d5488164bb584  .github/workflows/_docs.yml
+63847052be8d490c491e881f087813924618d905f6b96d3e6a90d52b6e5c9cad  .github/workflows/_lint.yml
+86a0bd9f2e465708aaf3005e4e300e587a2b60dbc104ab3d81cbcf5c02ac6ded  .github/workflows/_publish.yml
+33d25812182a8814ec186514430af336f3792c1d1ca02d6880dc4b8819a6aa29  .github/workflows/_test_full.yml
+0d8d468d266fbbe141160cdfd7f5e508831a81549b9ff3ffac9bc90de110f347  .github/workflows/_test_lite.yml
+3e7595897d4f9a87abade6e74c3f349504f92f67f1c9a20e4314881f3980d79d  .github/workflows/api_test.yml
+23b0cd8811a72d88ddb799f3aaee82f19fdc059ca5fa501f86d1345e14d40367  .github/workflows/api_test_effect.yml
+4220d7af4a9095955381e0a273b01448982b960f844242438b0b9a60c112ed10  .github/workflows/build-docker-image.yml
+73500eba3497d762de7bcd8b8f29606df8898ccf178d3b8d4fd1933b96a29b19  .github/workflows/ci.yml
+5f104bb983a91feb608f0fdec0c15b85e6d87881e2d5eb79e73bcb42625a2b8f  .github/workflows/docs.yml
+5fad65236d6f2c09805a537ef10f96909486a79f6afa92bb7954479f5f1a2d67  .github/workflows/oc2ov_test.yml
+4574aa0d284ca45fd0c2644637ffa411a0f2856a32a3ce3bf155b710f5951507  .github/workflows/pr-review.yml
+af5a076522af6e0fc82722c342f265429101ffa94411092634cb459a271de7f8  .github/workflows/pr.yml
+5200a23ac88331c70f01459730373a7e1321009579bc0844d2ae53d4b8fe9f11  .github/workflows/release-vikingbot-first.yml
+ccc388c50ac1ba4e2b7b95d45a92513bdfb188014e83779f886b241188fe292b  .github/workflows/release.yml
+73b8802041c02985baf0f7a1e0a78564d299a1a3cb0db116b7e8fa6c5858bb20  .github/workflows/rust-cli.yml
+e368a06575e0d204d7c2799fb1cbebe2ba818f271d9128f03c63b183821eff38  .github/workflows/schedule.yml

@@ -55,12 +55,13 @@ def test_openviking_package_includes_console_static_assets():
     assert '"console/static/**/*"' in setup_py
 
 
-def test_build_workflow_invokes_maturin_via_python_module():
-    workflow = _read_text(".github/workflows/_build.yml")
+def test_local_build_gate_invokes_maturin_directly():
+    check_script = _read_text("bin/check")
 
-    assert "Build ragfs-python and extract into openviking/lib/" not in workflow
-    assert "uv run python -m maturin build --release" not in workflow
-    assert "uv run python <<PY" not in workflow
+    assert "Build ragfs-python and extract into openviking/lib/" not in check_script
+    assert "uv run python -m maturin build --release" not in check_script
+    assert "uv run python <<PY" not in check_script
+    assert "uv run --no-project maturin build --release" in check_script
 
 
 def test_ragfs_python_uses_pyo3_version_with_python_314_support():
@@ -72,14 +73,15 @@ def test_ragfs_python_uses_pyo3_version_with_python_314_support():
 def test_root_build_system_includes_maturin_for_isolated_builds():
     pyproject = _read_text("pyproject.toml")
     setup_py = _read_text("setup.py")
+    ragfs_cargo_toml = _read_text("crates/ragfs-python/Cargo.toml")
 
     assert '"maturin>=1.0,<2.0",' in pyproject
     assert "sys.executable," in setup_py
     assert '"maturin",' in setup_py
     assert '"build",' in setup_py
     assert '"--release",' in setup_py
-    assert '"--features",' in setup_py
-    assert '"s3",' in setup_py
+    assert 'default = ["s3"]' in ragfs_cargo_toml
+    assert '"--no-default-features"' not in setup_py
     assert '"--out",' in setup_py
     assert "tmpdir," in setup_py
     assert 'shutil.which("maturin")' not in setup_py
@@ -87,14 +89,14 @@ def test_root_build_system_includes_maturin_for_isolated_builds():
 
 def test_root_build_system_honors_ci_compiler_overrides_and_requires_ragfs_for_wheels():
     setup_py = _read_text("setup.py")
-    build_workflow = _read_text(".github/workflows/_build.yml")
+    check_script = _read_text("bin/check")
 
     assert 'os.environ.get("CC")' in setup_py
     assert 'os.environ.get("CXX")' in setup_py
     assert "OV_REQUIRE_RAGFS_BUILD" in setup_py
-    assert 'echo "CC=clang" >> "$GITHUB_ENV"' in build_workflow
-    assert 'echo "CXX=clang++" >> "$GITHUB_ENV"' in build_workflow
-    assert 'echo "OV_REQUIRE_RAGFS_BUILD=1" >> "$GITHUB_ENV"' in build_workflow
+    assert 'export CC="${CC:-clang}"' in check_script
+    assert 'export CXX="${CXX:-clang++}"' in check_script
+    assert "export OV_REQUIRE_RAGFS_BUILD=1" in check_script
 
 
 def test_rust_crates_declare_the_repo_minimum_rust_version():

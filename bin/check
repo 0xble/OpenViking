@@ -1,0 +1,454 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$repo_root"
+
+artifact_dir="${OPENVIKING_CI_ARTIFACT_DIR:-$repo_root/.local-ci}"
+base_ref="${OPENVIKING_CI_BASE_REF:-origin/main}"
+upstream_ref="${OPENVIKING_CI_UPSTREAM_REF:-upstream/main}"
+
+usage() {
+  cat <<'EOF'
+Usage: bin/check [command]
+
+Commands:
+  all              Run upstream parity, lint, lite tests, docs, plugin checks
+  upstream-parity Verify local CI is pinned to upstream workflow hashes
+  lint             Mirror upstream PR lint on changed Python files
+  test             Mirror upstream lite test workflow locally
+  test-full        Alias for the current upstream full test command set
+  api              Run API integration tests with local server
+  api-effect       Run slow API effect tests with local server
+  docs             Build VitePress docs
+  plugin           Run fork-local OpenClaw plugin checks
+  build            Build source distribution and local wheel prerequisites
+  docker           Validate Docker image build inputs without pushing
+  rust-cli         Build Rust CLI release binary
+  oc2ov            Run self-hosted OpenClaw/OpenViking P0 test flow
+  release          Build local release artifacts only; never publishes
+EOF
+}
+
+step() {
+  printf '\n==> %s\n' "$*"
+}
+
+need() {
+  if ! command -v "$1" >/dev/null 2>&1; then
+    printf 'env_missing: required command not found: %s\n' "$1" >&2
+    exit 127
+  fi
+}
+
+run() {
+  step "$*"
+  "$@"
+}
+
+ensure_artifact_dir() {
+  mkdir -p "$artifact_dir"
+}
+
+ensure_origin_base() {
+  if git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
+    return 0
+  fi
+  git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main || true
+}
+
+changed_python_files() {
+  ensure_origin_base
+  if git rev-parse --verify "$base_ref" >/dev/null 2>&1; then
+    {
+      git diff --name-only --diff-filter=d "$base_ref"...HEAD
+      git diff --name-only --diff-filter=d
+      git diff --cached --name-only --diff-filter=d
+    } | awk '/\.py$/ && $0 !~ /^third_party\// { print }' | sort -u
+  else
+    git ls-files '*.py' ':!:third_party/**' | sort -u
+  fi
+}
+
+check_upstream_parity() {
+  need git
+  need shasum
+  git remote get-url upstream >/dev/null
+  run git fetch --quiet upstream +refs/heads/main:refs/remotes/upstream/main
+
+  local expected actual
+  expected="$(mktemp)"
+  actual="$(mktemp)"
+  grep -vE '^[[:space:]]*(#|$)' "$repo_root/ci/upstream-workflows.sha256" > "$expected"
+
+  git ls-tree -r --name-only "$upstream_ref" .github/workflows | sort |
+    while IFS= read -r path; do
+      git show "$upstream_ref:$path" |
+        shasum -a 256 |
+        awk -v p="$path" '{ print $1 "  " p }'
+    done > "$actual"
+
+  if ! diff -u "$expected" "$actual"; then
+    rm -f "$expected" "$actual"
+    cat >&2 <<'EOF'
+upstream workflow drift detected.
+Refresh local CI against upstream/main before trusting local pass/fail results.
+EOF
+    exit 1
+  fi
+  rm -f "$expected" "$actual"
+}
+
+check_lint() {
+  need uv
+  run uv sync --frozen --extra dev
+
+  local files=()
+  while IFS= read -r file; do
+    files+=("$file")
+  done < <(changed_python_files)
+  if [ "${#files[@]}" -eq 0 ]; then
+    echo "No changed Python files; matching upstream lint skip."
+    return 0
+  fi
+
+  run uv run ruff format --check "${files[@]}"
+  run uv run ruff check "${files[@]}"
+  step "uv run mypy ${files[*]}"
+  if ! uv run mypy "${files[@]}"; then
+    echo "mypy failed, but upstream _lint.yml marks mypy continue-on-error."
+  fi
+}
+
+install_test_deps() {
+  need uv
+  need cargo
+  need cmake
+  run uv sync --frozen --extra test
+  run uv pip install setuptools setuptools_scm cmake wheel
+}
+
+build_cpp_extensions_for_ci() {
+  export OV_SKIP_OV_BUILD=1
+  mkdir -p openviking/bin
+  touch openviking/bin/ov
+  chmod +x openviking/bin/ov
+
+  if [ -z "${SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING:-}" ]; then
+    local pretend_version
+    pretend_version="$(git describe --tags --always 2>/dev/null |
+      sed -E 's/^v?([0-9]+\.[0-9]+\.[0-9]+).*/\1.dev0/' || echo "0.0.0.dev0")"
+    export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="$pretend_version"
+    echo "Using pretend version: $pretend_version"
+  fi
+
+  run uv run python setup.py build_ext --inplace
+}
+
+ensure_ragfs_binding() {
+  local lib_dir count tmpdir wheel
+  lib_dir="openviking/lib"
+  count="$(find "$lib_dir" -maxdepth 1 \
+    \( -name 'ragfs_python*.so' -o -name 'ragfs_python*.pyd' -o -name 'ragfs_python*.dylib' \) \
+    -print 2>/dev/null | wc -l | tr -d '[:space:]')"
+
+  if [ "$count" -gt 0 ]; then
+    echo "ragfs_python native extension already exists."
+    return 0
+  fi
+
+  tmpdir="$(mktemp -d)"
+  (
+    cd crates/ragfs-python
+    run uv run --no-project maturin build --release --features s3 --out "$tmpdir"
+  )
+
+  wheel="$(find "$tmpdir" -maxdepth 1 -name 'ragfs_python-*.whl' -print | head -n 1)"
+  if [ -z "$wheel" ]; then
+    echo "maturin produced no ragfs_python wheel" >&2
+    exit 1
+  fi
+
+  mkdir -p "$lib_dir"
+  run uv run python - "$wheel" "$lib_dir" <<'PY'
+import os
+import stat
+import sys
+import zipfile
+
+wheel, lib_dir = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(wheel) as zf:
+    for name in zf.namelist():
+        base = os.path.basename(name)
+        if base.startswith("ragfs_python") and base.endswith((".so", ".pyd", ".dylib")):
+            dst = os.path.join(lib_dir, base)
+            with zf.open(name) as src, open(dst, "wb") as out:
+                out.write(src.read())
+            os.chmod(dst, os.stat(dst).st_mode | stat.S_IXUSR)
+            print(f"extracted {base} -> {dst}")
+            raise SystemExit(0)
+print("no ragfs_python native library found in wheel", file=sys.stderr)
+raise SystemExit(1)
+PY
+  rm -rf "$tmpdir"
+}
+
+check_test_lite() {
+  install_test_deps
+  run cargo check -p ragfs-python
+  build_cpp_extensions_for_ci
+  export PYTHONPATH="${PYTHONPATH:-}:$repo_root"
+  run uv run python tests/integration/test_quick_start_lite.py
+}
+
+write_api_config() {
+  local config_path workspace
+  config_path="$1"
+  workspace="$2"
+  run python3 - "$config_path" "$workspace" <<'PY'
+import json
+import os
+import sys
+
+config_path, workspace = sys.argv[1], sys.argv[2]
+vlm_key = os.environ.get("VLM_API_KEY") or "dummy-vlm-api-key"
+embedding_key = os.environ.get("EMBEDDING_API_KEY") or "dummy-embedding-api-key"
+config = {
+    "server": {"root_api_key": "test-root-api-key"},
+    "storage": {"workspace": workspace},
+    "vlm": {
+        "provider": "volcengine",
+        "api_key": vlm_key,
+        "model": "doubao-seed-2-0-mini-260215",
+        "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+        "temperature": 0.1,
+        "max_retries": 3,
+    },
+    "embedding": {
+        "dense": {
+            "provider": "volcengine",
+            "api_key": embedding_key,
+            "model": "doubao-embedding-vision-251215",
+            "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+            "dimension": 1024,
+            "input": "multimodal",
+        }
+    },
+}
+with open(config_path, "w", encoding="utf-8") as handle:
+    json.dump(config, handle, indent=2)
+    handle.write("\n")
+PY
+}
+
+find_available_port() {
+  python3 <<'PY'
+import socket
+
+for port in range(1933, 2034):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            continue
+        print(port)
+        raise SystemExit(0)
+raise SystemExit("no available port found")
+PY
+}
+
+run_api_suite() {
+  local mode="${1:-basic}"
+  local tmpdir server_log server_pid port has_secrets
+  ensure_artifact_dir
+  install_test_deps
+  build_cpp_extensions_for_ci
+  ensure_ragfs_binding
+  run uv pip install -r tests/api_test/requirements.txt
+
+  tmpdir="$(mktemp -d)"
+  server_log="$artifact_dir/openviking-server.log"
+  trap 'if [ -n "${server_pid:-}" ]; then kill "$server_pid" 2>/dev/null || true; fi; rm -rf "$tmpdir"' EXIT
+
+  write_api_config "$tmpdir/ov.conf" "$tmpdir/data"
+  port="$(find_available_port)"
+  export ROOT_API_KEY="test-root-api-key"
+  export SERVER_PORT="$port"
+  export OPENVIKING_CONFIG_FILE="$tmpdir/ov.conf"
+
+  step "start OpenViking server on 127.0.0.1:$port"
+  nohup uv run python -m openviking.server.bootstrap > "$server_log" 2>&1 &
+  server_pid="$!"
+
+  for _ in $(seq 1 30); do
+    if curl -fsS "http://127.0.0.1:$port/health" 2>/dev/null | grep -q '"healthy":true'; then
+      break
+    fi
+    sleep 2
+  done
+  if ! curl -fsS "http://127.0.0.1:$port/health" 2>/dev/null | grep -q '"healthy":true'; then
+    echo "OpenViking server failed to start; log: $server_log" >&2
+    sed -n '1,220p' "$server_log" >&2 || true
+    exit 1
+  fi
+
+  has_secrets=false
+  if [ -n "${VLM_API_KEY:-}" ] && [ -n "${EMBEDDING_API_KEY:-}" ]; then
+    has_secrets=true
+  fi
+
+  (
+    cd tests/api_test
+    export OPENVIKING_API_KEY="test-root-api-key"
+    export SERVER_URL="http://127.0.0.1:$port"
+    if [ "$mode" = "effect" ]; then
+      run uv run python -m pytest scenarios/resources_retrieval_slow/ -v --tb=short \
+        --durations=0 --html=api-effect-test-report.html --self-contained-html
+    elif [ "$has_secrets" = "true" ]; then
+      run uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
+        --ignore=scenarios/resources_retrieval_slow/
+    else
+      run uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
+        --ignore=retrieval/ --ignore=resources/test_pack.py \
+        --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ \
+        --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py \
+        --ignore=system/test_system_wait.py --ignore=scenarios/ -k "not test_observer"
+    fi
+  )
+}
+
+check_docs() {
+  need npm
+  (
+    cd docs
+    run npm ci
+    run npm run docs:build
+  )
+}
+
+check_plugin() {
+  need npm
+  (
+    cd examples/openclaw-plugin
+    run npm ci --no-audit --no-fund
+    run npm run check-manifest
+    run npm test
+  )
+}
+
+check_build() {
+  need uv
+  need cargo
+  need cmake
+  run git fetch --force --tags
+  run uv venv
+  run uv pip install build setuptools_scm cmake wheel maturin
+  if command -v clang >/dev/null 2>&1; then
+    export CC="${CC:-clang}"
+  fi
+  if command -v clang++ >/dev/null 2>&1; then
+    export CXX="${CXX:-clang++}"
+  fi
+  export OV_REQUIRE_RAGFS_BUILD=1
+  run cargo build --release -p ov_cli
+  run uv build --sdist
+  build_cpp_extensions_for_ci
+  ensure_ragfs_binding
+  run uv build --wheel
+  local tmpdir python_bin
+  tmpdir="$(mktemp -d)"
+  python_bin="$tmpdir/venv/bin/python"
+  run python3 -m venv "$tmpdir/venv"
+  run "$python_bin" -m pip install --upgrade pip
+  run "$python_bin" -m pip install --force-reinstall dist/*.whl
+  run "$python_bin" -c \
+    'import openviking.storage.vectordb.engine as engine; print(engine.ENGINE_VARIANT)'
+  run "$python_bin" -c \
+    'from openviking.pyagfs import get_binding_client; print(get_binding_client)'
+  rm -rf "$tmpdir"
+}
+
+check_docker() {
+  need uv
+  need docker
+  local version
+  version="$(uv run --frozen python -c \
+    'from build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())')"
+  if [ -z "$version" ] || [ "$version" = "0.0.0" ]; then
+    echo "Resolved invalid OpenViking version: $version" >&2
+    exit 2
+  fi
+  run docker build --build-arg "OPENVIKING_VERSION=$version" -t "openviking:local-ci" .
+}
+
+check_rust_cli() {
+  need python3
+  need cargo
+  local version
+  version="$(python3 -c 'from build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())')"
+  export OPENVIKING_VERSION="$version"
+  run cargo build --release -p ov_cli
+}
+
+check_oc2ov() {
+  need python3
+  run bash tests/oc2ov_test/upgrade_openviking.sh
+  (
+    cd tests/oc2ov_test
+    run python3 -m venv venv
+    # shellcheck disable=SC1091
+    source venv/bin/activate
+    run pip install --upgrade pip
+    run pip install -r requirements.txt pytest pytest-html pytest-timeout
+    if [ ! -f config/settings.py ]; then
+      run cp config/settings.example.py config/settings.py
+    fi
+    local current_dir
+    current_dir="$(pwd)"
+    export PYTHONPATH="$repo_root:$current_dir"
+    mkdir -p reports
+    run pytest tests/p0 -v --html=reports/test_report_p0.html \
+      --self-contained-html --tb=short --timeout=3600
+  )
+}
+
+check_release() {
+  check_build
+  cat <<'EOF'
+release artifacts built locally.
+Publishing to PyPI, TestPyPI, GHCR, Docker Hub, or GitHub Releases is intentionally
+not part of CI and must be run as an explicit approval-gated release task.
+EOF
+}
+
+check_all() {
+  check_upstream_parity
+  check_lint
+  check_test_lite
+  check_docs
+  check_plugin
+}
+
+command="${1:-all}"
+case "$command" in
+  all) check_all ;;
+  upstream-parity) check_upstream_parity ;;
+  lint) check_lint ;;
+  test) check_test_lite ;;
+  test-full) check_test_lite ;;
+  api) run_api_suite basic ;;
+  api-effect) run_api_suite effect ;;
+  docs) check_docs ;;
+  plugin) check_plugin ;;
+  build) check_build ;;
+  docker) check_docker ;;
+  rust-cli) check_rust_cli ;;
+  oc2ov) check_oc2ov ;;
+  release) check_release ;;
+  -h|--help|help) usage ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

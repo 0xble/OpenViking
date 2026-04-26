@@ -35,52 +35,38 @@ def test_setup_no_longer_bundles_mingw_runtime_dlls_for_engine():
     assert "_stage_windows_engine_runtime_dlls" not in setup_py
 
 
-def test_release_workflows_default_to_single_cp310_and_drop_pybind11():
-    build_workflow = _read_text(".github/workflows/_build.yml")
-    release_workflow = _read_text(".github/workflows/release.yml")
-    lite_workflow = _read_text(".github/workflows/_test_lite.yml")
-    full_workflow = _read_text(".github/workflows/_test_full.yml")
-    codeql_workflow = _read_text(".github/workflows/_codeql.yml")
+def test_local_ci_pins_upstream_workflow_contract_and_drops_pybind11():
+    check_script = _read_text("bin/check")
+    upstream_workflows = _read_text("ci/upstream-workflows.sha256")
     uv_lock = _read_text("uv.lock")
 
-    assert "default: '[\"3.10\"]'" in build_workflow
-    assert "default: '[\"3.10\"]'" in release_workflow
-    assert "python_json: ${{ inputs.python_json || '[\"3.10\"]' }}" in release_workflow
-
-    for workflow_text in (
-        build_workflow,
-        lite_workflow,
-        full_workflow,
-        codeql_workflow,
-    ):
-        assert "pybind11" not in workflow_text
+    assert ".github/workflows/_build.yml" in upstream_workflows
+    assert ".github/workflows/_test_lite.yml" in upstream_workflows
+    assert "check_upstream_parity" in check_script
+    assert "refs/heads/main:refs/remotes/upstream/main" in check_script
+    assert "pybind11" not in check_script
     assert 'name = "pybind11"' not in uv_lock
 
 
-def test_release_build_workflow_no_longer_defines_extra_wheel_verify_jobs():
-    build_workflow = _read_text(".github/workflows/_build.yml")
+def test_local_build_gate_no_longer_defines_extra_wheel_verify_jobs():
+    check_script = _read_text("bin/check")
 
-    assert "verify-linux-abi3-wheel:" not in build_workflow
-    assert "verify-macos-14-wheel-on-macos-15:" not in build_workflow
-
-
-def test_build_workflow_smoke_tests_windows_wheel_engine_import():
-    build_workflow = _read_text(".github/workflows/_build.yml")
-
-    assert "Smoke test built wheel (Windows)" in build_workflow
-    assert "python -m pip install --force-reinstall dist/*.whl" in build_workflow
-    assert 'cd "$RUNNER_TEMP"' in build_workflow
-    assert "import openviking.storage.vectordb.engine as engine" in build_workflow
-    assert "engine.ENGINE_VARIANT" in build_workflow
+    assert "verify-linux-abi3-wheel:" not in check_script
+    assert "verify-macos-14-wheel-on-macos-15:" not in check_script
 
 
-def test_build_workflow_smoke_tests_linux_and_macos_ragfs_binding_import():
-    build_workflow = _read_text(".github/workflows/_build.yml")
+def test_local_build_gate_smoke_tests_wheel_engine_import():
+    check_script = _read_text("bin/check")
 
-    assert "Smoke test built wheel (Linux)" in build_workflow
-    assert "Smoke test built wheel (macOS)" in build_workflow
-    assert "from openviking.pyagfs import get_binding_client" in build_workflow
-    assert "Loaded RAGFS binding client" in build_workflow
+    assert "-m pip install --force-reinstall dist/*.whl" in check_script
+    assert "import openviking.storage.vectordb.engine as engine" in check_script
+    assert "engine.ENGINE_VARIANT" in check_script
+
+
+def test_local_build_gate_smoke_tests_ragfs_binding_import():
+    check_script = _read_text("bin/check")
+
+    assert "from openviking.pyagfs import get_binding_client" in check_script
 
 
 def test_windows_abi3_backend_uses_stable_python_linkage():
@@ -93,11 +79,11 @@ def test_windows_abi3_backend_uses_stable_python_linkage():
     assert "Python3::Python" not in src_cmake
 
 
-def test_build_workflow_no_longer_defines_windows_python312_verify_job():
-    build_workflow = _read_text(".github/workflows/_build.yml")
+def test_local_build_gate_no_longer_defines_windows_python312_verify_job():
+    check_script = _read_text("bin/check")
 
-    assert "verify-windows-abi3-wheel-on-python312:" not in build_workflow
-    assert "Smoke test Windows abi3 wheel on Python 3.12" not in build_workflow
+    assert "verify-windows-abi3-wheel-on-python312:" not in check_script
+    assert "Smoke test Windows abi3 wheel on Python 3.12" not in check_script
 
 
 def test_abi3_backend_releases_gil_and_rejects_invalid_storage_op_type():

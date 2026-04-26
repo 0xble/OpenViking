@@ -7,90 +7,52 @@ def _read_text(relative_path: str) -> str:
     return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
 
 
-def test_build_docker_workflow_uses_native_parallel_multiarch_jobs():
-    workflow = _read_text(".github/workflows/build-docker-image.yml")
+def test_local_ci_pins_upstream_docker_workflow_contract():
+    upstream_workflows = _read_text("ci/upstream-workflows.sha256")
+    check_script = _read_text("bin/check")
 
-    assert "docker/setup-qemu-action" not in workflow
-    assert "ubuntu-24.04-arm" in workflow
-    assert "docker buildx imagetools create" in workflow
-    assert "push-by-digest=true" in workflow
-    assert "name-canonical=true" in workflow
-    assert '"${tag}-amd64"' not in workflow
-    assert '"${tag}-arm64"' not in workflow
-    assert "platforms: linux/amd64,linux/arm64" not in workflow
+    assert ".github/workflows/build-docker-image.yml" in upstream_workflows
+    assert ".github/workflows/release.yml" in upstream_workflows
+    assert "check_upstream_parity" in check_script
 
 
-def test_release_docker_workflow_uses_native_parallel_multiarch_jobs():
-    workflow = _read_text(".github/workflows/release.yml")
+def test_local_docker_gate_builds_without_registry_pushes():
+    check_script = _read_text("bin/check")
 
-    assert "docker/setup-qemu-action" not in workflow
-    assert "ubuntu-24.04-arm" in workflow
-    assert "docker buildx imagetools create" in workflow
-    assert "push-by-digest=true" in workflow
-    assert "name-canonical=true" in workflow
-    assert '"${tag}-amd64"' not in workflow
-    assert '"${tag}-arm64"' not in workflow
-    assert "platforms: linux/amd64,linux/arm64" not in workflow
+    assert "docker build --build-arg" in check_script
+    assert "docker push" not in check_script
+    assert "docker buildx imagetools create" not in check_script
 
 
-def test_build_docker_workflow_uses_manual_input_version_for_dispatch_tags():
-    workflow = _read_text(".github/workflows/build-docker-image.yml")
+def test_local_docker_gate_resolves_real_openviking_version():
+    check_script = _read_text("bin/check")
 
-    assert "type=raw,value=${{ github.event.inputs.version }}" in workflow
-    assert "type=ref,event=tag" in workflow
+    assert "from build_support.versioning import resolve_openviking_version" in check_script
+    assert "OPENVIKING_VERSION=$version" in check_script
 
 
-def test_build_docker_workflow_does_not_force_zero_version_on_main_builds():
-    workflow = _read_text(".github/workflows/build-docker-image.yml")
+def test_local_docker_gate_does_not_force_zero_version_on_main_builds():
+    check_script = _read_text("bin/check")
     zero_build_arg = (
         "OPENVIKING_VERSION=${{ (github.event_name == 'workflow_dispatch' && "
         "github.event.inputs.version) || (github.ref_type == 'tag' && "
         "github.ref_name) || '0.0.0' }}"
     )
 
-    assert "fetch-depth: 0" in workflow
-    assert "id: openviking-version" in workflow
-    assert "from build_support.versioning import resolve_openviking_version" in workflow
-    assert "OPENVIKING_VERSION=${{ steps.openviking-version.outputs.version }}" in workflow
-    assert zero_build_arg not in workflow
-    assert "fallback to 0.0.0" not in workflow
+    assert "0.0.0" in check_script
+    assert "Resolved invalid OpenViking version" in check_script
+    assert zero_build_arg not in check_script
+    assert "fallback to 0.0.0" not in check_script
 
 
-def test_docker_workflows_normalize_image_names_to_lowercase():
-    build_workflow = _read_text(".github/workflows/build-docker-image.yml")
-    release_workflow = _read_text(".github/workflows/release.yml")
+def test_local_docker_gate_uses_stable_local_image_name():
+    check_script = _read_text("bin/check")
 
-    assert "tr '[:upper:]' '[:lower:]'" in build_workflow
-    assert "steps.image-name.outputs.image" in build_workflow
-    assert "tr '[:upper:]' '[:lower:]'" in release_workflow
-    assert "steps.image-name.outputs.image" in release_workflow
+    assert "openviking:local-ci" in check_script
 
 
-def test_build_docker_workflow_tracks_registry_specific_digests_for_manifests():
-    workflow = _read_text(".github/workflows/build-docker-image.yml")
+def test_local_release_gate_never_publishes_registry_manifests():
+    check_script = _read_text("bin/check")
 
-    assert "docker-digests-ghcr-${{ matrix.arch }}" in workflow
-    assert "docker-digests-dockerhub-${{ matrix.arch }}" in workflow
-    assert 'ghcr_digest="${{ steps.push-ghcr.outputs.digest }}"' in workflow
-    assert 'dockerhub_digest="${{ steps.push-dockerhub.outputs.digest }}"' in workflow
-    assert "pattern: docker-digests-ghcr-*" in workflow
-    assert "pattern: docker-digests-dockerhub-*" in workflow
-    assert (
-        'ghcr_image_refs+=("${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}@${digest}")'
-        in workflow
-    )
-    assert (
-        'dockerhub_image_refs+=("docker.io/${{ secrets.DOCKERHUB_USERNAME }}/openviking@${digest}")'
-        in workflow
-    )
-
-
-def test_release_workflow_tracks_registry_specific_digests_for_manifests():
-    workflow = _read_text(".github/workflows/release.yml")
-
-    assert "docker-digests-ghcr-${{ matrix.arch }}" in workflow
-    assert "docker-digests-dockerhub-${{ matrix.arch }}" in workflow
-    assert 'ghcr_digest="${{ steps.push-ghcr.outputs.digest }}"' in workflow
-    assert 'dockerhub_digest="${{ steps.push-dockerhub.outputs.digest }}"' in workflow
-    assert "pattern: docker-digests-ghcr-*" in workflow
-    assert "pattern: docker-digests-dockerhub-*" in workflow
+    assert "not part of CI" in check_script
+    assert "approval-gated release task" in check_script
