@@ -73,6 +73,7 @@ class MemoryConsolidationScheduler:
         scan_interval: float = DEFAULT_SCAN_INTERVAL_SECONDS,
         max_concurrency: int = DEFAULT_MAX_CONCURRENCY,
         build_ctx: Optional[Callable[[str], RequestContext]] = None,
+        allow_default_context: bool = False,
     ):
         """Initialize the scheduler.
 
@@ -89,8 +90,10 @@ class MemoryConsolidationScheduler:
                 Saves repeated FS/index walks on a busy loop.
             max_concurrency: max parallel consolidations.
             build_ctx: callable that produces a RequestContext for a
-                given scope URI. Defaults to a system identity inferred
-                from the URI (account_id from viking://agent/<acct>/...).
+                given scope URI. Required for production callers because
+                user memory URIs do not encode account_id. Tests and
+                single-tenant utilities can opt into the fallback with
+                allow_default_context=True.
         """
         if check_interval <= 0:
             raise ValueError("check_interval must be > 0")
@@ -98,6 +101,10 @@ class MemoryConsolidationScheduler:
             raise ValueError("scan_interval must be > 0")
         if max_concurrency <= 0:
             raise ValueError("max_concurrency must be > 0")
+        if build_ctx is None and not allow_default_context:
+            raise ValueError(
+                "build_ctx is required; pass allow_default_context=True only for single-tenant tests"
+            )
 
         self._consolidator = consolidator
         self._enumerate_scopes = enumerate_scopes
@@ -293,9 +300,11 @@ def _default_system_context(scope_uri: str) -> RequestContext:
     """Build a system RequestContext from a scope URI.
 
     Parses account_id from viking://agent/<acct>/... or
-    viking://user/<user>/... patterns. Falls back to "default".
+    user_id from viking://user/<user>/... patterns. Falls back to
+    default account + system user for scopes that do not encode a user.
     """
     account_id = "default"
+    user_id = "system"
     if scope_uri.startswith("viking://agent/"):
         parts = scope_uri[len("viking://agent/"):].split("/", 1)
         if parts and parts[0]:
@@ -303,11 +312,11 @@ def _default_system_context(scope_uri: str) -> RequestContext:
     elif scope_uri.startswith("viking://user/"):
         parts = scope_uri[len("viking://user/"):].split("/", 1)
         if parts and parts[0]:
-            account_id = parts[0]
+            user_id = parts[0]
 
     user = UserIdentifier(
         account_id=account_id,
-        user_id="system",
+        user_id=user_id,
         agent_id="memory_consolidator",
     )
     return RequestContext(user=user, role=Role.ROOT)

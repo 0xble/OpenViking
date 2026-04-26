@@ -35,10 +35,21 @@ def _scheduler(
         check_interval=check_interval,
         scan_interval=scan_interval,
         max_concurrency=max_concurrency,
+        allow_default_context=True,
     )
 
 
 class TestConstructor:
+    def test_requires_context_builder_by_default(self):
+        consolidator = MagicMock()
+        consolidator.run = AsyncMock()
+        enumerate_scopes = AsyncMock(return_value=[])
+        with pytest.raises(ValueError, match="build_ctx is required"):
+            MemoryConsolidationScheduler(
+                consolidator=consolidator,
+                enumerate_scopes=enumerate_scopes,
+            )
+
     def test_rejects_zero_check_interval(self):
         with pytest.raises(ValueError):
             _scheduler(check_interval=0)
@@ -61,7 +72,9 @@ class TestSystemContext:
 
     def test_parses_account_from_user_uri(self):
         ctx = _default_system_context("viking://user/alice/memories/preferences/")
-        assert ctx.account_id == "alice"
+        assert ctx.account_id == "default"
+        assert ctx.user.user_id == "alice"
+        assert ctx.user.agent_id == "memory_consolidator"
 
     def test_unknown_scheme_falls_back_to_default(self):
         ctx = _default_system_context("viking://resources/repos/foo")

@@ -8,7 +8,7 @@ Data in, Context out.
 
 from typing import TYPE_CHECKING
 
-FORK_VERSION_SUFFIX = "-0xble.1.2.2"
+from ._fork_version import apply_fork_version_suffix
 
 try:
     from ._version import version as __version__
@@ -20,8 +20,7 @@ except ImportError:
     except ImportError:
         __version__ = "0.0.0+unknown"
 
-if FORK_VERSION_SUFFIX not in __version__:
-    __version__ = f"{__version__}{FORK_VERSION_SUFFIX}"
+__version__ = apply_fork_version_suffix(__version__)
 
 try:
     from openviking.pyagfs import AGFSClient

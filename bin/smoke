@@ -1,10 +1,38 @@
 #!/bin/sh
 set -eu
 
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 bin_path="$HOME/.local/bin/ov"
+expected_suffix="$(cd "$repo_root" && python3 - <<'PY'
+import importlib.util
+from pathlib import Path
+
+path = Path("openviking/_fork_version.py")
+spec = importlib.util.spec_from_file_location("_openviking_fork_version", path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+print(module.FORK_VERSION_SUFFIX)
+PY
+)"
+resolved_bin="$(python3 - <<'PY' "$bin_path"
+import os
+import sys
+
+print(os.path.realpath(sys.argv[1]))
+PY
+)"
 
 [ -x "$bin_path" ]
-"$bin_path" --version | /usr/bin/grep -Fq 'openviking'
+version_line="$("$bin_path" --version)"
+command_version="$("$bin_path" version)"
+printf '%s\n' "$version_line" | /usr/bin/grep -Fq 'openviking'
+printf '%s\n' "$version_line" | /usr/bin/grep -Fq -- "$expected_suffix"
+printf '%s\n' "$command_version" | /usr/bin/grep -Fq -- "$expected_suffix"
 "$bin_path" --help >/dev/null
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  codesign --verify --deep --strict "$resolved_bin"
+  codesign -dv "$resolved_bin" 2>&1 | /usr/bin/grep -Fq 'TeamIdentifier=MWNX6V232Y'
+fi
 
 echo "smoke ok: ov"

@@ -3,16 +3,17 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 install_link="$HOME/.local/bin/ov"
-install_path="$(python3 - <<'PY' "$install_link"
-import os
-import sys
-
-print(os.path.realpath(sys.argv[1]))
-PY
-)"
+install_dir="$HOME/.local/libexec/openviking"
+install_path="$install_dir/ov"
 signing_env="$HOME/.config/secrets/shell.env"
 signing_bootstrap="$HOME/.local/bin/signing-bootstrap"
 signing_identity="Developer ID Application: Brian Le (MWNX6V232Y)"
+version_python=(python3)
+if [[ -x "$repo_root/.venv/bin/python3" ]]; then
+  version_python=("$repo_root/.venv/bin/python3")
+elif command -v uv >/dev/null 2>&1; then
+  version_python=(uv run python)
+fi
 
 sign_installed_binary() {
   local path="$1"
@@ -27,13 +28,18 @@ sign_installed_binary() {
     set +a
   fi
 
+  local has_signing_inputs=1
   if [[ ! -x "$signing_bootstrap" ]]; then
     echo "warning: skipping codesign for $path because $signing_bootstrap is missing" >&2
-    return 0
+    has_signing_inputs=0
   fi
 
   if [[ -z "${SIGNING_BUILD_KEYCHAIN_PATH:-}" || -z "${SIGNING_BUILD_KEYCHAIN_PASSWORD:-}" ]]; then
     echo "warning: skipping codesign for $path because signing env is incomplete" >&2
+    has_signing_inputs=0
+  fi
+
+  if [[ "$has_signing_inputs" -eq 0 ]]; then
     return 0
   fi
 
@@ -47,10 +53,26 @@ sign_installed_binary() {
 }
 
 cd "$repo_root"
+openviking_version="$("${version_python[@]}" - <<'PY'
+from build_support.versioning import resolve_openviking_version
+
+print(resolve_openviking_version())
+PY
+)"
+export OPENVIKING_VERSION="$openviking_version"
+
 cargo build --release -p ov_cli
-mkdir -p "$(dirname "$install_path")"
+mkdir -p "$install_dir" "$(dirname "$install_link")"
 cp target/release/ov "$install_path"
 sign_installed_binary "$install_path"
+if [[ -L "$install_link" || ! -e "$install_link" ]]; then
+  ln -sfn "$install_path" "$install_link"
+else
+  backup_path="$install_link.backup.$(date +%Y%m%d%H%M%S)"
+  mv "$install_link" "$backup_path"
+  ln -s "$install_path" "$install_link"
+  echo "moved previous ov binary to $backup_path"
+fi
 
 echo "installed ov from $(git describe --tags --always 2>/dev/null || git rev-parse --short HEAD)"
 "$install_link" --version
