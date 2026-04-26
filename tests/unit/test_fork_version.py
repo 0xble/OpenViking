@@ -12,3 +12,9 @@ def test_resolve_openviking_version_applies_suffix_to_env_version():
     version = resolve_openviking_version(env={"OPENVIKING_VERSION": "0.3.13"})
 
     assert version == f"0.3.13{FORK_VERSION_SUFFIX}"
+
+
+def test_apply_fork_version_suffix_normalizes_legacy_hyphen_suffix():
+    version = apply_fork_version_suffix("0.3.13-0xble.1.2.2")
+
+    assert version == f"0.3.13{FORK_VERSION_SUFFIX}"

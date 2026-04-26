@@ -145,54 +145,6 @@ build_cpp_extensions_for_ci() {
   run uv run python setup.py build_ext --inplace
 }
 
-ensure_ragfs_binding() {
-  local lib_dir count tmpdir wheel
-  lib_dir="openviking/lib"
-  count="$(find "$lib_dir" -maxdepth 1 \
-    \( -name 'ragfs_python*.so' -o -name 'ragfs_python*.pyd' -o -name 'ragfs_python*.dylib' \) \
-    -print 2>/dev/null | wc -l | tr -d '[:space:]')"
-
-  if [ "$count" -gt 0 ]; then
-    echo "ragfs_python native extension already exists."
-    return 0
-  fi
-
-  tmpdir="$(mktemp -d)"
-  (
-    cd crates/ragfs-python
-    run uv run --no-project maturin build --release --features s3 --out "$tmpdir"
-  )
-
-  wheel="$(find "$tmpdir" -maxdepth 1 -name 'ragfs_python-*.whl' -print | head -n 1)"
-  if [ -z "$wheel" ]; then
-    echo "maturin produced no ragfs_python wheel" >&2
-    exit 1
-  fi
-
-  mkdir -p "$lib_dir"
-  run uv run python - "$wheel" "$lib_dir" <<'PY'
-import os
-import stat
-import sys
-import zipfile
-
-wheel, lib_dir = sys.argv[1], sys.argv[2]
-with zipfile.ZipFile(wheel) as zf:
-    for name in zf.namelist():
-        base = os.path.basename(name)
-        if base.startswith("ragfs_python") and base.endswith((".so", ".pyd", ".dylib")):
-            dst = os.path.join(lib_dir, base)
-            with zf.open(name) as src, open(dst, "wb") as out:
-                out.write(src.read())
-            os.chmod(dst, os.stat(dst).st_mode | stat.S_IXUSR)
-            print(f"extracted {base} -> {dst}")
-            raise SystemExit(0)
-print("no ragfs_python native library found in wheel", file=sys.stderr)
-raise SystemExit(1)
-PY
-  rm -rf "$tmpdir"
-}
-
 check_test_lite() {
   install_test_deps
   run cargo check -p ragfs-python
@@ -264,7 +216,6 @@ run_api_suite() {
   ensure_artifact_dir
   install_test_deps
   build_cpp_extensions_for_ci
-  ensure_ragfs_binding
   run uv pip install -r tests/api_test/requirements.txt
 
   tmpdir="$(mktemp -d)"
@@ -341,7 +292,7 @@ check_build() {
   need uv
   need cargo
   need cmake
-  run git fetch --force --tags
+  run git -c fetch.prune=false -c fetch.pruneTags=false fetch --tags origin
   run uv venv
   run uv pip install build setuptools_scm cmake wheel maturin
   if command -v clang >/dev/null 2>&1; then
@@ -351,21 +302,28 @@ check_build() {
     export CXX="${CXX:-clang++}"
   fi
   export OV_REQUIRE_RAGFS_BUILD=1
+  local version
+  version="$(uv run --frozen python -c \
+    'from build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())')"
+  export OPENVIKING_VERSION="$version"
+  export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING="$version"
   run cargo build --release -p ov_cli
+  run rm -rf dist build openviking.egg-info
   run uv build --sdist
   build_cpp_extensions_for_ci
-  ensure_ragfs_binding
   run uv build --wheel
   local tmpdir python_bin
   tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
   python_bin="$tmpdir/venv/bin/python"
-  run python3 -m venv "$tmpdir/venv"
+  run uv run python -m venv "$tmpdir/venv"
   run "$python_bin" -m pip install --upgrade pip
   run "$python_bin" -m pip install --force-reinstall dist/*.whl
   run "$python_bin" -c \
     'import openviking.storage.vectordb.engine as engine; print(engine.ENGINE_VARIANT)'
   run "$python_bin" -c \
     'from openviking.pyagfs import get_binding_client; print(get_binding_client)'
+  trap - RETURN
   rm -rf "$tmpdir"
 }
 

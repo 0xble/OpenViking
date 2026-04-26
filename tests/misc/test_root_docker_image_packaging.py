@@ -55,13 +55,14 @@ def test_openviking_package_includes_console_static_assets():
     assert '"console/static/**/*"' in setup_py
 
 
-def test_local_build_gate_invokes_maturin_directly():
+def test_local_build_gate_uses_setup_py_ragfs_build_path():
     check_script = _read_text("bin/check")
 
     assert "Build ragfs-python and extract into openviking/lib/" not in check_script
     assert "uv run python -m maturin build --release" not in check_script
     assert "uv run python <<PY" not in check_script
-    assert "uv run --no-project maturin build --release" in check_script
+    assert "uv run --no-project maturin build --release" not in check_script
+    assert "uv run python setup.py build_ext --inplace" in check_script
 
 
 def test_ragfs_python_uses_pyo3_version_with_python_314_support():

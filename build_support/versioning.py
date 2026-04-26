@@ -7,8 +7,13 @@ import subprocess
 from pathlib import Path
 from typing import Mapping
 
-SCM_TAG_REGEX = r"^(?:v)?(?:[a-zA-Z0-9_]+@)?(?P<version>[0-9]+(?:\.[0-9]+)*)$"
+SCM_TAG_REGEX = (
+    r"^(?:v)?(?:[a-zA-Z0-9_]+@)?"
+    r"(?P<version>[0-9]+(?:\.[0-9]+)*(?:\.dev[0-9]+)?)"
+    r"(?:[-+]0xble\.[0-9]+\.[0-9]+\.[0-9]+)?$"
+)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FORK_TAG_SUFFIX_RE = re.compile(r"[-+]0xble\.[0-9]+\.[0-9]+\.[0-9]+$")
 
 
 def _get_scm_version(project_root: Path) -> str:
@@ -17,12 +22,15 @@ def _get_scm_version(project_root: Path) -> str:
     except ImportError:
         return _get_generated_or_git_version(project_root)
 
-    return get_version(
-        root=str(project_root),
-        relative_to=__file__,
-        local_scheme="no-local-version",
-        tag_regex=SCM_TAG_REGEX,
-    )
+    try:
+        return get_version(
+            root=str(project_root),
+            relative_to=__file__,
+            local_scheme="no-local-version",
+            tag_regex=SCM_TAG_REGEX,
+        )
+    except (AssertionError, ValueError):
+        return _get_generated_or_git_version(project_root)
 
 
 def _get_generated_or_git_version(project_root: Path) -> str:
@@ -40,9 +48,20 @@ def _get_generated_or_git_version(project_root: Path) -> str:
         text=True,
     )
     described = result.stdout.strip()
-    match = re.match(r"^v?([0-9]+\.[0-9]+\.[0-9]+)", described)
+    long_match = re.match(r"^(?P<tag>.+)-(?P<distance>[0-9]+)-g[0-9a-f]+(?:-dirty)?$", described)
+    tag = long_match.group("tag") if long_match else described
+    distance = int(long_match.group("distance")) if long_match else 0
+    tag = FORK_TAG_SUFFIX_RE.sub("", tag)
+
+    match = re.match(r"^v?(?P<version>[0-9]+\.[0-9]+\.[0-9]+(?:\.dev(?P<dev>[0-9]+))?)", tag)
     if match:
-        return f"{match.group(1)}.dev0"
+        version = match.group("version")
+        dev = match.group("dev")
+        if distance <= 0:
+            return version
+        if dev is not None:
+            return re.sub(r"\.dev[0-9]+$", f".dev{int(dev) + distance}", version)
+        return f"{version}.dev{distance}"
     return "0.0.0+unknown"
 
 
