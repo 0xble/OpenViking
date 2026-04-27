@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0
 from typing import Dict, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 
 class RerankConfig(BaseModel):
     """Configuration for rerank API. Supports VikingDB, Cohere, OpenAI-compatible, and LiteLLM providers."""
+
+    _provider_was_explicit: bool = PrivateAttr(default=False)
 
     provider: Optional[str] = Field(
         default=None,
@@ -44,7 +46,7 @@ class RerankConfig(BaseModel):
 
     def _effective_provider(self) -> Optional[str]:
         """Auto-detect provider from config fields when not explicitly set."""
-        if self.provider:
+        if self._provider_was_explicit and self.provider:
             return self.provider.lower()
         if self.api_key and self.api_base:
             return "openai"
@@ -56,6 +58,7 @@ class RerankConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider_fields(self) -> "RerankConfig":
+        self._provider_was_explicit = "provider" in self.model_fields_set
         provider = self._effective_provider()
         if provider and provider not in ["vikingdb", "cohere", "openai", "litellm"]:
             raise ValueError(
@@ -69,6 +72,8 @@ class RerankConfig(BaseModel):
         if provider == "litellm":
             if not self.model:
                 raise ValueError("LiteLLM rerank provider requires 'model'")
+        if self.provider is None:
+            self.provider = provider or "vikingdb"
         return self
 
     def is_available(self) -> bool:

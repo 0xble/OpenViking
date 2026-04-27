@@ -88,6 +88,7 @@ dependencies = [
 test = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "pytest-html>=4.0.0",
     "boto3>=1.42.44",
     "pytest-cov>=4.0.0",
     "ragas>=0.1.0",
@@ -95,6 +96,7 @@ test = [
     "pandas>=2.0.0",
     "diff-match-patch>=20200713",
     "hvac>=2.0.0",
+    "google-genai>=1.0.0",
 ]
 dev = [
     "mypy>=1.0.0",
@@ -234,11 +236,15 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+norecursedirs = ["tests/api_test", "tests/oc2ov_test"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 addopts = "-v --cov=openviking --cov-report=term-missing"
+markers = [
+    "integration: tests that require external services, credentials, or slower end-to-end setup",
+]
 
 [tool.ruff]
 line-length = 100

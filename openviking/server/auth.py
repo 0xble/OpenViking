@@ -129,12 +129,16 @@ async def resolve_identity(
     api_key = _extract_api_key(x_api_key, authorization)
 
     if auth_mode == AuthMode.DEV:
+        default_user = getattr(request.app.state, "default_user", None)
+        default_account_id = getattr(default_user, "account_id", None) or "default"
+        default_user_id = getattr(default_user, "user_id", None) or "default"
+        default_agent_id = getattr(default_user, "agent_id", None) or "default"
         # Dev mode: no authentication, always return ROOT
         return ResolvedIdentity(
             role=Role.ROOT,
-            account_id=x_openviking_account or "default",
-            user_id=x_openviking_user or "default",
-            agent_id=x_openviking_agent or "default",
+            account_id=x_openviking_account or default_account_id,
+            user_id=x_openviking_user or default_user_id,
+            agent_id=x_openviking_agent or default_agent_id,
         )
 
     if auth_mode == AuthMode.TRUSTED:
@@ -165,14 +169,24 @@ async def resolve_identity(
         effective_account_id = explicit_account_id or x_openviking_account
         effective_user_id = explicit_user_id or x_openviking_user
 
-        # Check if this is an admin path without identity
+        # Admin paths without tenant identity are root-level trusted operations.
+        # Supplying a partial tenant identity is still ambiguous and rejected.
         is_admin_path = request.url.path.startswith(_TRUSTED_RELAXED_IDENTITY_PREFIXES)
-        if is_admin_path:
+        if is_admin_path and not effective_account_id and not effective_user_id:
             return ResolvedIdentity(
                 role=Role.ROOT,
                 account_id="trusted",
                 user_id="trusted",
                 agent_id=x_openviking_agent or "default",
+            )
+        if is_admin_path and bool(effective_account_id) != bool(effective_user_id):
+            missing_fields = []
+            if not effective_account_id:
+                missing_fields.append("X-OpenViking-Account or explicit account_id in the URL")
+            if not effective_user_id:
+                missing_fields.append("X-OpenViking-User or explicit user_id in the URL")
+            raise InvalidArgumentError(
+                "Trusted mode requests must include " + " and ".join(missing_fields) + "."
             )
 
         if _trusted_request_requires_explicit_identity(request.url.path):

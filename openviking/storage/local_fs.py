@@ -16,7 +16,9 @@ from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
-_DERIVED_FILENAMES = frozenset({".relations.json", ".resource.metadata.json"})
+_DERIVED_FILENAMES = frozenset(
+    {".abstract.md", ".overview.md", ".relations.json", ".resource.metadata.json"}
+)
 
 _UNSAFE_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
 _DRIVE_RE = re.compile(r"^[A-Za-z]:")
@@ -89,14 +91,14 @@ def get_viking_rel_path_from_zip(zip_path: str) -> str:
     return "/".join(new_parts)
 
 
-def _validate_import_target_uri(uri: str) -> None:
+def _validate_import_target_uri(uri: str, *, allow_derived: bool = False) -> None:
     """Enforce the same target-policy boundary as direct content writes."""
     parsed = VikingURI(uri)
     if parsed.scope not in {"resources", "user", "agent"}:
         raise InvalidArgumentError(f"ovpack import is not supported for scope: {parsed.scope}")
 
     name = uri.rstrip("/").split("/")[-1]
-    if name in _DERIVED_FILENAMES:
+    if not allow_derived and name in _DERIVED_FILENAMES:
         raise InvalidArgumentError(f"cannot import derived semantic file: {uri}")
     if is_watch_task_control_uri(uri):
         raise InvalidArgumentError(f"cannot import watch task control file: {uri}")
@@ -249,7 +251,7 @@ async def import_ovpack(
             # Handle file entries
             rel_path = get_viking_rel_path_from_zip(safe_zip_path)
             target_file_uri = f"{root_uri}/{rel_path}" if rel_path else root_uri
-            _validate_import_target_uri(target_file_uri)
+            _validate_import_target_uri(target_file_uri, allow_derived=True)
 
             try:
                 data = zf.read(safe_zip_path)

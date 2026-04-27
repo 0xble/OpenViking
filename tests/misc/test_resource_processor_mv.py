@@ -31,7 +31,16 @@ class _CtxMgr:
 
 class _FakeVikingFS:
     def __init__(self):
-        self.agfs = SimpleNamespace(mv=MagicMock(return_value={"status": "ok"}))
+        self._agfs_data = {}
+        self.agfs = SimpleNamespace(
+            mv=MagicMock(return_value={"status": "ok"}),
+            stat=MagicMock(return_value={"isDir": True}),
+            mkdir=MagicMock(return_value=None),
+            ls=MagicMock(return_value=[]),
+            rm=MagicMock(side_effect=lambda path: self._agfs_data.pop(path, None)),
+            read=MagicMock(side_effect=lambda path: self._agfs_data[path]),
+            write=MagicMock(side_effect=lambda path, data: self._agfs_data.__setitem__(path, data)),
+        )
 
     def bind_request_context(self, ctx):
         return _CtxMgr()
@@ -51,34 +60,39 @@ class _FakeVikingFS:
 
 @pytest.mark.asyncio
 async def test_resource_processor_first_add_persist_does_not_await_agfs_mv(monkeypatch):
+    from openviking.storage.transaction import init_lock_manager, reset_lock_manager
     from openviking.utils.resource_processor import ResourceProcessor
 
     fake_fs = _FakeVikingFS()
+    init_lock_manager(fake_fs.agfs)
 
-    monkeypatch.setattr(
-        "openviking.utils.resource_processor.get_current_telemetry",
-        lambda: _DummyTelemetry(),
-    )
-    monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fake_fs)
-
-    rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
-    rp._get_media_processor = MagicMock()
-    rp._get_media_processor.return_value.process = AsyncMock(
-        return_value=SimpleNamespace(
-            temp_dir_path="viking://temp/tmpdir",
-            source_path="x",
-            source_format="text",
-            meta={},
-            warnings=[],
+    try:
+        monkeypatch.setattr(
+            "openviking.utils.resource_processor.get_current_telemetry",
+            lambda: _DummyTelemetry(),
         )
-    )
+        monkeypatch.setattr("openviking.utils.resource_processor.get_viking_fs", lambda: fake_fs)
 
-    context_tree = SimpleNamespace(
-        root=SimpleNamespace(uri="viking://resources/root", temp_uri="viking://temp/root_tmp")
-    )
-    rp.tree_builder.finalize_from_temp = AsyncMock(return_value=context_tree)
+        rp = ResourceProcessor(vikingdb=_DummyVikingDB(), media_storage=None)
+        rp._get_media_processor = MagicMock()
+        rp._get_media_processor.return_value.process = AsyncMock(
+            return_value=SimpleNamespace(
+                temp_dir_path="viking://temp/tmpdir",
+                source_path="x",
+                source_format="text",
+                meta={},
+                warnings=[],
+            )
+        )
 
-    result = await rp.process_resource(path="x", ctx=object(), build_index=False, summarize=False)
+        context_tree = SimpleNamespace(
+            root=SimpleNamespace(uri="viking://resources/root", temp_uri="viking://temp/root_tmp")
+        )
+        rp.tree_builder.finalize_from_temp = AsyncMock(return_value=context_tree)
+
+        result = await rp.process_resource(path="x", ctx=object(), build_index=False, summarize=False)
+    finally:
+        reset_lock_manager()
 
     assert result["status"] == "success"
     assert result["root_uri"] == "viking://resources/root"

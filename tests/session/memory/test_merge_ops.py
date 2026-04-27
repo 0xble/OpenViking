@@ -35,17 +35,17 @@ class TestPatchOp:
     def test_get_output_schema_type_int(self):
         """Int field with patch should return int."""
         op = PatchOp(FieldType.INT64)
-        assert op.get_output_schema_type(FieldType.INT64) == int
+        assert op.get_output_schema_type(FieldType.INT64) is int
 
     def test_get_output_schema_type_float(self):
         """Float field with patch should return float."""
         op = PatchOp(FieldType.FLOAT32)
-        assert op.get_output_schema_type(FieldType.FLOAT32) == float
+        assert op.get_output_schema_type(FieldType.FLOAT32) is float
 
     def test_get_output_schema_type_bool(self):
         """Bool field with patch should return bool."""
         op = PatchOp(FieldType.BOOL)
-        assert op.get_output_schema_type(FieldType.BOOL) == bool
+        assert op.get_output_schema_type(FieldType.BOOL) is bool
 
     def test_get_output_schema_description_string(self):
         """String field description should mention PATCH."""
@@ -76,8 +76,8 @@ class TestSumOp:
     def test_get_output_schema_type(self):
         """SumOp should return appropriate numeric types."""
         op = SumOp()
-        assert op.get_output_schema_type(FieldType.INT64) == int
-        assert op.get_output_schema_type(FieldType.FLOAT32) == float
+        assert op.get_output_schema_type(FieldType.INT64) is int
+        assert op.get_output_schema_type(FieldType.FLOAT32) is float
 
     def test_get_output_schema_description(self):
         """Description should have 'add for' format."""
@@ -106,9 +106,21 @@ class TestSumOp:
         assert op.apply(None, 10) == 10
 
     def test_apply_invalid_values(self):
-        """Invalid values should fall back to patch."""
+        """Invalid current values should fall back to patch."""
         op = SumOp()
         assert op.apply("not a number", 10) == 10
+
+    def test_apply_invalid_patch_preserves_current(self):
+        """Invalid patch values should not overwrite a numeric current value."""
+        op = SumOp()
+        assert op.apply(10, "not a number") == 10
+
+    def test_apply_invalid_patch_preserves_normalized_current(self):
+        """Invalid patch values should return the numeric form of current."""
+        op = SumOp()
+        result = op.apply("10", "not a number")
+        assert result == 10
+        assert isinstance(result, int)
 
 
 class TestImmutableOp:
@@ -117,8 +129,8 @@ class TestImmutableOp:
     def test_get_output_schema_type(self):
         """ImmutableOp should return base types."""
         op = ImmutableOp()
-        assert op.get_output_schema_type(FieldType.STRING) == str
-        assert op.get_output_schema_type(FieldType.INT64) == int
+        assert op.get_output_schema_type(FieldType.STRING) is str
+        assert op.get_output_schema_type(FieldType.INT64) is int
 
     def test_get_output_schema_description(self):
         """Description should mention immutable."""

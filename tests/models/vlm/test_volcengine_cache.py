@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Tests for VolcEngineVLM cache logic."""
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
-from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM as VLMClass
+import pytest
+
+from openviking.models.vlm.backends.volcengine_vlm import (
+    VolcEngineVLM as VLMClass,
+)
+from openviking.models.vlm.backends.volcengine_vlm import _ResponseIDCache
 
 
 def make_message(role: str, content: str, cache_control: bool = False) -> dict:
@@ -15,6 +18,46 @@ def make_message(role: str, content: str, cache_control: bool = False) -> dict:
     if cache_control:
         msg["cache_control"] = {"type": "ephemeral"}
     return msg
+
+
+class TestResponseIDCache:
+    """Tests for bounded response-id cache behavior."""
+
+    def test_cache_evicts_least_recently_used_entry(self):
+        cache = _ResponseIDCache(max_size=2)
+
+        cache.set("a", "resp_a")
+        cache.set("b", "resp_b")
+        assert cache.get("a") == "resp_a"
+
+        cache.set("c", "resp_c")
+
+        assert cache.get("b") is None
+        assert cache.get("a") == "resp_a"
+        assert cache.get("c") == "resp_c"
+
+    def test_cache_rejects_non_positive_max_size(self):
+        with pytest.raises(ValueError, match="max_size must be positive"):
+            _ResponseIDCache(max_size=0)
+
+    def test_vlm_uses_safe_default_for_invalid_cache_size_config(self):
+        for value in (None, "not-a-number", 0, -1):
+            vlm = VLMClass(
+                model="test-model",
+                api_key="test-key",
+                response_cache_max_size=value,
+            )
+
+            assert vlm._response_cache.max_size == 1024
+
+    def test_vlm_accepts_numeric_cache_size_config(self):
+        vlm = VLMClass(
+            model="test-model",
+            api_key="test-key",
+            response_cache_max_size="2",
+        )
+
+        assert vlm._response_cache.max_size == 2
 
 
 class TestGetOrCreateFromSegments:
@@ -69,7 +112,7 @@ class TestGetOrCreateFromSegments:
         mock_client.responses.create = AsyncMock(return_value=mock_response)
         vlm.get_async_client.return_value = mock_client
 
-        result = await vlm._get_or_create_from_segments(segments, 1)
+        result = await vlm._get_or_create_from_segments_async(segments, 1)
 
         assert result == "resp_new_123"
         vlm._response_cache.get.assert_called_once()
@@ -96,17 +139,14 @@ class TestGetOrCreateFromSegments:
 
         vlm._response_cache.get.side_effect = cache_get
 
-        # Should use seg0 cache with previous_response_id to create seg1
-        mock_response = MagicMock()
-        mock_response.id = "resp_combined"
         mock_client = AsyncMock()
-        mock_client.responses.create = AsyncMock(return_value=mock_response)
+        mock_client.responses.create = AsyncMock()
         vlm.get_async_client.return_value = mock_client
 
-        result = await vlm._get_or_create_from_segments(segments, 2)
+        result = await vlm._get_or_create_from_segments_async(segments, 2)
 
-        # Should return combined response id
-        assert result == "resp_combined"
+        assert result == "resp_seg1"
+        vlm.get_async_client.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_two_segments_first_not_cached(self):
@@ -119,19 +159,16 @@ class TestGetOrCreateFromSegments:
         ]
 
         # First segment not cached, second is cached
-        cache_returns = {
-            "prefix:seg0_system_hello": None,  # First segment - not cached
-            "prefix:seg1_how_are_you": "resp_seg1",  # Second segment - cached
-        }
-
         def cache_get(key):
-            return cache_returns.get(key)
+            if "seg1_how_are_you" in key:
+                return "resp_seg1"
+            return None
 
         vlm._response_cache.get.side_effect = cache_get
 
-        # Mock API: first call creates first segment cache, second call extends with previous_response_id
+        # Mock API: first call creates first segment cache; second segment is reused from cache.
         call_count = 0
-        mock_responses = ["resp_seg0", "resp_combined"]
+        mock_responses = ["resp_seg0"]
 
         async def mock_create(**kwargs):
             nonlocal call_count
@@ -144,10 +181,10 @@ class TestGetOrCreateFromSegments:
         mock_client.responses.create = mock_create
         vlm.get_async_client.return_value = mock_client
 
-        result = await vlm._get_or_create_from_segments(segments, 2)
+        result = await vlm._get_or_create_from_segments_async(segments, 2)
 
-        # Should create first segment, then extend with second
-        assert result == "resp_combined"
+        assert result == "resp_seg1"
+        assert call_count == 1
 
     @pytest.mark.asyncio
     async def test_two_segments_neither_cached(self):
@@ -177,7 +214,7 @@ class TestGetOrCreateFromSegments:
         mock_client.responses.create = mock_create
         vlm.get_async_client.return_value = mock_client
 
-        result = await vlm._get_or_create_from_segments(segments, 2)
+        result = await vlm._get_or_create_from_segments_async(segments, 2)
 
         # Should create both segments
         assert result == "resp_combined"
@@ -194,20 +231,16 @@ class TestGetOrCreateFromSegments:
         ]
 
         # Only middle segment cached
-        cache_returns = {
-            "prefix:seg0_system_hello": None,
-            "prefix:seg1_how_are_you": "resp_seg1",  # Cached
-            "prefix:seg2_tell_story": None,
-        }
-
         def cache_get(key):
-            return cache_returns.get(key)
+            if "seg1_how_are_you" in key:
+                return "resp_seg1"
+            return None
 
         vlm._response_cache.get.side_effect = cache_get
 
-        # Mock API: create seg0, extend to seg1, extend to seg2
+        # Mock API: create seg0, reuse seg1 from cache, extend to seg2
         call_count = 0
-        mock_responses = ["resp_seg0", "resp_01", "resp_012"]
+        mock_responses = ["resp_seg0", "resp_012"]
 
         async def mock_create(**kwargs):
             nonlocal call_count
@@ -220,10 +253,10 @@ class TestGetOrCreateFromSegments:
         mock_client.responses.create = mock_create
         vlm.get_async_client.return_value = mock_client
 
-        result = await vlm._get_or_create_from_segments(segments, 3)
+        result = await vlm._get_or_create_from_segments_async(segments, 3)
 
-        # Should chain: seg0 -> seg1 (cached) -> seg2
         assert result == "resp_012"
+        assert call_count == 2
 
     def test_zero_segments(self):
         """Test: end_idx = 0 returns None."""
@@ -234,6 +267,41 @@ class TestGetOrCreateFromSegments:
         result = VLMClass._get_or_create_from_segments(vlm, segments, 0)
 
         assert result is None
+
+    def test_empty_segments_returns_none(self):
+        """Test: empty segments return None without cache lookup."""
+        vlm = self._create_vlm_with_mock_cache()
+
+        result = VLMClass._get_or_create_from_segments(vlm, [], 1)
+
+        assert result is None
+        vlm._response_cache.get.assert_not_called()
+        vlm.get_async_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_empty_segments_async_returns_none(self):
+        """Test: async helper handles empty segments."""
+        vlm = self._create_vlm_with_mock_cache()
+
+        result = await vlm._get_or_create_from_segments_async([], 1)
+
+        assert result is None
+        vlm._response_cache.get.assert_not_called()
+        vlm.get_async_client.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_responses_endpoint_raises_clear_error(self):
+        """Response-id chaining requires the SDK Responses API surface."""
+        vlm = self._create_vlm_with_mock_cache()
+
+        class ClientWithoutResponses:
+            pass
+
+        with pytest.raises(AttributeError, match="Responses API support"):
+            await vlm._create_cached_response_async(
+                ClientWithoutResponses(),
+                {"model": "test-model", "input": [[make_message("user", "hello")]]},
+            )
 
 
 class TestCacheKeyGeneration:

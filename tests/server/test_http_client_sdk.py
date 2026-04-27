@@ -12,7 +12,7 @@ import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.exceptions import FailedPreconditionError
-from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
+from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_ROOT_API_KEY, TEST_TMP_DIR
 
 
 @pytest_asyncio.fixture()
@@ -21,6 +21,12 @@ async def http_client(running_server):
     port, svc = running_server
     client = AsyncHTTPClient(
         url=f"http://127.0.0.1:{port}",
+        api_key=TEST_ROOT_API_KEY,
+        account=svc.user.account_id,
+        user=svc.user.user_id,
+        agent_id=svc.user.agent_id,
+        timeout=120.0,
+        extra_headers={},
     )
     await client.initialize()
     yield client, svc

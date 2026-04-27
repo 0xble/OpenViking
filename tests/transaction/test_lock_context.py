@@ -6,7 +6,6 @@ import uuid
 
 import pytest
 
-from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.transaction.lock_context import LockContext
 from openviking.storage.transaction.lock_manager import LockManager
 from openviking.storage.transaction.path_lock import LOCK_FILE_NAME
@@ -72,16 +71,17 @@ class TestLockContextMv:
 
 
 class TestLockContextFailure:
-    async def test_nonexistent_path_raises(self, lm):
-        with pytest.raises(LockAcquisitionError):
-            async with LockContext(lm, ["/local/nonexistent-xyz"], lock_mode="point"):
-                pass
+    async def test_point_context_creates_missing_path(self, agfs_client, lm, test_dir):
+        path = f"{test_dir}/created-by-context"
+        async with LockContext(lm, [path], lock_mode="point"):
+            assert agfs_client.stat(path) is not None
 
-    async def test_handle_cleaned_up_on_failure(self, lm):
-        with pytest.raises(LockAcquisitionError):
-            async with LockContext(lm, ["/local/nonexistent-xyz"], lock_mode="point"):
-                pass
+        assert agfs_client.stat(path) is not None
 
+    async def test_handle_cleaned_up_after_missing_path_creation(self, lm, test_dir):
+        path = f"{test_dir}/created-and-cleaned"
+        async with LockContext(lm, [path], lock_mode="point"):
+            pass
         assert len(lm.get_active_handles()) == 0
 
 

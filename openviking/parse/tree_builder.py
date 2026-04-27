@@ -170,15 +170,18 @@ class TreeBuilder:
         else:
             effective_parent_uri = parent_uri or to_uri if use_to_as_parent else parent_uri
             if effective_parent_uri:
-                # Parent URI must exist and be a directory
-                try:
-                    stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx)
-                except Exception as e:
-                    raise FileNotFoundError(
-                        f"Parent URI does not exist: {effective_parent_uri}"
-                    ) from e
-                if not stat_result.get("isDir"):
-                    raise ValueError(f"Parent URI is not a directory: {effective_parent_uri}")
+                if is_resources_root(effective_parent_uri):
+                    stat_result = {"isDir": True}
+                else:
+                    # Parent URI must exist and be a directory
+                    try:
+                        stat_result = await viking_fs.stat(effective_parent_uri, ctx=ctx)
+                    except Exception as e:
+                        raise FileNotFoundError(
+                            f"Parent URI does not exist: {effective_parent_uri}"
+                        ) from e
+                    if not stat_result.get("isDir"):
+                        raise ValueError(f"Parent URI is not a directory: {effective_parent_uri}")
                 base_uri = effective_parent_uri
             candidate_uri = VikingURI(base_uri).join(final_doc_name).uri
 

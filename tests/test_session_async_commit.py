@@ -16,20 +16,33 @@ from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import TaskStatus, get_task_tracker, reset_task_tracker
+from openviking_cli.session.user_id import UserIdentifier
 
+TENANT_HEADERS = {
+    "X-OpenViking-Account": "test_account",
+    "X-OpenViking-User": "test_user",
+    "X-OpenViking-Agent": "default",
+}
 
 
 @pytest_asyncio.fixture
 async def api_client(temp_dir) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVikingService], None]:
     """Create in-process HTTP client for API endpoint tests."""
     reset_task_tracker()
-    service = OpenVikingService(path=str(temp_dir / "api_data"))
+    service = OpenVikingService(
+        path=str(temp_dir / "api_data"),
+        user=UserIdentifier("test_account", "test_user", "default"),
+    )
     await service.initialize()
     app = create_app(config=ServerConfig(), service=service)
     set_service(service)
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=TENANT_HEADERS,
+    ) as client:
         yield client, service
 
     await service.close()

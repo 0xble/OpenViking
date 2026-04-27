@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.time_utils import format_iso8601
-from openviking_cli.session.user_id import UserIdentifier
 
 
 async def _seed_time_filter_records(
@@ -15,7 +14,7 @@ async def _seed_time_filter_records(
 ) -> dict[str, str]:
     embedder = svc.vikingdb_manager.get_embedder()
     vector = embedder.embed(query).dense_vector
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=svc.user, role=Role.ROOT)
 
     for record in records.values():
         await svc.vikingdb_manager.upsert(
@@ -32,7 +31,7 @@ async def _seed_time_filter_records(
                 "vector": vector,
                 "meta": {},
                 "related_uri": [],
-                "account_id": "default",
+                "account_id": svc.user.account_id,
                 "owner_space": "",
                 "level": 2,
             },

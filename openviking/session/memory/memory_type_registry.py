@@ -276,11 +276,22 @@ class MemoryTypeRegistry:
                 pass
 
 
-def create_default_registry() -> MemoryTypeRegistry:
+def create_default_registry(schemas_dir: Optional[str] = None) -> MemoryTypeRegistry:
     """
     Create a registry with memory types loaded at initialization.
 
+    Args:
+        schemas_dir: Optional directory of schema YAML files. When omitted,
+            built-in plus configured custom schemas are loaded.
+
     Returns:
-        MemoryTypeRegistry with built-in types (loaded in __init__)
+        MemoryTypeRegistry with loaded memory types.
     """
-    return MemoryTypeRegistry(load_schemas=True)
+    if schemas_dir is None:
+        return MemoryTypeRegistry(load_schemas=True)
+
+    registry = MemoryTypeRegistry(load_schemas=False)
+    loaded = registry.load_from_directory(schemas_dir)
+    if loaded == 0:
+        raise RuntimeError(f"No memory schemas loaded from directory: {schemas_dir}")
+    return registry

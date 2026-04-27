@@ -3,14 +3,19 @@
 """VolcEngine VLM backend implementation."""
 
 import base64
+import hashlib
 import json
 import logging
+import re
 import time
+from collections import OrderedDict
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, List, Optional, Union
 
 from openviking.telemetry import tracer
 from openviking.utils.model_retry import retry_async, retry_sync
+from openviking_cli.utils.async_utils import run_async
 
 from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM
@@ -18,19 +23,151 @@ from .openai_vlm import OpenAIVLM
 logger = logging.getLogger(__name__)
 
 
+class _ResponseIDCache:
+    def __init__(self, max_size: int = 1024):
+        if max_size < 1:
+            raise ValueError("max_size must be positive")
+        self.max_size = max_size
+        self._values: OrderedDict[str, str] = OrderedDict()
+        self._lock = Lock()
+
+    def get(self, key: str) -> Optional[str]:
+        with self._lock:
+            if key not in self._values:
+                return None
+            value = self._values.pop(key)
+            self._values[key] = value
+            return value
+
+    def set(self, key: str, value: str) -> None:
+        with self._lock:
+            if key in self._values:
+                self._values.pop(key)
+            self._values[key] = value
+            while len(self._values) > self.max_size:
+                self._values.popitem(last=False)
+
+
+def _coerce_response_cache_max_size(value: Any, default: int = 1024) -> int:
+    try:
+        max_size = int(value) if value is not None else default
+    except (TypeError, ValueError):
+        return default
+    return max_size if max_size > 0 else default
+
+
 class VolcEngineVLM(OpenAIVLM):
     """VolcEngine VLM backend with Chat Completions API support."""
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Optional[Dict[str, Any]] = None, **kwargs):
+        config = {**(config or {}), **kwargs}
         super().__init__(config)
         self._sync_client = None
         self._async_client = None
+        self._response_cache = _ResponseIDCache(
+            max_size=_coerce_response_cache_max_size(config.get("response_cache_max_size", 1024))
+        )
         self.provider = "volcengine"
 
         if not self.api_base:
             self.api_base = "https://ark.cn-beijing.volces.com/api/v3"
         if not self.model:
             self.model = "doubao-seed-2-0-pro-260215"
+
+    def _get_response_id_cache_key(
+        self,
+        messages: List[Dict[str, Any]],
+        segment_index: int = 0,
+    ) -> str:
+        parts: list[str] = []
+        for message in messages:
+            content = message.get("content", "")
+            if isinstance(content, str):
+                parts.append(content)
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        parts.append(item["text"])
+            else:
+                parts.append(str(content))
+        text = " ".join(parts).lower()
+        words = re.findall(r"[a-z0-9]+", text)
+        slug = "_".join(words[:4]) if words else "empty"
+        digest = hashlib.sha256(
+            json.dumps(messages, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        ).hexdigest()[:8]
+        return f"prefix:seg{segment_index}_{slug}_{digest}"
+
+    def _get_or_create_from_segments(self, segments: List[List[Dict[str, Any]]], end_idx: int):
+        """Return cached response id synchronously when possible, otherwise create it."""
+        if end_idx <= 0 or not segments:
+            return None
+        end_idx = min(end_idx, len(segments))
+        first_key = self._get_response_id_cache_key(segments[0], 0)
+        first_cached = self._response_cache.get(first_key)
+        if end_idx == 1 and first_cached:
+            return first_cached
+        return run_async(
+            self._get_or_create_from_segments_async(
+                segments,
+                end_idx,
+                first_cached=(first_key, first_cached),
+            )
+        )
+
+    async def _get_or_create_from_segments_async(
+        self,
+        segments: List[List[Dict[str, Any]]],
+        end_idx: int,
+        first_cached: Optional[tuple[str, Optional[str]]] = None,
+    ) -> Optional[str]:
+        if end_idx <= 0 or not segments:
+            return None
+        end_idx = min(end_idx, len(segments))
+        previous_response_id = None
+        client = None
+        for idx in range(end_idx):
+            key = self._get_response_id_cache_key(segments[idx], idx)
+            if idx == 0 and first_cached and first_cached[0] == key:
+                cached = first_cached[1]
+            else:
+                cached = self._response_cache.get(key)
+            if cached:
+                previous_response_id = cached
+                continue
+
+            if client is None:
+                client = self.get_async_client()
+            kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "input": segments[idx],
+            }
+            if previous_response_id:
+                kwargs["previous_response_id"] = previous_response_id
+            response = await self._create_cached_response_async(client, kwargs)
+            previous_response_id = response.id
+            self._response_cache.set(key, previous_response_id)
+        return previous_response_id
+
+    async def _create_cached_response_async(self, client: Any, kwargs: Dict[str, Any]) -> Any:
+        responses = getattr(client, "responses", None)
+        create = getattr(responses, "create", None)
+        if create is None:
+            raise AttributeError(
+                "VolcEngine SDK client does not expose responses.create, which is required "
+                "for previous_response_id cache chaining. Upgrade volcenginesdkarkruntime "
+                "to a version with Responses API support."
+            )
+
+        async def _do_call():
+            return await create(**kwargs)
+
+        return await retry_async(
+            _do_call,
+            max_retries=self.max_retries,
+            operation_name="VolcEngineVLM.responses.create",
+            logger=logger,
+        )
 
     def _parse_tool_calls(self, message) -> List[ToolCall]:
         """Parse tool calls from VolcEngine response message."""

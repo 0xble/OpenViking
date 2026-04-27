@@ -598,7 +598,7 @@ async def test_root_debug_vector_requests_require_explicit_identity():
 
 async def test_dev_mode_root_tenant_scoped_requests_reject_default_namespace():
     """Dev mode must not create or use the literal default tenant namespace."""
-    request = _make_request("/api/v1/resources", auth_enabled=False)
+    request = _make_request("/api/v1/resources", auth_enabled=False, auth_mode="dev")
     identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
 
     with pytest.raises(InvalidArgumentError, match="default OpenViking namespace"):
@@ -607,7 +607,7 @@ async def test_dev_mode_root_tenant_scoped_requests_reject_default_namespace():
 
 async def test_dev_mode_resolve_identity_uses_configured_default_user():
     """Dev mode should use the configured service identity instead of default/default."""
-    request = _make_request("/api/v1/resources", auth_enabled=False)
+    request = _make_request("/api/v1/resources", auth_enabled=False, auth_mode="dev")
     request.app.state.default_user = UserIdentifier("acct", "alice", "main")
 
     identity = await resolve_identity(request)
@@ -616,6 +616,14 @@ async def test_dev_mode_resolve_identity_uses_configured_default_user():
     assert ctx.role == Role.ROOT
     assert ctx.user.account_id == "acct"
     assert ctx.user.user_id == "alice"
+
+
+async def test_api_key_mode_without_manager_fails_safe():
+    """API-key mode must not silently downgrade to unauthenticated dev mode."""
+    request = _make_request("/api/v1/system/status", auth_enabled=False, auth_mode="api_key")
+
+    with pytest.raises(RuntimeError, match="api_key_manager not initialized"):
+        await resolve_identity(request)
 
 
 async def test_root_tenant_scoped_requests_return_structured_400_via_http():

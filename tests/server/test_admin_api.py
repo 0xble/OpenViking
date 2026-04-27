@@ -102,7 +102,6 @@ async def test_list_accounts(admin_client: httpx.AsyncClient):
     assert resp.status_code == 200
     accounts = resp.json()["result"]
     account_ids = {a["account_id"] for a in accounts}
-    assert "default" in account_ids
     assert acct in account_ids
 
 

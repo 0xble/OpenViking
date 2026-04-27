@@ -1,4 +1,3 @@
-import pytest
 from openviking.parse.parsers.html import HTMLParser
 
 
@@ -18,6 +17,13 @@ class TestHTMLParserRawUrlConversion:
             "https://raw.githubusercontent.com/user/repo/feature/branch/src/components/Button.tsx"
         )
         assert self.parser._convert_to_raw_url(blob_deep) == expected_deep
+
+    def test_github_blob_conversion_preserves_query_and_fragment(self):
+        blob_url = "https://github.com/volcengine/OpenViking/blob/main/docs/design.md?raw=1#L10"
+        expected = (
+            "https://raw.githubusercontent.com/volcengine/OpenViking/main/docs/design.md?raw=1#L10"
+        )
+        assert self.parser._convert_to_raw_url(blob_url) == expected
 
     def test_github_non_blob_urls(self):
         repo_root = "https://github.com/volcengine/OpenViking"

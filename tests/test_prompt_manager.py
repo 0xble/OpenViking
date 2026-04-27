@@ -100,7 +100,7 @@ def test_prompt_manager_uses_ov_conf_templates_dir_when_env_is_unset(tmp_path, m
 
 def test_prompt_manager_falls_back_to_bundled_templates_dir(monkeypatch):
     OpenVikingConfigSingleton.reset_instance()
-    monkeypatch.delenv(OPENVIKING_CONFIG_ENV, raising=False)
+    monkeypatch.setenv(OPENVIKING_CONFIG_ENV, "/tmp/openviking-test-missing-ov.conf")
     monkeypatch.delenv(OPENVIKING_PROMPT_TEMPLATES_DIR_ENV, raising=False)
 
     manager = PromptManager(enable_caching=False)

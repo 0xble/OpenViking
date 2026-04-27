@@ -72,7 +72,7 @@ class S3Config(BaseModel):
     )
 
     normalize_encoding: bool = Field(
-        default=True,
+        default=False,
         description="Normalize URL-unsafe path segments before writing S3 object keys. "
         "When enabled, reserved or unsafe URL bytes such as ?, &, #, spaces, %, @, or + are "
         "escaped in place as !HH hexadecimal bytes, while / ! - _ . * ' ( ) remain unescaped.",

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from openviking.storage.viking_fs import VikingFS
+from openviking_cli.exceptions import PermissionDeniedError
 
 
 def _make_viking_fs() -> VikingFS:
@@ -17,6 +18,7 @@ def _make_viking_fs() -> VikingFS:
     fs.query_embedder = None
     fs.rerank_config = None
     fs.vector_store = None
+    fs._encryptor = None
     fs._bound_ctx = contextvars.ContextVar("vikingfs_bound_ctx_test", default=None)
     return fs
 
@@ -37,14 +39,14 @@ class TestVikingFSURITraversalGuard:
     def test_rejects_unsafe_uri_components(self, uri: str) -> None:
         fs = _make_viking_fs()
 
-        with pytest.raises(PermissionError, match="Unsafe URI"):
+        with pytest.raises(PermissionDeniedError, match="Unsafe URI"):
             fs._normalized_uri_parts(uri)
 
     @pytest.mark.asyncio
     async def test_read_file_rejects_traversal_before_agfs_read(self) -> None:
         fs = _make_viking_fs()
 
-        with pytest.raises(PermissionError, match="Unsafe URI"):
+        with pytest.raises(PermissionDeniedError, match="Unsafe URI"):
             await fs.read_file("viking://resources/../_system/users.json")
 
         fs.agfs.read.assert_not_called()
@@ -53,7 +55,7 @@ class TestVikingFSURITraversalGuard:
     async def test_write_rejects_traversal_before_agfs_write(self) -> None:
         fs = _make_viking_fs()
 
-        with pytest.raises(PermissionError, match="Unsafe URI"):
+        with pytest.raises(PermissionDeniedError, match="Unsafe URI"):
             await fs.write("viking://resources/../../_system/accounts.json", "pwned")
 
         fs.agfs.write.assert_not_called()
@@ -64,7 +66,7 @@ class TestVikingFSURITraversalGuard:
         fs._collect_uris = AsyncMock(return_value=[])
         fs._delete_from_vector_store = AsyncMock()
 
-        with pytest.raises(PermissionError, match="Unsafe URI"):
+        with pytest.raises(PermissionDeniedError, match="Unsafe URI"):
             await fs.rm("viking://resources/../../other_account/_system/users.json")
 
         fs._collect_uris.assert_not_called()
@@ -87,7 +89,7 @@ class TestVikingFSURITraversalGuard:
         fs._update_vector_store_uris = AsyncMock()
         fs._delete_from_vector_store = AsyncMock()
 
-        with pytest.raises(PermissionError, match="Unsafe URI"):
+        with pytest.raises(PermissionDeniedError, match="Unsafe URI"):
             await fs.mv(old_uri, new_uri)
 
         fs._collect_uris.assert_not_called()

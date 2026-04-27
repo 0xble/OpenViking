@@ -16,7 +16,7 @@ from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryField
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.merge_op import MergeOpFactory
+from openviking.session.memory.merge_op import FieldType, MergeOpFactory, PatchOp
 from openviking.session.memory.utils import (
     deserialize_full,
     flat_model_to_dict,
@@ -422,7 +422,7 @@ class MemoryUpdater:
 
         # Deserialize content and metadata
         current_plain_content, current_metadata = deserialize_full(current_full_content)
-        metadata = current_metadata or {}
+        metadata = dict(current_metadata or {})
 
         # Get schema
         field_schema_map: Dict[str, MemoryField] = {}
@@ -433,19 +433,28 @@ class MemoryUpdater:
 
         # Build metadata by applying merge_op to each field
         # (merge_op.apply handles current_value=None case for new files)
-        metadata: Dict[str, Any] = {}
-        for field_name, field_schema in field_schema_map.items():
-            if field_name in model_dict:
-                patch_value = model_dict[field_name]
-                # Get current value
-                if field_name == "content":
-                    current_value = current_plain_content
-                else:
-                    current_value = metadata.get(field_name)
-                # Use merge_op to process field value
-                merge_op = MergeOpFactory.from_field(field_schema)
-                new_value = merge_op.apply(current_value, patch_value)
-                metadata[field_name] = new_value
+        if field_schema_map:
+            for field_name, field_schema in field_schema_map.items():
+                if field_name in model_dict:
+                    patch_value = model_dict[field_name]
+                    # Get current value
+                    if field_name == "content":
+                        current_value = current_plain_content if file_existed else None
+                    else:
+                        current_value = metadata.get(field_name)
+                    # Use merge_op to process field value
+                    merge_op = MergeOpFactory.from_field(field_schema)
+                    new_value = merge_op.apply(current_value, patch_value)
+                    metadata[field_name] = new_value
+        else:
+            if "content" in model_dict:
+                metadata["content"] = PatchOp(FieldType.STRING).apply(
+                    current_plain_content if file_existed else None,
+                    model_dict["content"],
+                )
+            for field_name, value in model_dict.items():
+                if field_name not in {"content", "memory_type"}:
+                    metadata[field_name] = value
 
         # Serialize and write (template rendering is handled inside serialize_with_metadata)
         content_template = None

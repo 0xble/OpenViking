@@ -8,7 +8,7 @@ definitions, with discriminator support for polymorphic fields.
 """
 
 import re
-from typing import Any, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Dict, Iterable, List, Optional, Tuple, Type, Union
 
 from pydantic import BaseModel, Field, create_model
 from pydantic.config import ConfigDict
@@ -30,6 +30,13 @@ def to_pascal_case(s: str) -> str:
     return "".join(word.title() for word in words)
 
 
+def _coerce_schemas(schemas: Iterable[MemoryTypeSchema] | Any) -> List[MemoryTypeSchema]:
+    """Accept the current schema-list API and legacy registry-style callers."""
+    if hasattr(schemas, "list_all"):
+        return list(schemas.list_all(include_disabled=True))
+    return list(schemas)
+
+
 class SchemaModelGenerator:
     """
     Dynamic Pydantic model generator from memory type schemas.
@@ -38,8 +45,8 @@ class SchemaModelGenerator:
     for polymorphic memory data.
     """
 
-    def __init__(self, schemas: List[MemoryTypeSchema]):
-        self.schemas = schemas
+    def __init__(self, schemas: List[MemoryTypeSchema] | Any):
+        self.schemas = _coerce_schemas(schemas)
         self._model_cache: Dict[str, Type[BaseModel]] = {}
         self._flat_data_models: Dict[str, Type[BaseModel]] = {}
         self._union_model: Optional[Type[BaseModel]] = None
@@ -320,8 +327,11 @@ class SchemaPromptGenerator:
     based on the YAML schema definitions.
     """
 
-    def __init__(self, schemas: List[MemoryTypeSchema]):
-        self.schemas = schemas
+    def __init__(self, schemas: List[MemoryTypeSchema] | Any):
+        if hasattr(schemas, "list_all"):
+            self.schemas = list(schemas.list_all())
+        else:
+            self.schemas = list(schemas)
 
     def generate_type_descriptions(self) -> str:
         """

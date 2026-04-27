@@ -59,6 +59,7 @@ class NorthwestTripMockVLM:
 
 
 @pytest.mark.asyncio
+@skip_if_not_manual
 async def test_manual_memory_batching_100_files(monkeypatch):
     """
     西北大环线 100 个文件压力测试。

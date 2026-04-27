@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import asyncio
+import inspect
 import logging
 import random
 import time
@@ -45,6 +46,20 @@ def _get_token_tracker():
     return _token_tracker_instance
 
 
+def _callable_accepts_is_query(func: Callable[..., Any]) -> bool:
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        return False
+
+    if "is_query" in signature.parameters:
+        return True
+    return any(
+        param.kind == inspect.Parameter.VAR_KEYWORD
+        for param in signature.parameters.values()
+    )
+
+
 async def embed_compat(embedder: Any, text: str, *, is_query: bool = False) -> "EmbedResult":
     """Call async embedding when available, otherwise fall back to sync embed()."""
     from openviking.telemetry import bind_telemetry_stage
@@ -53,8 +68,13 @@ async def embed_compat(embedder: Any, text: str, *, is_query: bool = False) -> "
     embed_async = getattr(embedder, "embed_async", None)
     with bind_telemetry_stage(stage):
         if callable(embed_async):
-            return await embed_async(text, is_query=is_query)
-        return embedder.embed(text, is_query=is_query)
+            if _callable_accepts_is_query(embed_async):
+                return await embed_async(text, is_query=is_query)
+            return await embed_async(text)
+        embed = embedder.embed
+        if _callable_accepts_is_query(embed):
+            return embed(text, is_query=is_query)
+        return embed(text)
 
 
 async def embed_batch_compat(
@@ -67,8 +87,13 @@ async def embed_batch_compat(
     embed_batch_async = getattr(embedder, "embed_batch_async", None)
     with bind_telemetry_stage(stage):
         if callable(embed_batch_async):
-            return await embed_batch_async(texts, is_query=is_query)
-        return embedder.embed_batch(texts, is_query=is_query)
+            if _callable_accepts_is_query(embed_batch_async):
+                return await embed_batch_async(texts, is_query=is_query)
+            return await embed_batch_async(texts)
+        embed_batch = embedder.embed_batch
+        if _callable_accepts_is_query(embed_batch):
+            return embed_batch(texts, is_query=is_query)
+        return embed_batch(texts)
 
 
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:

@@ -10,7 +10,6 @@ import uuid
 
 import pytest
 
-from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.transaction.lock_context import LockContext
 from openviking.storage.transaction.lock_manager import LockManager
 from openviking.storage.transaction.path_lock import LOCK_FILE_NAME
@@ -117,9 +116,8 @@ class TestSequentialLocks:
             content = agfs_client.cat(f"{test_dir}/f{i}.txt")
             assert content == f"data-{i}".encode()
 
-    async def test_lock_acquisition_failure(self, agfs_client, lock_manager, test_dir):
-        """LockContext raises LockAcquisitionError for nonexistent path."""
-        nonexistent = f"{test_dir}/nonexistent-{uuid.uuid4().hex}"
-        with pytest.raises(LockAcquisitionError):
-            async with LockContext(lock_manager, [nonexistent], lock_mode="point"):
-                pass
+    async def test_missing_path_is_created_and_locked(self, agfs_client, lock_manager, test_dir):
+        """LockContext creates a missing lock directory before acquiring a point lock."""
+        missing = f"{test_dir}/nonexistent-{uuid.uuid4().hex}"
+        async with LockContext(lock_manager, [missing], lock_mode="point"):
+            assert agfs_client.stat(missing) is not None

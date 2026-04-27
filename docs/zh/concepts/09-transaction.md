@@ -230,6 +230,8 @@ async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_parent_path=d
 
 **异常处理**：`__aexit__` 总是释放锁，不吞异常。获取锁失败时抛出 `LockAcquisitionError`。
 
+获取 POINT 或 SUBTREE 锁时，`PathLock` 会先确保目标锁目录存在。这样首次写入场景（例如记忆提取创建新的记忆目录）也能先获取 fencing token，再执行写入。
+
 ## 锁类型（POINT vs SUBTREE）
 
 锁机制使用两种锁类型来处理不同的冲突场景：

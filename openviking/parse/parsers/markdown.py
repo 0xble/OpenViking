@@ -662,6 +662,8 @@ class MarkdownParser(BaseParser):
 
         if count == 1:
             base = names[0]
+            if len(base) <= max_len:
+                return base.strip("_") or "merged"
         else:
             suffix = f"_{count}more"
             max_first_len = max_len - len(suffix) - 9  # reserve space for _hash

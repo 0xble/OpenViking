@@ -9,6 +9,7 @@ No need to worry about ov.conf - server uses its own config.
 """
 
 import asyncio
+import os
 from dataclasses import asdict
 from datetime import datetime
 
@@ -23,6 +24,10 @@ logger = get_logger(__name__)
 
 # Server URL - user starts openviking-server separately
 SERVER_URL = "http://127.0.0.1:1933"
+requires_http_e2e = pytest.mark.skipif(
+    os.environ.get("OPENVIKING_RUN_HTTP_E2E") != "1",
+    reason="set OPENVIKING_RUN_HTTP_E2E=1 to run server-backed HTTP E2E tests",
+)
 
 
 async def _wait_for_task(client: AsyncHTTPClient, task_id: str, timeout: float = 60.0) -> dict:
@@ -122,6 +127,7 @@ async def http_client():
 class TestCompressorV2EndToEnd:
     """End-to-end tests for SessionCompressorV2 via HTTP"""
 
+    @requires_http_e2e
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_memory_v2_extraction_e2e(self, http_client: AsyncHTTPClient):
@@ -232,6 +238,7 @@ class TestCompressorV2EndToEnd:
         # Memory extraction happens in background, v2 writes directly to storage
         assert True
 
+    @requires_http_e2e
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_server_health(self, http_client: AsyncHTTPClient):

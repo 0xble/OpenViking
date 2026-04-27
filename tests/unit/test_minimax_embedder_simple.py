@@ -17,6 +17,8 @@ class TestMinimaxRealCall(unittest.TestCase):
         self.api_key = os.environ.get("MINIMAX_API_KEY")
         self.group_id = os.environ.get("MINIMAX_GROUP_ID")
 
+        if os.environ.get("RUN_MANUAL_LLM") != "1" and os.environ.get("RUN_MINIMAX_LIVE") != "1":
+            self.skipTest("Set RUN_MANUAL_LLM=1 or RUN_MINIMAX_LIVE=1 to run MiniMax live tests")
         if not self.api_key:
             self.skipTest("MINIMAX_API_KEY not set")
 

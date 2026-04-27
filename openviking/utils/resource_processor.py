@@ -9,6 +9,7 @@ as described in the OpenViking design document.
 
 import asyncio
 import time
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.parse.tree_builder import TreeBuilder
@@ -26,6 +27,13 @@ if TYPE_CHECKING:
     from openviking.parse.vlm import VLMProcessor
 
 logger = get_logger(__name__)
+
+
+def _telemetry_measure(telemetry: Any, name: str):
+    measure = getattr(telemetry, "measure", None)
+    if measure is None:
+        return nullcontext()
+    return measure(name)
 
 
 class ResourceProcessor:
@@ -125,7 +133,7 @@ class ResourceProcessor:
         }
         telemetry = get_current_telemetry()
 
-        with telemetry.measure("resource.process"):
+        with _telemetry_measure(telemetry, "resource.process"):
             # ============ Phase 1: Parse source and writes to temp viking fs ============
             try:
                 from openviking.metrics.datasources.resource import (
@@ -324,7 +332,7 @@ class ResourceProcessor:
                 try:
                     stage_start = time.perf_counter()
                     stage_status = "ok"
-                    with telemetry.measure("resource.summarize"):
+                    with _telemetry_measure(telemetry, "resource.summarize"):
                         await self._get_summarizer().summarize(
                             resource_uris=[result["root_uri"]],
                             ctx=ctx,

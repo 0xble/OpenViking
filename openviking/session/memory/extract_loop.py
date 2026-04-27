@@ -90,6 +90,31 @@ class ExtractLoop:
         # Flag to disable tools in next iteration after unknown tool error
         self._disable_tools_for_iteration = False
 
+    def _get_allowed_directories_list(self) -> str:
+        """Return rendered memory schema directories visible to the current context."""
+        if self.context_provider is not None:
+            schemas = self.context_provider.get_memory_schemas(self.ctx)
+        else:
+            from openviking.session.memory.memory_type_registry import create_default_registry
+
+            schemas = create_default_registry().list_all()
+
+        user_space = user_space_fragment(self.ctx) if self.ctx else "default"
+        agent_space = agent_space_fragment(self.ctx) if self.ctx else "default"
+
+        directories: list[str] = []
+        for schema in schemas:
+            if not schema.directory:
+                continue
+            directory = (
+                schema.directory.replace("{user_space}", user_space)
+                .replace("{agent_space}", agent_space)
+                .replace("{{ user_space }}", user_space)
+                .replace("{{ agent_space }}", agent_space)
+            )
+            directories.append(directory)
+        return "\n".join(directories)
+
     async def run(self) -> Tuple[Optional[Any], List[Dict[str, Any]]]:
         """
         Run the simplified ReAct loop for memory updates.

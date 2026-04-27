@@ -72,7 +72,9 @@ def run_async(coro: Coroutine[None, None, T]) -> T:
     except RuntimeError:
         running_loop = None
 
-    if running_loop is not None:
+    target_loop = _get_loop()
+
+    if running_loop is target_loop:
         result_box: list = []
         error_box: list = []
 
@@ -92,6 +94,5 @@ def run_async(coro: Coroutine[None, None, T]) -> T:
             raise error_box[0]
         return result_box[0]
 
-    loop = _get_loop()
-    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    future = asyncio.run_coroutine_threadsafe(coro, target_loop)
     return future.result()

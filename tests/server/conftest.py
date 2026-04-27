@@ -10,7 +10,6 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import httpx
 import pytest
@@ -19,6 +18,7 @@ import uvicorn
 
 from openviking import AsyncOpenViking
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.server.api_keys import APIKeyManager
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
@@ -35,6 +35,7 @@ from openviking_cli.utils.config.vlm_config import VLMConfig
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp_server"
+TEST_ROOT_API_KEY = "test-root-api-key"
 
 # ---------------------------------------------------------------------------
 # Sample data
@@ -156,17 +157,9 @@ def test_openviking_config(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
 
     OpenVikingConfigSingleton.reset_instance()
 
-    with (
-        patch(
-            "openviking_cli.utils.config.EmbeddingConfig.get_embedder",
-            return_value=_DummyEmbedder(),
-        ),
-        patch(
-            "openviking_cli.utils.config.VLMConfig.get_vlm_instance",
-            return_value=_DummyVLM(),
-        ),
-    ):
-        yield
+    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: _DummyEmbedder())
+    monkeypatch.setattr(VLMConfig, "get_vlm_instance", lambda self: _DummyVLM())
+    yield
 
     OpenVikingConfigSingleton.reset_instance()
 
@@ -272,6 +265,32 @@ async def client(app):
 
 
 @pytest_asyncio.fixture(scope="function")
+async def root_client(service: OpenVikingService):
+    """ASGI client for admin-only routes that require configured API-key mode."""
+    from openviking.server.dependencies import set_service
+
+    config = ServerConfig(root_api_key=TEST_ROOT_API_KEY)
+    fastapi_app = create_app(config=config, service=service)
+    set_service(service)
+
+    manager = APIKeyManager(root_key=TEST_ROOT_API_KEY, viking_fs=service.viking_fs)
+    await manager.load()
+    fastapi_app.state.api_key_manager = manager
+
+    transport = httpx.ASGITransport(app=fastapi_app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers={
+            "X-API-Key": TEST_ROOT_API_KEY,
+            "X-OpenViking-Account": service.user.account_id,
+            "X-OpenViking-User": service.user.user_id,
+        },
+    ) as c:
+        yield c
+
+
+@pytest_asyncio.fixture(scope="function")
 async def client_with_resource(client, service, sample_markdown_file):
     """Client + a resource already added and processed."""
     ctx = RequestContext(user=service.user, role=Role.ROOT)
@@ -304,7 +323,7 @@ async def running_server(temp_dir: Path, monkeypatch):
     await svc.initialize()
     svc.viking_fs.query_embedder = fake_embedder_cls()
 
-    config = ServerConfig()
+    config = ServerConfig(root_api_key=TEST_ROOT_API_KEY)
     fastapi_app = create_app(config=config, service=svc)
 
     # Find a free port
@@ -340,6 +359,12 @@ async def http_client(running_server):
     port, svc = running_server
     client = AsyncHTTPClient(
         url=f"http://127.0.0.1:{port}",
+        api_key=TEST_ROOT_API_KEY,
+        account=svc.user.account_id,
+        user=svc.user.user_id,
+        agent_id=svc.user.agent_id,
+        timeout=120.0,
+        extra_headers={},
     )
     await client.initialize()
     yield client, svc

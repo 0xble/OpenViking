@@ -15,7 +15,7 @@ from openviking.resource.watch_storage import (
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import InvalidArgumentError
+from openviking_cli.exceptions import InvalidArgumentError, PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -48,7 +48,7 @@ def test_watch_task_control_files_are_root_only(bare_viking_fs, root_ctx, user_c
     assert bare_viking_fs._is_accessible(uri, root_ctx) is True
     assert bare_viking_fs._is_accessible(uri, user_ctx) is False
 
-    with pytest.raises(PermissionError):
+    with pytest.raises(PermissionDeniedError):
         bare_viking_fs._ensure_access(uri, user_ctx)
 
 

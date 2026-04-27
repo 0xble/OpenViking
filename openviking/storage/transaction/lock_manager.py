@@ -66,23 +66,29 @@ class LockManager:
         """Stop cleanup and release all active locks."""
         self._running = False
         if self._redo_task:
-            self._redo_task.cancel()
-            try:
-                await self._redo_task
-            except asyncio.CancelledError:
-                pass
+            await self._cancel_background_task(self._redo_task)
             self._redo_task = None
         if self._cleanup_task:
-            self._cleanup_task.cancel()
-            try:
-                if self._cleanup_task.get_loop() is asyncio.get_running_loop():
-                    await self._cleanup_task
-            except asyncio.CancelledError:
-                pass
+            await self._cancel_background_task(self._cleanup_task)
             self._cleanup_task = None
         for handle in list(self._handles.values()):
             await self._path_lock.release(handle)
         self._handles.clear()
+
+    async def _cancel_background_task(self, task: asyncio.Task) -> None:
+        """Cancel a manager-owned task without crossing event-loop ownership."""
+        task_loop = task.get_loop()
+        current_loop = asyncio.get_running_loop()
+        if task_loop is not current_loop:
+            logger.debug("Skipped LockManager task owned by a different event loop")
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("LockManager background task raised during cancellation")
 
     def create_handle(self) -> LockHandle:
         handle = LockHandle()

@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 try:
+    from openviking.server.identity import RequestContext, Role
     from openviking.session.memory_extractor import MemoryExtractor, ToolSkillCandidateMemory
     from openviking_cli.exceptions import NotFoundError
+    from openviking_cli.session.user_id import UserIdentifier
 except Exception:  # pragma: no cover - fallback for minimal local test env
     MemoryExtractor = None
     ToolSkillCandidateMemory = None
@@ -24,9 +26,9 @@ pytestmark = pytest.mark.skipif(
 
 
 def _ctx(agent_space: str = "agent_space_1"):
-    return SimpleNamespace(
-        account_id="acc_1",
-        user=SimpleNamespace(agent_space_name=lambda: agent_space),
+    return RequestContext(
+        user=UserIdentifier("acc_1", "user_1", agent_space),
+        role=Role.ROOT,
     )
 
 

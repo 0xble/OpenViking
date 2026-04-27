@@ -18,7 +18,11 @@ from typing import Any, Dict, List, Optional
 
 from openviking.models.embedder.base import EmbedResult, embed_compat
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.errors import CollectionNotFoundError
+from openviking.storage.errors import (
+    CollectionNotFoundError,
+    EmbeddingConfigurationError,
+    EmbeddingRebuildRequiredError,
+)
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
@@ -34,6 +38,7 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 logger = get_logger(__name__)
+EMBEDDING_META_MARKER = "\n\n[openviking.embedding]\n"
 
 
 @dataclass
@@ -49,7 +54,11 @@ class CollectionSchemas:
     """
 
     @staticmethod
-    def context_collection(name: str, vector_dim: int) -> Dict[str, Any]:
+    def context_collection(
+        name: str,
+        vector_dim: int,
+        description: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Get the schema for the unified context collection.
 
@@ -78,7 +87,6 @@ class CollectionSchemas:
             {"FieldName": "created_at", "FieldType": "date_time"},
             {"FieldName": "updated_at", "FieldType": "date_time"},
             {"FieldName": "active_count", "FieldType": "int64"},
-            {"FieldName": "parent_uri", "FieldType": "path"},
         ]
         fields.extend(
             [
@@ -108,7 +116,6 @@ class CollectionSchemas:
             "created_at",
             "updated_at",
             "active_count",
-            "parent_uri",
         ]
         scalar_index.extend(
             [
@@ -122,18 +129,83 @@ class CollectionSchemas:
         )
         return {
             "CollectionName": name,
-            "Description": "Unified context collection",
+            "Description": description or "Unified context collection",
             "Fields": fields,
             "ScalarIndex": scalar_index,
         }
 
 
-async def init_context_collection(storage) -> bool:
+def _get_active_embedding_model_config(config: "OpenVikingConfig") -> Any:
+    embedding_cfg = config.embedding
+    if embedding_cfg.hybrid is not None:
+        return embedding_cfg.hybrid
+    if embedding_cfg.dense is not None:
+        return embedding_cfg.dense
+    if embedding_cfg.sparse is not None:
+        return embedding_cfg.sparse
+    raise ValueError("No active embedding model configuration found")
+
+
+def _build_embedding_metadata(config: "OpenVikingConfig") -> Dict[str, Any]:
+    model_cfg = _get_active_embedding_model_config(config)
+    provider = (
+        getattr(model_cfg, "provider", None) or getattr(model_cfg, "backend", None) or ""
+    ).lower()
+    model = getattr(model_cfg, "model", None) or ""
+    dimension = config.embedding.dimension
+    model_path = getattr(model_cfg, "model_path", None)
+    model_identity = model
+
+    if provider == "local":
+        try:
+            from openviking.models.embedder.local_embedders import get_local_model_identity
+
+            resolved_identity = get_local_model_identity(model, model_path=model_path)
+            model_identity = str(hashlib.sha256(resolved_identity.encode("utf-8")).hexdigest())
+        except Exception:
+            model_identity = model
+
+    return {
+        "provider": provider,
+        "model": model,
+        "dimension": dimension,
+        "model_identity": model_identity,
+    }
+
+
+def _encode_collection_description(
+    base_description: str,
+    embedding_meta: Dict[str, Any],
+) -> str:
+    description = (base_description or "Unified context collection").strip()
+    meta_json = json.dumps(embedding_meta, sort_keys=True, ensure_ascii=False)
+    return f"{description}{EMBEDDING_META_MARKER}{meta_json}"
+
+
+def _decode_collection_description(
+    description: Optional[str],
+) -> tuple[str, Optional[Dict[str, Any]]]:
+    text = description or ""
+    if EMBEDDING_META_MARKER not in text:
+        return text, None
+
+    base, meta_json = text.split(EMBEDDING_META_MARKER, 1)
+    try:
+        payload = json.loads(meta_json.strip())
+    except json.JSONDecodeError:
+        logger.warning("Failed to parse collection embedding metadata from description")
+        return text, None
+    return base.strip(), payload if isinstance(payload, dict) else None
+
+
+async def init_context_collection(storage, *, allow_metadata_backfill: bool = False) -> bool:
     """
     Initialize the context collection with proper schema.
 
     Args:
         storage: Storage interface instance
+        allow_metadata_backfill: Allow writing current embedding metadata onto a
+            non-empty legacy collection after the caller has confirmed compatibility.
 
     Returns:
         True if collection was created, False if already exists
@@ -146,11 +218,105 @@ async def init_context_collection(storage) -> bool:
     if not name:
         raise ValueError("Vector DB collection name is required")
     collection_name = name
-    schema = CollectionSchemas.context_collection(collection_name, vector_dim)
-    if await storage.collection_exists():
-        await storage.ensure_collection_schema(schema)
+    embedding_meta = _build_embedding_metadata(config)
+    vectordb_cfg = config.storage.vectordb
+    uses_volcengine_data_plane = bool(
+        vectordb_cfg.backend == "volcengine"
+        and getattr(getattr(vectordb_cfg, "volcengine", None), "api_key", None)
+    )
+    if uses_volcengine_data_plane:
+        logger.info(
+            "Skip collection bootstrap for volcengine data-plane backend; "
+            "collection/index/schema must be pre-created out of band"
+        )
         return False
-    return await storage.create_collection(collection_name, schema)
+
+    schema = CollectionSchemas.context_collection(
+        collection_name,
+        vector_dim,
+        description=_encode_collection_description("Unified context collection", embedding_meta),
+    )
+    created = await storage.create_collection(collection_name, schema)
+    if created:
+        return True
+
+    if not hasattr(storage, "get_collection_meta"):
+        logger.warning(
+            "Storage backend does not expose collection metadata; "
+            "skipping embedding compatibility validation"
+        )
+        return False
+
+    existing_meta = await storage.get_collection_meta()
+    if existing_meta is None:
+        raise EmbeddingConfigurationError(
+            "Existing collection metadata is None; cannot validate embedding compatibility"
+        )
+
+    base_description, existing_embedding_meta = _decode_collection_description(
+        existing_meta.get("Description")
+    )
+    if existing_embedding_meta == embedding_meta:
+        return False
+
+    existing_count = await storage.count() if hasattr(storage, "count") else None
+    if existing_embedding_meta is None and existing_count == 0:
+        latest_count = await storage.count()
+        if latest_count == 0 and hasattr(storage, "update_collection_description"):
+            await storage.update_collection_description(
+                _encode_collection_description(
+                    base_description or "Unified context collection",
+                    embedding_meta,
+                )
+            )
+            return False
+        existing_count = latest_count
+
+    if existing_embedding_meta is None and existing_count is None:
+        logger.warning(
+            "Storage backend cannot count existing vectors; skipping legacy embedding "
+            "metadata backfill for safety"
+        )
+        if allow_metadata_backfill:
+            return False
+        raise EmbeddingRebuildRequiredError(
+            "Existing collection has no embedding metadata and vector count is unavailable. "
+            "Confirm compatibility before backfilling metadata or rebuild the collection. "
+            f"existing_count=unknown, current={embedding_meta}"
+        )
+
+    if existing_embedding_meta is None:
+        if not allow_metadata_backfill:
+            logger.error(
+                "Existing collection has %s vector(s) but no embedding metadata "
+                "(created by an older version). Refusing to assume compatibility "
+                "with current embedding metadata: %s",
+                existing_count,
+                embedding_meta,
+            )
+            raise EmbeddingRebuildRequiredError(
+                "Existing collection has vectors but no embedding metadata. "
+                "Confirm compatibility before backfilling metadata or rebuild the collection. "
+                f"existing_count={existing_count}, current={embedding_meta}"
+            )
+        logger.warning(
+            "Existing collection has %s vector(s) but no embedding metadata "
+            "(created by an older version). Backfilling with current config and continuing.",
+            existing_count,
+        )
+        if hasattr(storage, "update_collection_description"):
+            await storage.update_collection_description(
+                _encode_collection_description(
+                    base_description or "Unified context collection",
+                    embedding_meta,
+                )
+            )
+        return False
+
+    raise EmbeddingRebuildRequiredError(
+        "Rebuild is required because existing collection embedding metadata does not match "
+        f"current configuration. existing={existing_embedding_meta}, current={embedding_meta}"
+    )
 
 
 class TextEmbeddingHandler(DequeueHandlerBase):
@@ -337,18 +503,26 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         )
                         _embed_elapsed = _time.monotonic() - _embed_t0
                         try:
-                            from openviking.storage.observers.prometheus_observer import (
-                                get_prometheus_observer,
-                            )
+                            from openviking.metrics.datasources import EmbeddingEventDataSource
 
-                            _prom = get_prometheus_observer()
-                            if _prom is not None:
-                                _prom.record_embedding(_embed_elapsed)
+                            EmbeddingEventDataSource.record_success(
+                                latency_seconds=_embed_elapsed,
+                                account_id=inserted_data.get("account_id"),
+                            )
                         except Exception:
                             pass
                     except Exception as embed_err:
                         error_msg = f"Failed to generate embedding: {embed_err}"
                         error_class = classify_api_error(embed_err)
+                        try:
+                            from openviking.metrics.datasources import EmbeddingEventDataSource
+
+                            EmbeddingEventDataSource.record_error(
+                                error_code=error_class,
+                                account_id=inserted_data.get("account_id"),
+                            )
+                        except Exception:
+                            pass
 
                         if error_class == "permanent":
                             logger.critical(error_msg)

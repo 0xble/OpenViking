@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 
 _UTF8_FLAG = 0x800
+_MOJIBAKE_LATIN1_MARKERS = frozenset("ÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕØÙÚÛÝÞ")
 
 
 def _contains_cjk(text: str) -> bool:
@@ -21,7 +22,10 @@ def _contains_cjk(text: str) -> bool:
 
 def _contains_common_mojibake(text: str) -> bool:
     return any(
-        "\u0370" <= ch <= "\u03ff" or "\u2200" <= ch <= "\u22ff" or "\u2500" <= ch <= "\u257f"
+        ch in _MOJIBAKE_LATIN1_MARKERS
+        or "\u0370" <= ch <= "\u03ff"
+        or "\u2200" <= ch <= "\u22ff"
+        or "\u2500" <= ch <= "\u257f"
         for ch in text
     )
 
@@ -30,7 +34,7 @@ def normalize_zip_filenames(zipf: zipfile.ZipFile) -> None:
     """Repair UTF-8 member names when archives forgot to set the UTF-8 flag."""
     repaired_any = False
     for member in zipf.infolist():
-        if member.flag_bits & _UTF8_FLAG:
+        if member.flag_bits & _UTF8_FLAG and not _contains_common_mojibake(member.filename):
             continue
 
         try:
@@ -65,6 +69,8 @@ def safe_extract_zip(zipf: zipfile.ZipFile, dest_dir: Path) -> None:
     dest_dir = Path(dest_dir).resolve()
     normalize_zip_filenames(zipf)
     for member in zipf.infolist():
+        if "\\" in member.filename:
+            raise ValueError(f"Zip Slip attempt detected: {member.filename}")
         member_path = (dest_dir / member.filename).resolve()
         # Ensure the resolved path is inside dest_dir
         if not str(member_path).startswith(str(dest_dir) + os.sep):

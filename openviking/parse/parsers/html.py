@@ -11,6 +11,7 @@ For URL downloading, use HTTPAccessor in the new two-layer architecture.
 import time
 from pathlib import Path
 from typing import List, Optional, Union
+from urllib.parse import urlparse, urlunparse
 
 from openviking.parse.base import (
     NodeType,
@@ -83,6 +84,28 @@ class HTMLParser(BaseParser):
         decoded_path = unquote(parsed.path)
         basename = Path(decoded_path).name
         return basename if basename else "download"
+
+    @staticmethod
+    def _convert_to_raw_url(url: str) -> str:
+        """Convert source-host blob URLs to raw file URLs."""
+        parsed = urlparse(url)
+        if parsed.netloc in {"github.com", "www.github.com"}:
+            path_parts = parsed.path.strip("/").split("/")
+            if len(path_parts) >= 4 and path_parts[2] == "blob":
+                new_path = "/".join(path_parts[:2] + path_parts[3:])
+                return urlunparse(
+                    (
+                        "https",
+                        "raw.githubusercontent.com",
+                        new_path,
+                        "",
+                        parsed.query,
+                        parsed.fragment,
+                    )
+                )
+        if parsed.netloc in {"gitlab.com", "www.gitlab.com"} and "/-/blob/" in parsed.path:
+            return url.replace("/-/blob/", "/-/raw/")
+        return url
 
     def _get_readabilipy(self):
         """Lazy import of readabilipy."""

@@ -33,7 +33,6 @@ class TestMemoryTools:
         assert tool.name == "search"
         assert "Semantic search" in tool.description
         assert "query" in tool.parameters["properties"]
-        assert "session_info" in tool.parameters["properties"]
 
     def test_ls_tool_properties(self):
         """Test MemoryLsTool properties."""
@@ -68,8 +67,6 @@ class TestMemoryTools:
 
         # Check get_tool_schemas
         schemas = get_tool_schemas()
-        assert len(schemas) == 3
+        assert len(schemas) == 1
         schema_names = [s["function"]["name"] for s in schemas]
         assert "read" in schema_names
-        assert "search" in schema_names
-        assert "ls" in schema_names

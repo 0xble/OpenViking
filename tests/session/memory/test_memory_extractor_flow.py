@@ -12,6 +12,7 @@ This test simulates the complete memory extraction workflow:
 """
 
 import logging
+import os
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch
 
@@ -35,6 +36,11 @@ for logger_name in ["openviking", "openviking.session.memory"]:
 
 # Module logger for this test
 logger = logging.getLogger(__name__)
+
+skip_if_not_manual = pytest.mark.skipif(
+    os.environ.get("RUN_MANUAL_LLM") != "1",
+    reason="manual live-LLM test; set RUN_MANUAL_LLM=1 to run",
+)
 
 
 class MockVikingFS:
@@ -480,6 +486,7 @@ class TestMemoryExtractorFlow:
     """Test the complete memory extraction flow."""
 
     @pytest.mark.integration
+    @skip_if_not_manual
     @pytest.mark.asyncio
     async def test_full_flow_with_real_llm(self):
         # Only mock VikingFS, everything else is real!
@@ -557,6 +564,7 @@ class TestMemoryExtractorFlow:
         print(f"LLM 建议的总变更数：{total_changes}")
 
     @pytest.mark.integration
+    @skip_if_not_manual
     @pytest.mark.asyncio
     async def test_update_existing_memories_with_real_llm(self):
         """Test updating existing cards and events with real LLM (only VikingFS is mocked)."""

@@ -69,6 +69,18 @@ class TestMkdir:
         assert call_path.endswith("resources/new_dir")
 
     @pytest.mark.asyncio
+    async def test_mkdir_exist_ok_reraises_non_not_found_stat_errors(self):
+        """mkdir(exist_ok=True) should not hide permission or backend errors."""
+        fs = _make_viking_fs()
+        fs._ensure_parent_dirs = AsyncMock()
+        fs.stat = AsyncMock(side_effect=PermissionError("permission denied"))
+
+        with pytest.raises(PermissionError, match="permission denied"):
+            await fs.mkdir("viking://resources/blocked", exist_ok=True)
+
+        fs.agfs.mkdir.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_mkdir_exist_ok_false_default(self):
         """mkdir(exist_ok=False) should always attempt to create."""
         fs = _make_viking_fs()

@@ -8,6 +8,8 @@ Run: pytest tests/integration/test_gemini_e2e.py -v -m integration
 
 import pytest
 
+pytest.importorskip("google.genai", reason="google-genai not installed")
+
 from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 from tests.integration.conftest import GOOGLE_API_KEY, l2_norm, requires_api_key
 
@@ -15,7 +17,7 @@ pytestmark = [pytest.mark.integration, requires_api_key]
 
 
 def _cosine_similarity(a: list, b: list) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = l2_norm(a)
     norm_b = l2_norm(b)
     return dot / (norm_a * norm_b) if norm_a and norm_b else 0.0
@@ -56,7 +58,7 @@ class TestGeminiE2ETextEmbedding:
         batch_results = embedder.embed_batch(texts)
         individual_results = [embedder.embed(t) for t in texts]
         assert len(batch_results) == 3
-        for br, ir in zip(batch_results, individual_results):
+        for br, ir in zip(batch_results, individual_results, strict=True):
             sim = _cosine_similarity(br.dense_vector, ir.dense_vector)
             assert sim > 0.99, f"Batch vs individual similarity {sim} too low"
 

@@ -193,6 +193,12 @@ class ShardedInflightCounter:
                 result.update(self._shards[i])
         return result
 
+    def clear(self) -> None:
+        """Clear all inflight counts."""
+        for i in range(self._num_shards):
+            with self._locks[i]:
+                self._shards[i].clear()
+
 
 # Global sharded inflight counter instance
 # Using 16 shards provides good balance between memory and contention reduction

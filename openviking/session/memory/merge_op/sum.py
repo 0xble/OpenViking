@@ -31,9 +31,14 @@ class SumOp(MergeOpBase):
             return current_value
         if current_value is None:
             return patch_value
+        should_use_float = isinstance(current_value, float) or isinstance(patch_value, float)
+        number_type = float if should_use_float else int
         try:
-            if isinstance(current_value, float) or isinstance(patch_value, float):
-                return float(current_value) + float(patch_value)
-            return int(current_value) + int(patch_value)
+            current_number = number_type(current_value)
         except (ValueError, TypeError):
-            return current_value
+            return patch_value
+        try:
+            patch_number = number_type(patch_value)
+        except (ValueError, TypeError):
+            return current_number
+        return current_number + patch_number

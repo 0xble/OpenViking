@@ -231,6 +231,11 @@ async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_parent_path=d
 
 **Exception handling**: `__aexit__` always releases locks and does not swallow exceptions. Lock acquisition failure raises `LockAcquisitionError`.
 
+When acquiring a POINT or SUBTREE lock, `PathLock` ensures the target lock
+directory exists first. This supports first-write flows such as memory
+extraction creating a new memory directory while still acquiring a fencing
+token before writing.
+
 ## Lock Types (POINT vs SUBTREE)
 
 The lock mechanism uses two lock types to handle different conflict patterns:

@@ -68,7 +68,7 @@ def _write_ovpack(path: Path, entries: dict[str, str]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_import_ovpack_rejects_derived_semantic_files(
+async def test_import_ovpack_allows_exported_derived_semantic_files(
     temp_ovpack_path: Path, request_ctx: RequestContext
 ):
     _write_ovpack(
@@ -80,9 +80,31 @@ async def test_import_ovpack_rejects_derived_semantic_files(
     )
     fake_fs = FakeVikingFS()
 
+    await import_ovpack(
+        fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx, vectorize=False
+    )
+
+    assert fake_fs.written_files == [
+        "viking://resources/demo/.overview.md",
+        "viking://resources/demo/notes.txt",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_import_ovpack_rejects_watch_task_control_root(
+    temp_ovpack_path: Path, request_ctx: RequestContext
+):
+    _write_ovpack(
+        temp_ovpack_path,
+        {
+            ".watch_tasks.json": "{}",
+        },
+    )
+    fake_fs = FakeVikingFS()
+
     with pytest.raises(
         InvalidArgumentError,
-        match=r"cannot import derived semantic file: viking://resources/demo/\.overview\.md",
+        match=r"cannot import watch task control file: viking://resources/\.watch_tasks\.json",
     ):
         await import_ovpack(
             fake_fs, str(temp_ovpack_path), "viking://resources", request_ctx, vectorize=False

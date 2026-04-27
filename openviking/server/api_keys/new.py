@@ -13,6 +13,7 @@ from typing import Optional, Tuple
 
 from openviking.server.api_keys.legacy import (
     LegacyAPIKeyManager,
+    _reject_default_namespace,
 )
 from openviking.server.api_keys.models import AccountInfo, UserKeyEntry
 from openviking.server.identity import AccountNamespacePolicy, ResolvedIdentity, Role
@@ -167,6 +168,8 @@ class NewAPIKeyManager:
 
         Returns the admin user's API key in new format.
         """
+        _reject_default_namespace(account_id, admin_user_id)
+
         # Validate account_id and user_id format
         verr = validate_account_id(account_id)
         if verr:
@@ -241,6 +244,8 @@ class NewAPIKeyManager:
 
     async def register_user(self, account_id: str, user_id: str, role: str = "user") -> str:
         """Register a new user in an account. Returns the user's API key in new format."""
+        _reject_default_namespace(account_id, user_id)
+
         # Validate user_id format
         verr = validate_user_id(user_id)
         if verr:

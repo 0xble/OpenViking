@@ -23,7 +23,7 @@ import contextvars
 import logging
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Optional
 
 from openviking.telemetry.span_models import OperationSpanAttributes, RootSpanAttributes
@@ -210,6 +210,10 @@ class ObservabilityContext:
         self.extra[key] = value
         return self
 
+    def copy(self) -> "ObservabilityContext":
+        """Return a shallow context copy with independent extra fields."""
+        return replace(self, extra=dict(self.extra))
+
 
 # Global context variable
 _OBSERVABILITY_CONTEXT: contextvars.ContextVar[Optional[ObservabilityContext]] = (
@@ -269,7 +273,7 @@ def bind_root_context(root_attrs: RootSpanAttributes) -> contextvars.Token:
     Returns:
         A token that can be used to reset the context.
     """
-    ctx = get_observability_context()
+    ctx = get_observability_context().copy()
     ctx.bind_root(root_attrs)
     return set_observability_context(ctx)
 
@@ -284,7 +288,7 @@ def bind_operation_context(operation_attrs: OperationSpanAttributes) -> contextv
     Returns:
         A token that can be used to reset the context.
     """
-    ctx = get_observability_context()
+    ctx = get_observability_context().copy()
     ctx.bind_operation(operation_attrs)
     return set_observability_context(ctx)
 

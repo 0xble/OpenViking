@@ -80,23 +80,11 @@ def create_app(
 
         assert service is not None
         set_service(service)
-        app.state.default_user = service.user
+        app.state.default_user = getattr(service, "user", None)
 
         # Initialize APIKeyManager after service (needs VikingFS)
         effective_auth_mode = config.get_effective_auth_mode()
-        if config.root_api_key and config.root_api_key != "":
-            api_key_manager = APIKeyManager(
-                root_key=config.root_api_key,
-                viking_fs=service.viking_fs,
-                encryption_enabled=config.encryption_enabled,
-            )
-            await api_key_manager.load()
-            app.state.api_key_manager = api_key_manager
-            logger.info(
-                "APIKeyManager initialized with encryption_enabled=%s",
-                config.encryption_enabled,
-            )
-        elif effective_auth_mode == AuthMode.TRUSTED:
+        if effective_auth_mode == AuthMode.TRUSTED:
             app.state.api_key_manager = None
             if config.root_api_key and config.root_api_key != "":
                 logger.warning(
@@ -112,6 +100,18 @@ def create_app(
                     "Only expose this server behind a trusted network boundary or "
                     "identity-injecting gateway after configuring server.root_api_key."
                 )
+        elif config.root_api_key and config.root_api_key != "":
+            api_key_manager = APIKeyManager(
+                root_key=config.root_api_key,
+                viking_fs=service.viking_fs,
+                encryption_enabled=config.encryption_enabled,
+            )
+            await api_key_manager.load()
+            app.state.api_key_manager = api_key_manager
+            logger.info(
+                "APIKeyManager initialized with encryption_enabled=%s",
+                config.encryption_enabled,
+            )
         else:
             # AuthMode.DEV - logging already handled in validate_server_config
             app.state.api_key_manager = None
@@ -159,7 +159,7 @@ def create_app(
 
     app.state.config = config
     if service is not None:
-        app.state.default_user = service.user
+        app.state.default_user = getattr(service, "user", None)
 
     # Add CORS middleware
     app.add_middleware(

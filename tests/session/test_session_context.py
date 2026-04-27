@@ -405,10 +405,10 @@ class TestGetSessionContext:
         assert context["stats"]["activeTokens"] == session.messages[0].estimated_tokens
         assert context["stats"]["activeTokens"] > _estimate_tokens("Executing tool...")
 
-    async def test_get_session_context_reads_latest_overview_and_all_archive_abstracts(
+    async def test_get_session_context_reads_latest_overview_and_drops_old_archive_abstracts(
         self, client: AsyncOpenViking, monkeypatch
     ):
-        """Overview is only read for the latest archive; abstracts are returned for all archives."""
+        """Overview is read only for the latest archive; older abstracts are dropped."""
         session = client.session(session_id="assemble_lazy_read_test")
         summaries = [
             "# Summary\n\n" + ("A" * 80),
@@ -431,13 +431,8 @@ class TestGetSessionContext:
         session.add_message("user", [TextPart("active tail")])
 
         newest_summary = "# Summary\n\n" + ("C" * 80)
-        previous_abstract = "# Summary"
         active_tokens = sum(m.estimated_tokens for m in session.messages)
-        token_budget = (
-            active_tokens
-            + _estimate_tokens(newest_summary)
-            + (_estimate_tokens(previous_abstract) * 2)
-        )
+        token_budget = active_tokens + _estimate_tokens(newest_summary)
 
         original_read_file = session._viking_fs.read_file
         read_uris: list[str] = []
@@ -452,13 +447,9 @@ class TestGetSessionContext:
         context = await session.get_session_context(token_budget=token_budget)
 
         assert context["latest_archive_overview"] == newest_summary
-        assert context["pre_archive_abstracts"] == [
-            {"archive_id": "archive_003", "abstract": "# Summary"},
-            {"archive_id": "archive_002", "abstract": "# Summary"},
-            {"archive_id": "archive_001", "abstract": "# Summary"},
-        ]
-        assert context["stats"]["includedArchives"] == 3
-        assert context["stats"]["droppedArchives"] == 0
+        assert context["pre_archive_abstracts"] == []
+        assert context["stats"]["includedArchives"] == 0
+        assert context["stats"]["droppedArchives"] == 3
 
         overview_reads = [u for u in read_uris if u.endswith(".overview.md")]
         abstract_reads = [u for u in read_uris if u.endswith(".abstract.md")]
@@ -467,12 +458,12 @@ class TestGetSessionContext:
         )
         assert all(
             "archive_003" in u or "archive_002" in u or "archive_001" in u for u in abstract_reads
-        ), f"Archive abstracts should be read for every returned archive, got: {abstract_reads}"
+        ), f"Archive abstracts should be read for candidate archives, got: {abstract_reads}"
         assert not any("archive_001/.overview.md" in u for u in overview_reads), (
             "Oldest archive overview should not be read"
         )
 
-    async def test_get_session_context_drops_oldest_pre_archive_abstracts_first(
+    async def test_get_session_context_drops_all_pre_archive_abstracts(
         self, client: AsyncOpenViking, monkeypatch
     ):
         session = client.session(session_id="assemble_trim_oldest_abstracts_test")
@@ -506,13 +497,11 @@ class TestGetSessionContext:
         context = await session.get_session_context(token_budget=token_budget)
 
         assert context["latest_archive_overview"] == newest_summary
-        assert context["pre_archive_abstracts"] == [
-            {"archive_id": "archive_003", "abstract": "# Summary"}
-        ]
-        assert context["estimatedTokens"] == token_budget
+        assert context["pre_archive_abstracts"] == []
+        assert context["estimatedTokens"] <= token_budget
         assert context["stats"]["totalArchives"] == 3
-        assert context["stats"]["includedArchives"] == 1
-        assert context["stats"]["droppedArchives"] == 2
+        assert context["stats"]["includedArchives"] == 0
+        assert context["stats"]["droppedArchives"] == 3
 
     async def test_get_session_context_falls_back_to_older_completed_archive(
         self, client: AsyncOpenViking, monkeypatch
@@ -550,12 +539,10 @@ class TestGetSessionContext:
         context = await session.get_session_context(token_budget=128_000)
 
         assert context["latest_archive_overview"] == "# Session Summary\n\narchive one"
-        assert context["pre_archive_abstracts"] == [
-            {"archive_id": "archive_001", "abstract": "# Session Summary"}
-        ]
+        assert context["pre_archive_abstracts"] == []
         assert context["stats"]["totalArchives"] == 2
-        assert context["stats"]["includedArchives"] == 1
-        assert context["stats"]["droppedArchives"] == 0
+        assert context["stats"]["includedArchives"] == 0
+        assert context["stats"]["droppedArchives"] == 1
         assert context["stats"]["failedArchives"] == 1
 
     async def test_get_session_context_budget_trim_drops_latest_archive_abstract(

@@ -58,10 +58,13 @@ def resolve_with_override(config, detect_with_fallback: Callable[[str], str]) ->
     """
     if config is None:
         config = get_openviking_config()
-    override = (getattr(config, "output_language_override", None) or "").strip()
+    raw_override = getattr(config, "output_language_override", None)
+    override = raw_override.strip() if isinstance(raw_override, str) else ""
     if override:
         return override
-    fallback = (getattr(config, "language_fallback", None) or "en").strip() or "en"
+    raw_fallback = getattr(config, "language_fallback", None)
+    fallback = raw_fallback.strip() if isinstance(raw_fallback, str) else "en"
+    fallback = fallback or "en"
     return detect_with_fallback(fallback)
 
 

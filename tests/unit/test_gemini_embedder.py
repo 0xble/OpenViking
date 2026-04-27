@@ -229,9 +229,13 @@ class TestGeminiDenseEmbedderBatch:
             _make_mock_result([[0.2]]),
         ]
         embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
-        results = embedder.embed_batch(["a", "b"])
+        results = embedder.embed_batch(["a", "b"], task_type="CLUSTERING")
         assert len(results) == 2
         assert mock_client.models.embed_content.call_count == 3
+        fallback_configs = [
+            call.kwargs["config"] for call in mock_client.models.embed_content.call_args_list[1:]
+        ]
+        assert [config.task_type for config in fallback_configs] == ["CLUSTERING", "CLUSTERING"]
 
 
 class TestGeminiDenseEmbedderAsyncBatch:
@@ -307,17 +311,6 @@ class TestGeminiDenseEmbedderAsyncBatch:
 
         embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
         assert await embedder.async_embed_batch([]) == []
-
-    @patch("openviking.models.embedder.gemini_embedders._ANYIO_AVAILABLE", False)
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    @pytest.mark.anyio
-    async def test_async_embed_batch_raises_without_anyio(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
-        with pytest.raises(ImportError, match="anyio is required"):
-            await embedder.async_embed_batch(["text"])
-
 
 class TestGeminiValidation:
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")

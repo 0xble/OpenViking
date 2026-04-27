@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from openviking.server.auth import get_request_context
 from openviking.server.routers.stats import router
 
 
@@ -46,9 +47,10 @@ def client(mock_service, mock_ctx):
 
     with (
         patch("openviking.server.routers.stats.get_service", return_value=mock_service),
-        patch("openviking.server.routers.stats.get_request_context", return_value=mock_ctx),
     ):
+        app.dependency_overrides[get_request_context] = lambda: mock_ctx
         yield TestClient(app)
+        app.dependency_overrides.clear()
 
 
 class TestGetMemoryStats:

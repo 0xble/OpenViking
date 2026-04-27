@@ -198,9 +198,11 @@ class TestApiKeyValidationFix:
         assert embedder is not None
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
-    def test_api_key_required_when_no_api_base(self, mock_openai_class):
+    def test_api_key_required_when_no_api_base(self, mock_openai_class, monkeypatch):
         """ValueError must be raised when neither api_key nor api_base is provided."""
         mock_openai_class.return_value = _make_mock_client()
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENVIKING_EMBEDDING_API_KEY", raising=False)
 
         with pytest.raises(ValueError, match="api_key is required"):
             OpenAIDenseEmbedder(model_name="text-embedding-3-small")

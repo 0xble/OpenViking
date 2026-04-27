@@ -38,7 +38,8 @@ def test_vlm_config_accepts_env_backed_openai_api_key(monkeypatch):
 
     assert config._get_effective_api_key() == "test-openai-key"
     assert provider_name == "openai"
-    assert provider_config == {"api_key": "test-openai-key"}
+    assert provider_config["api_key"] == "test-openai-key"
+    assert provider_config["stream"] is False
 
 
 def test_openviking_config_accepts_sources_section(monkeypatch):

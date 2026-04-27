@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from openviking import AsyncOpenViking
 from openviking.client import LocalClient
 from openviking.server.identity import RequestContext, Role
@@ -217,11 +219,25 @@ class TestWatchIntervalParameter:
     async def test_watch_interval_positive_value(
         self, client: AsyncOpenViking, sample_markdown_file: Path
     ):
-        """Test that positive watch_interval value is accepted"""
+        """Test that positive watch_interval value is accepted with a target URI."""
         result = await client.add_resource(
             path=str(sample_markdown_file),
             reason="Test",
+            to="viking://resources/watched-sample.md",
             watch_interval=2.5,
         )
 
         assert "root_uri" in result
+
+    async def test_watch_interval_positive_value_requires_target_uri(
+        self, client: AsyncOpenViking, sample_markdown_file: Path
+    ):
+        """Test that watch_interval > 0 requires a stable target URI."""
+        from openviking_cli.exceptions import InvalidArgumentError
+
+        with pytest.raises(InvalidArgumentError, match="requires 'to'"):
+            await client.add_resource(
+                path=str(sample_markdown_file),
+                reason="Test",
+                watch_interval=2.5,
+            )

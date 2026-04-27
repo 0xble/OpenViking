@@ -19,6 +19,9 @@ _LOCAL_HOSTNAMES = {
     "localhost",
     "localhost.localdomain",
 }
+_DNS_INTERCEPT_NETWORKS = (
+    ipaddress.ip_network("198.18.0.0/15"),
+)
 
 
 def _get_allowed_code_hosting_domains() -> set[str]:
@@ -93,13 +96,28 @@ def _resolve_host_addresses(host: str) -> set[str]:
         return set()
 
     addresses: set[str] = set()
+    saw_intercept_address = False
+    saw_valid_address = False
     for family, _, _, _, sockaddr in infos:
         if family not in {socket.AF_INET, socket.AF_INET6}:
             continue
         addr = sockaddr[0]
         if "%" in addr:
             addr = addr.split("%", 1)[0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        saw_valid_address = True
+        if any(ip in network for network in _DNS_INTERCEPT_NETWORKS):
+            saw_intercept_address = True
+            continue
         addresses.add(addr)
+    if saw_valid_address and saw_intercept_address and not addresses:
+        raise PermissionDeniedError(
+            "HTTP server only accepts public remote resource targets; "
+            f"host '{host}' resolves only to DNS interception addresses."
+        )
     return addresses
 
 

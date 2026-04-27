@@ -919,7 +919,8 @@ class SemanticProcessor(DequeueHandlerBase):
     ) -> Dict[str, str]:
         """Generate summary for a single text file (code, documentation, or other text)."""
         viking_fs = get_viking_fs()
-        vlm = get_openviking_config().vlm
+        config = get_openviking_config()
+        vlm = config.vlm
         active_ctx = ctx or self._current_ctx
 
         content = await viking_fs.read_file(file_path, ctx=active_ctx)
@@ -932,7 +933,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 return {"name": file_name, "summary": ""}
 
         # Limit content length
-        max_chars = get_openviking_config().semantic.max_file_content_chars
+        max_chars = config.semantic.max_file_content_chars
         if len(content) > max_chars:
             content = content[:max_chars] + "\n...(truncated)"
 
@@ -943,13 +944,13 @@ class SemanticProcessor(DequeueHandlerBase):
 
         from openviking.session.memory.utils.language import resolve_output_language
 
-        output_language = resolve_output_language(content)
+        output_language = resolve_output_language(content, config=config)
 
         # Detect file type and select appropriate prompt
         file_type = self._detect_file_type(file_name)
 
         if file_type == FILE_TYPE_CODE:
-            code_mode = get_openviking_config().code.code_summary_mode
+            code_mode = config.code.code_summary_mode
 
             if code_mode in ("ast", "ast_llm") and len(content.splitlines()) >= 100:
                 from openviking.parse.parsers.code.ast import extract_skeleton
@@ -957,7 +958,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 verbose = code_mode == "ast_llm"
                 skeleton_text = extract_skeleton(file_name, content, verbose=verbose)
                 if skeleton_text:
-                    max_skeleton_chars = get_openviking_config().semantic.max_skeleton_chars
+                    max_skeleton_chars = config.semantic.max_skeleton_chars
                     if len(skeleton_text) > max_skeleton_chars:
                         skeleton_text = skeleton_text[:max_skeleton_chars]
                     if code_mode == "ast":

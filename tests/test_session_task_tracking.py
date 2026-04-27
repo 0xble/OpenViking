@@ -15,19 +15,32 @@ from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
+from openviking_cli.session.user_id import UserIdentifier
+
+TENANT_HEADERS = {
+    "X-OpenViking-Account": "test_account",
+    "X-OpenViking-User": "test_user",
+}
 
 
 @pytest_asyncio.fixture
 async def api_client(temp_dir) -> AsyncGenerator[Tuple[httpx.AsyncClient, OpenVikingService], None]:
     """Create in-process HTTP client for API endpoint tests."""
     reset_task_tracker()
-    service = OpenVikingService(path=str(temp_dir / "api_data"))
+    service = OpenVikingService(
+        path=str(temp_dir / "api_data"),
+        user=UserIdentifier("test_account", "test_user", "default"),
+    )
     await service.initialize()
     app = create_app(config=ServerConfig(), service=service)
     set_service(service)
 
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=TENANT_HEADERS,
+    ) as client:
         yield client, service
 
     await service.close()
@@ -205,18 +218,31 @@ async def test_task_failed_when_memory_extraction_raises(api_client):
     client, service = api_client
     session_id = await _new_session_with_message(client)
 
-    async def failing_extract(_context, _user, _session_id):
+    async def failing_extract(*_args, **_kwargs):
         raise RuntimeError("memory_extraction_failed: synthetic extractor error")
 
-    service.sessions._session_compressor.extractor.extract = failing_extract
+    service.sessions._session_compressor.extract_long_term_memories = failing_extract
 
     resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     task_id = resp.json()["result"]["task_id"]
 
-    result = None
+    commit_result = None
     for _ in range(120):
         await asyncio.sleep(0.1)
         task_resp = await client.get(f"/api/v1/tasks/{task_id}")
+        assert task_resp.status_code == 200
+        commit_result = task_resp.json()["result"]
+        if commit_result["status"] in {"completed", "failed"}:
+            break
+
+    assert commit_result is not None
+    assert commit_result["status"] == "completed"
+    memory_task_id = commit_result["result"]["memory_task_id"]
+
+    result = None
+    for _ in range(120):
+        await asyncio.sleep(0.1)
+        task_resp = await client.get(f"/api/v1/tasks/{memory_task_id}")
         assert task_resp.status_code == 200
         result = task_resp.json()["result"]
         if result["status"] in {"completed", "failed"}:

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import socket
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -17,7 +18,6 @@ from openviking.utils.network_guard import (
     extract_remote_host,
 )
 from openviking_cli.exceptions import PermissionDeniedError
-
 
 # ── extract_remote_host ──────────────────────────────────────────────────────
 
@@ -130,7 +130,9 @@ class TestIsPublicIP:
 class TestResolveHostAddresses:
     """Verify DNS resolution wrapper behavior."""
 
-    def test_returns_empty_set_for_unresolvable_host(self) -> None:
+    @patch("openviking.utils.network_guard.socket.getaddrinfo")
+    def test_returns_empty_set_for_unresolvable_host(self, mock_getaddrinfo) -> None:
+        mock_getaddrinfo.side_effect = socket.gaierror()
         result = _resolve_host_addresses("this.host.definitely.does.not.exist.invalid")
         assert result == set()
 
@@ -141,8 +143,6 @@ class TestResolveHostAddresses:
 
     @patch("openviking.utils.network_guard.socket.getaddrinfo")
     def test_strips_ipv6_scope_id(self, mock_getaddrinfo) -> None:
-        import socket
-
         mock_getaddrinfo.return_value = [
             (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("fe80::1%eth0", 0, 0, 0)),
         ]
@@ -157,6 +157,25 @@ class TestResolveHostAddresses:
         ]
         result = _resolve_host_addresses("some-host")
         assert result == set()
+
+    @patch("openviking.utils.network_guard.socket.getaddrinfo")
+    def test_rejects_dns_intercept_only_answers(self, mock_getaddrinfo) -> None:
+        mock_getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("198.18.0.1", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("198.19.255.254", 0)),
+        ]
+        with pytest.raises(PermissionDeniedError, match="DNS interception"):
+            _resolve_host_addresses("intercepted.example")
+
+    @patch("openviking.utils.network_guard.socket.getaddrinfo")
+    def test_ignores_dns_intercept_addresses_when_public_answer_exists(
+        self, mock_getaddrinfo
+    ) -> None:
+        mock_getaddrinfo.return_value = [
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("198.18.0.1", 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("8.8.8.8", 0)),
+        ]
+        assert _resolve_host_addresses("mixed.example") == {"8.8.8.8"}
 
 
 # ── ensure_public_remote_target ──────────────────────────────────────────────

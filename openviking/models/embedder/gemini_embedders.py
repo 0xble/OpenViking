@@ -348,7 +348,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                     len(batch),
                 )
                 for text in batch:
-                    results.append(self.embed(text, is_query=is_query))
+                    results.append(self.embed(text, is_query=is_query, task_type=task_type))
         # Token usage is already tracked via individual embed() calls
         # No need to track here to avoid double counting
         return results
@@ -424,9 +424,10 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                         len(batch),
                     )
                     for j in non_empty_indices:
-                        batch_results[j] = await self.embed_async(
+                        batch_results[j] = await asyncio.to_thread(
+                            self.embed,
                             batch[j],
-                            is_query=is_query,
+                            is_query,
                             task_type=task_type,
                         )
 

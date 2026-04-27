@@ -171,7 +171,17 @@ def temp_dir():
     """Create temp directory for the whole test session."""
     shutil.rmtree(TEST_TMP_DIR, ignore_errors=True)
     TEST_TMP_DIR.mkdir(parents=True, exist_ok=True)
-    yield TEST_TMP_DIR
+    old_cli_config = os.environ.get("OPENVIKING_CLI_CONFIG_FILE")
+    isolated_cli_config = TEST_TMP_DIR / "ovcli.conf"
+    isolated_cli_config.write_text("{}", encoding="utf-8")
+    os.environ["OPENVIKING_CLI_CONFIG_FILE"] = str(isolated_cli_config)
+    try:
+        yield TEST_TMP_DIR
+    finally:
+        if old_cli_config is None:
+            os.environ.pop("OPENVIKING_CLI_CONFIG_FILE", None)
+        else:
+            os.environ["OPENVIKING_CLI_CONFIG_FILE"] = old_cli_config
 
 
 @pytest.fixture(scope="session")
@@ -186,7 +196,7 @@ def server_url(temp_dir):
     loop = asyncio.new_event_loop()
 
     svc = OpenVikingService(
-        path=str(temp_dir / "data"), user=UserIdentifier.the_default_user("test_user")
+        path=str(temp_dir / "data"), user=UserIdentifier("test_account", "test_user", "default")
     )
     loop.run_until_complete(svc.initialize())
 

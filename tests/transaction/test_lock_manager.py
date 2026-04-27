@@ -94,9 +94,11 @@ class TestLockManagerBasic:
 
     async def test_release_removes_from_active(self, lm, test_dir):
         handle = lm.create_handle()
-        assert handle.id in lm.get_active_handles()
+        assert handle.id not in lm.get_active_handles()
 
         await lm.acquire_point(handle, test_dir)
+        assert handle.id in lm.get_active_handles()
+
         await lm.release(handle)
 
         assert handle.id not in lm.get_active_handles()
@@ -113,10 +115,50 @@ class TestLockManagerBasic:
         await lm.stop()
         assert len(lm.get_active_handles()) == 0
 
-    async def test_nonexistent_path_fails(self, lm):
+    async def test_stop_does_not_await_redo_task_from_different_loop(self, lm):
+        class OtherLoopTask:
+            def __init__(self, loop):
+                self._loop = loop
+                self.cancelled = False
+
+            def cancel(self):
+                self.cancelled = True
+
+            def get_loop(self):
+                return self._loop
+
+            def __await__(self):
+                raise AssertionError("cross-loop task must not be awaited")
+                yield
+
+        other_loop = asyncio.new_event_loop()
+        task = OtherLoopTask(other_loop)
+        lm._redo_task = task
+
+        try:
+            await lm.stop()
+            assert lm._redo_task is None
+            assert task.cancelled is False
+        finally:
+            other_loop.close()
+
+    async def test_cancel_background_task_swallows_completed_task_exception(self, lm):
+        async def boom():
+            raise RuntimeError("already failed")
+
+        task = asyncio.create_task(boom())
+        await asyncio.sleep(0)
+
+        await lm._cancel_background_task(task)
+
+    async def test_acquire_point_creates_missing_path(self, agfs_client, lm, test_dir):
+        path = f"{test_dir}/created-by-lock"
         handle = lm.create_handle()
-        ok = await lm.acquire_point(handle, "/local/nonexistent-xyz")
-        assert ok is False
+        ok = await lm.acquire_point(handle, path)
+        assert ok is True
+        assert agfs_client.stat(path) is not None
+
+        await lm.release(handle)
 
     async def test_recover_pending_redo_preserves_cancelled_error(self, lm):
         lm._redo_log = MagicMock()

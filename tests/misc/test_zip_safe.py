@@ -19,7 +19,6 @@ from openviking.utils.zip_safe import (
     safe_extract_zip,
 )
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -98,6 +97,9 @@ class TestContainsCommonMojibake:
     def test_rejects_ascii_only(self) -> None:
         assert _contains_common_mojibake("normal.txt") is False
 
+    def test_rejects_valid_latin1_letters(self) -> None:
+        assert _contains_common_mojibake("café-niño.txt") is False
+
     def test_rejects_cjk_chars(self) -> None:
         assert _contains_common_mojibake("文件.txt") is False
 
@@ -145,9 +147,6 @@ class TestNormalizeZipFilenames:
             info = zipfile.ZipInfo(cjk_name)
             info.flag_bits = 0  # no UTF-8 flag
             zf.writestr(info, "content")
-        # Manually patch the raw zip to remove UTF-8 flag
-        # (Python's ZipFile may set it automatically for non-ASCII)
-        raw = buf.getvalue()
         # The flag_bits field is at offset 6 in the local file header
         # This is complex; instead test the logic paths individually
         # by directly calling with a pre-mangled ZipInfo

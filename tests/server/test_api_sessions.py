@@ -280,7 +280,7 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     assert commit_resp.status_code == 200
 
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
     session = service.sessions.session(ctx, session_id)
     await session.load()
     pending_messages = [
@@ -514,7 +514,7 @@ async def test_add_message_persistence_regression(client: httpx.AsyncClient, ser
     assert get_resp.json()["result"]["message_count"] == 2
 
     # Verify stored message content survives load/decode.
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
     session = service.sessions.session(ctx, session_id)
     await session.load()
     assert len(session.messages) == 2
@@ -546,7 +546,7 @@ async def test_get_session_pending_tokens_counts_tool_only_messages(
     )
     assert resp.status_code == 200
 
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
     session = service.sessions.session(ctx, session_id)
     await session.load()
     expected_tokens = session.messages[0].estimated_tokens

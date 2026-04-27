@@ -18,10 +18,19 @@ from openviking import AsyncOpenViking
 from openviking.crypto.config import bootstrap_encryption
 from openviking.crypto.encryptor import FileEncryptor
 from openviking.crypto.providers import LocalFileProvider
-from openviking.server.api_keys import APIKeyManager
+from openviking.server.api_keys import APIKeyManager, is_new_format_key, parse_api_key
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
+
+def _assert_new_api_key_identity(api_key: str, account_id: str, user_id: str) -> None:
+    assert api_key is not None
+    assert is_new_format_key(api_key)
+    parsed_account_id, parsed_user_id, secret = parse_api_key(api_key)
+    assert parsed_account_id == account_id
+    assert parsed_user_id == user_id
+    assert secret
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -371,8 +380,7 @@ class TestVikingFSEncryptionWithAccounts:
         user_key = await api_key_manager.create_account(account_id, admin_user_id)
 
         # Verify account created successfully
-        assert user_key is not None
-        assert len(user_key) == 64
+        _assert_new_api_key_identity(user_key, account_id, admin_user_id)
 
         # RAGFS /local/... paths map to test_data_dir/viking/viking/...
         # because OpenVikingService path is test_data_dir/viking,
@@ -417,8 +425,7 @@ class TestVikingFSEncryptionWithAccounts:
         new_user_key = await api_key_manager.register_user(account_id, new_user_id, "user")
 
         # Verify user registered successfully
-        assert new_user_key is not None
-        assert len(new_user_key) == 64
+        _assert_new_api_key_identity(new_user_key, account_id, new_user_id)
 
         # AGFS /local/... paths map to test_data_dir/viking/viking/...
         agfs_data_root = test_data_dir / "viking" / "viking"
@@ -621,8 +628,7 @@ This is a test skill for verifying encryption functionality.
         print(f"[1] Create test account: {test_account_id}")
 
         admin_user_key = await api_key_manager.create_account(test_account_id, test_admin_user_id)
-        assert admin_user_key is not None
-        assert len(admin_user_key) == 64
+        _assert_new_api_key_identity(admin_user_key, test_account_id, test_admin_user_id)
 
         # 2. Verify list-accounts operation (via accessing APIKeyManager internal data)
         print("[2] Verify list-accounts operation")
@@ -635,8 +641,7 @@ This is a test skill for verifying encryption functionality.
         test_user_id = f"encrypt-test-user-{random_suffix}"
         print(f"[3] Register test user: {test_user_id}")
         test_user_key = await api_key_manager.register_user(test_account_id, test_user_id, "user")
-        assert test_user_key is not None
-        assert len(test_user_key) == 64
+        _assert_new_api_key_identity(test_user_key, test_account_id, test_user_id)
 
         # 4. Verify list-users operation
         print("[4] Verify list-users operation")
@@ -1281,13 +1286,11 @@ class TestAddResourceWithSemanticProcessing:
 
         print(f"[1] Create test account: {test_account_id}")
         admin_user_key = await api_key_manager.create_account(test_account_id, test_admin_user_id)
-        assert admin_user_key is not None
-        assert len(admin_user_key) == 64
+        _assert_new_api_key_identity(admin_user_key, test_account_id, test_admin_user_id)
 
         print(f"[2] Register test user: {test_user_id}")
         test_user_key = await api_key_manager.register_user(test_account_id, test_user_id, "user")
-        assert test_user_key is not None
-        assert len(test_user_key) == 64
+        _assert_new_api_key_identity(test_user_key, test_account_id, test_user_id)
 
         from openviking.server.identity import RequestContext, Role
         from openviking_cli.session.user_id import UserIdentifier

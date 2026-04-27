@@ -89,7 +89,7 @@ async def test_invalid_uri_format(client: httpx.AsyncClient):
     assert resp.status_code == 200
 
 
-async def test_export_nonexistent_uri(client: httpx.AsyncClient):
+async def test_export_nonexistent_uri(root_client: httpx.AsyncClient):
     """Exporting a non-existent URI triggers unhandled AGFSClientError.
 
     BUG: The server should catch AGFSClientError and return a structured error,
@@ -97,7 +97,7 @@ async def test_export_nonexistent_uri(client: httpx.AsyncClient):
     """
     # Just verify the export endpoint is reachable with valid params
     # (actual export of nonexistent URI is a known unhandled error)
-    resp = await client.post(
+    resp = await root_client.post(
         "/api/v1/pack/export",
         json={"uri": "viking://", "to": "/tmp/test_export.ovpack"},
     )

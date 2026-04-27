@@ -29,10 +29,11 @@ async def get_watch_task(client: AsyncOpenViking, to_uri: str):
 
 
 @pytest_asyncio.fixture(scope="function")
-async def e2e_client(test_data_dir: Path):
+async def e2e_client(tmp_path: Path):
     """End-to-end test client with watch support."""
     await AsyncOpenViking.reset()
 
+    test_data_dir = tmp_path / "watch_data"
     shutil.rmtree(test_data_dir, ignore_errors=True)
     test_data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -46,9 +47,9 @@ async def e2e_client(test_data_dir: Path):
 
 
 @pytest_asyncio.fixture(scope="function")
-async def watch_test_file(temp_dir: Path) -> Path:
+async def watch_test_file(tmp_path: Path) -> Path:
     """Create a test file for watch testing."""
-    file_path = temp_dir / "watch_test.md"
+    file_path = tmp_path / "watch_test.md"
     file_path.write_text(
         """# Watch Test Document
 
@@ -384,14 +385,14 @@ class TestWatchE2EMultipleResources:
 
         intervals = [30.0, 60.0, 120.0]
 
-        for uri, interval in zip(uris, intervals):
+        for uri, interval in zip(uris, intervals, strict=True):
             await client.add_resource(
                 path=str(watch_test_file),
                 to=uri,
                 watch_interval=interval,
             )
 
-        for uri, expected_interval in zip(uris, intervals):
+        for uri, expected_interval in zip(uris, intervals, strict=True):
             task = await get_watch_task(client, uri)
             assert task is not None
             assert task.is_active is True

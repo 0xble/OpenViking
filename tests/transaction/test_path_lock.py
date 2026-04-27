@@ -167,13 +167,17 @@ class TestPathLockBehavior:
 
         await lock.release(tx)
 
-    async def test_acquire_point_dir_not_found(self, agfs_client):
+    async def test_acquire_point_creates_missing_directory(self, agfs_client, test_dir):
         lock = PathLock(agfs_client)
         tx = LockHandle(id="tx-no-dir")
+        path = f"{test_dir}/created-by-point-lock"
 
-        ok = await lock.acquire_point("/local/nonexistent-path-xyz", tx, timeout=0.5)
-        assert ok is False
-        assert len(tx.locks) == 0
+        ok = await lock.acquire_point(path, tx, timeout=0.5)
+        assert ok is True
+        assert agfs_client.stat(path) is not None
+        assert len(tx.locks) == 1
+
+        await lock.release(tx)
 
     async def test_release_removes_lock_file(self, agfs_client, test_dir):
         lock = PathLock(agfs_client)

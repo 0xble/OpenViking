@@ -13,6 +13,11 @@ class EmbeddingModelConfig(BaseModel):
     api_key: Optional[str] = Field(default=None, description="API key")
     api_base: Optional[str] = Field(default=None, description="API base URL")
     dimension: Optional[int] = Field(default=None, description="Embedding dimension")
+    max_tokens: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Maximum tokens per embedding request when supported by the provider",
+    )
     batch_size: int = Field(default=32, description="Batch size for embedding generation")
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
     query_param: Optional[str] = Field(
@@ -463,8 +468,7 @@ class EmbeddingConfig(BaseModel):
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
-                    "api_key": cfg.get_effective_api_key()
-                    or "no-key",  # Placeholder for local OpenAI-compatible servers
+                    "api_key": cfg.api_key or cfg.get_effective_api_key() or "no-key",
                     "api_base": cfg.api_base,
                     "api_version": cfg.api_version,
                     "dimension": cfg.dimension,

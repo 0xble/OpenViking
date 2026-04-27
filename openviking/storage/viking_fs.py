@@ -414,6 +414,16 @@ class VikingFS:
     ) -> None:
         """Create directory."""
         self._ensure_mutable_access(uri, ctx)
+        if exist_ok:
+            try:
+                stat_result = await self.stat(uri, ctx=ctx)
+            except Exception as exc:
+                if not is_not_found_error(exc):
+                    raise
+            else:
+                if stat_result.get("isDir") or stat_result.get("type") == "directory":
+                    return
+                raise FileExistsError(f"Path exists and is not a directory: {uri}")
         path = self._uri_to_path(uri, ctx=ctx)
         # Always ensure parent directories exist before creating this directory
         await self._ensure_parent_dirs(path)

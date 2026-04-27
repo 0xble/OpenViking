@@ -364,6 +364,37 @@ class TestVLMConfigStream:
         result = config._build_vlm_config_dict()
         assert result["stream"] is True
 
+    def test_vlm_config_false_stream_migrated_to_providers(self):
+        """VLMConfig should preserve an explicit default stream value."""
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        config = VLMConfig(
+            model="gpt-4o",
+            provider="openai",
+            api_key="sk-test",
+            stream=False,
+        )
+
+        assert config.providers["openai"]["stream"] is False
+
+    def test_vlm_config_false_stream_filled_in_provider_config(self):
+        """Provider config lookup should include stream=False when it is inherited."""
+        from openviking_cli.utils.config.vlm_config import VLMConfig
+
+        config = VLMConfig(
+            model="gpt-4o",
+            provider="openai",
+            stream=False,
+            providers={
+                "openai": {
+                    "api_key": "sk-test",
+                }
+            },
+        )
+
+        provider_config = config._get_provider_config_by_name("openai")
+        assert provider_config["stream"] is False
+
     def test_vlm_config_stream_in_providers_takes_precedence(self):
         """stream in providers config should take precedence over flat config."""
         from openviking_cli.utils.config.vlm_config import VLMConfig

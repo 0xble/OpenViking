@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
 from fastapi.responses import Response as FastAPIResponse
 
+from openviking.pyagfs.exceptions import AGFSClientError
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -190,6 +191,11 @@ async def _safe_stat(service, uri: str, ctx: RequestContext) -> Optional[dict[st
         return await service.fs.stat(uri, ctx=ctx)
     except (FileNotFoundError, NotFoundError):
         return None
+    except AGFSClientError as e:
+        message = str(e).lower()
+        if "no such file or directory" in message or "not found" in message:
+            return None
+        raise
 
 
 async def _ensure_parent_directory(

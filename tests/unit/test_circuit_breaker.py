@@ -42,10 +42,10 @@ class TestClassifyApiError:
         error = Exception("AccountOverdue error")
         assert classify_api_error(error) == "permanent"
 
-    def test_classify_429_as_transient(self):
-        """Test 429 TooManyRequests is classified as transient."""
+    def test_classify_429_as_rate_limit(self):
+        """Test 429 TooManyRequests is classified as rate_limit."""
         error = Exception("429 TooManyRequests")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == "rate_limit"
 
     def test_classify_500_as_transient(self):
         """Test 500 Internal Server Error is classified as transient."""
@@ -67,10 +67,10 @@ class TestClassifyApiError:
         error = Exception("504 Gateway Timeout")
         assert classify_api_error(error) == "transient"
 
-    def test_classify_rate_limit_as_transient(self):
-        """Test 'RateLimit' string is classified as transient."""
+    def test_classify_rate_limit_as_rate_limit(self):
+        """Test 'RateLimit' string is classified as rate_limit."""
         error = Exception("RateLimit exceeded")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == "rate_limit"
 
     def test_classify_timeout_as_transient(self):
         """Test 'timeout' string is classified as transient."""
@@ -103,11 +103,11 @@ class TestClassifyApiError:
         error.__cause__ = Exception("403 Forbidden")
         assert classify_api_error(error) == "permanent"
 
-    def test_classify_error_with_transient_cause(self):
-        """Test classification checks error cause for transient."""
+    def test_classify_error_with_rate_limit_cause(self):
+        """Test classification checks error cause for rate_limit."""
         error = Exception("Primary error")
         error.__cause__ = Exception("429 Rate limit")
-        assert classify_api_error(error) == "transient"
+        assert classify_api_error(error) == "rate_limit"
 
     def test_permanent_takes_precedence_over_transient(self):
         """Test permanent error patterns are checked first."""

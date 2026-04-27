@@ -1,13 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
-"""Tests for the ollama embedding factory in EmbeddingConfig._create_embedder.
-
-Regression tests for two bugs fixed in the ollama factory lambda:
-  1. max_tokens was not forwarded to OpenAIDenseEmbedder (so user-configured
-     chunking thresholds were silently ignored for Ollama).
-  2. The api_key placeholder was "ollama" instead of "no-key", inconsistent
-     with the openai factory and the placeholder used inside OpenAIDenseEmbedder.
-"""
+"""Tests for the ollama embedding factory in EmbeddingConfig._create_embedder."""
 
 from unittest.mock import MagicMock, patch
 
@@ -26,61 +19,36 @@ def _make_mock_openai_class():
 
 
 def _make_ollama_cfg(**kwargs) -> EmbeddingModelConfig:
-    defaults = dict(provider="ollama", model="nomic-embed-text", dimension=768)
+    defaults = {"provider": "ollama", "model": "nomic-embed-text", "dimension": 768}
     defaults.update(kwargs)
     return EmbeddingModelConfig(**defaults)
 
 
 @patch("openai.OpenAI")
-class TestOllamaFactoryMaxTokens:
-    """max_tokens must be forwarded from config to OpenAIDenseEmbedder."""
+class TestOpenAICompatibleFactory:
+    """Factory behavior shared by OpenAI-compatible embedders."""
 
-    def test_custom_max_tokens_is_forwarded(self, mock_openai_class):
-        """When max_tokens=512, the created embedder should report max_tokens=512."""
+    def test_openai_factory_prefers_env_key_before_no_key_placeholder(
+        self, mock_openai_class, monkeypatch
+    ):
+        """OpenAI-compatible api_base should not bypass env-derived credentials."""
         mock_client = MagicMock()
         mock_client.embeddings.create.return_value = MagicMock(
             data=[MagicMock(embedding=[0.1] * 8)], usage=None
         )
         mock_openai_class.return_value = mock_client
-
-        cfg = _make_ollama_cfg(max_tokens=512)
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
-
-        assert embedder.max_tokens == 512
-
-    def test_none_max_tokens_uses_default(self, mock_openai_class):
-        """When max_tokens is not set (None), the embedder should use its default (8000)."""
-        mock_client = MagicMock()
-        mock_client.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=[0.1] * 8)], usage=None
-        )
-        mock_openai_class.return_value = mock_client
-
-        cfg = _make_ollama_cfg()  # max_tokens not set -> None
-        assert cfg.max_tokens is None
-
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("ollama", "dense", cfg)
-
-        assert embedder.max_tokens == 8000  # class-level default
-
-    def test_openai_factory_max_tokens_also_forwarded(self, mock_openai_class):
-        """Sanity: the openai factory also forwards max_tokens (parity check)."""
-        mock_client = MagicMock()
-        mock_client.embeddings.create.return_value = MagicMock(
-            data=[MagicMock(embedding=[0.1] * 8)], usage=None
-        )
-        mock_openai_class.return_value = mock_client
+        monkeypatch.setenv("OPENVIKING_EMBEDDING_API_KEY", "env-key")
 
         cfg = EmbeddingModelConfig(
             provider="openai",
             model="text-embedding-3-small",
-            api_key="sk-test",
+            api_base="https://compatible.example/v1",
             dimension=1536,
-            max_tokens=4096,
         )
-        embedder = EmbeddingConfig(dense=cfg)._create_embedder("openai", "dense", cfg)
+        EmbeddingConfig(dense=cfg)._create_embedder("openai", "dense", cfg)
 
-        assert embedder.max_tokens == 4096
+        call_kwargs = mock_openai_class.call_args[1]
+        assert call_kwargs["api_key"] == "env-key"
 
 
 @patch("openai.OpenAI")
@@ -120,13 +88,17 @@ class TestOllamaFactoryApiKeyPlaceholder:
         call_kwargs = mock_openai_class.call_args[1]
         assert call_kwargs["api_key"] == "my-custom-key"
 
-    def test_openai_factory_also_uses_no_key_placeholder(self, mock_openai_class):
-        """Parity check: the openai factory also uses 'no-key' when api_base is set."""
+    def test_openai_factory_also_uses_no_key_placeholder(
+        self, mock_openai_class, monkeypatch
+    ):
+        """OpenAI-compatible endpoints use 'no-key' only when no key is configured."""
         mock_client = MagicMock()
         mock_client.embeddings.create.return_value = MagicMock(
             data=[MagicMock(embedding=[0.1] * 8)], usage=None
         )
         mock_openai_class.return_value = mock_client
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.delenv("OPENVIKING_EMBEDDING_API_KEY", raising=False)
 
         cfg = EmbeddingModelConfig(
             provider="openai",

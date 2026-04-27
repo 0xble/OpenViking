@@ -604,7 +604,11 @@ class SemanticDagExecutor:
                     )
                 abstract = self._processor._extract_abstract_from_overview(overview)
                 overview, abstract = self._processor._enforce_size_limits(overview, abstract)
-            self._processor._validate_semantic_artifacts(dir_uri, overview, abstract)
+            validate_semantic_artifacts = getattr(
+                self._processor, "_validate_semantic_artifacts", None
+            )
+            if callable(validate_semantic_artifacts):
+                validate_semantic_artifacts(dir_uri, overview, abstract)
 
             # Write directly — protected by the outer lifecycle SUBTREE lock
             try:

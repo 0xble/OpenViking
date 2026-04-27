@@ -98,23 +98,20 @@ class TestSchemaModelGenerator:
         # Check model name
         assert model.__name__ == "TestTypeData"
 
-        # Check model has the memory_type field
-        assert "memory_type" in model.model_fields
-        # memory_type is a required field with literal type
+        # memory_type is represented by the structured operations field name.
+        assert "memory_type" not in model.model_fields
 
         # Check business fields
         assert "field1" in model.model_fields
         assert "field2" in model.model_fields
 
-        # Check metadata fields are present
-        assert "uri" in model.model_fields
-        assert "name" in model.model_fields
-        assert "abstract" in model.model_fields
-        assert "overview" in model.model_fields
-        assert "content" in model.model_fields
-        assert "tags" in model.model_fields
-        assert "created_at" in model.model_fields
-        assert "updated_at" in model.model_fields
+        # Flat models only include schema business fields. Metadata is derived
+        # by the updater when operations are materialized.
+
+    def test_create_default_registry_rejects_empty_explicit_schema_dir(self, tmp_path):
+        """Explicit schema directories should fail if they load no schemas."""
+        with pytest.raises(RuntimeError, match="No memory schemas loaded from directory"):
+            create_default_registry(str(tmp_path))
 
     def test_generate_all_models(self, real_registry):
         """Test generating models for all real schemas."""
@@ -151,9 +148,9 @@ class TestSchemaModelGenerator:
         assert "$defs" in json_schema or "definitions" in json_schema
         assert "properties" in json_schema
 
-        # Check it includes operations
-        assert "write_uris" in json_schema["properties"]
-        assert "edit_uris" in json_schema["properties"]
+        # Check it includes per-type operations plus delete operations.
+        assert "profile" in json_schema["properties"]
+        assert "preferences" in json_schema["properties"]
         assert "delete_uris" in json_schema["properties"]
 
         # Check delete_uris is an array of strings
@@ -219,8 +216,7 @@ class TestSchemaModelGenerator:
 
             # Verify the model has the custom field
             assert "custom_field" in model.model_fields
-            assert "memory_type" in model.model_fields
-            assert "uri" in model.model_fields
+            assert "memory_type" not in model.model_fields
 
 
 class TestSchemaPromptGenerator:
@@ -313,8 +309,8 @@ class TestIntegration:
         # Create generator
         generator = SchemaModelGenerator(registry)
 
-        # Get the operations model
-        operations_model = generator.create_structured_operations_model()
+        # Build the operations model before reading its LLM-facing schema.
+        generator.create_structured_operations_model()
 
         # Get JSON schema
         json_schema = generator.get_llm_json_schema()

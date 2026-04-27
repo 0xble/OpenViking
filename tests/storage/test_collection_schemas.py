@@ -145,12 +145,52 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
     updates = []
 
     class _FakeStorage:
+        def __init__(self):
+            self.count_calls = 0
+
         async def create_collection(self, name, schema):
             del name, schema
             return False
 
         async def get_collection_meta(self):
             return {"Description": "Unified context collection"}
+
+        async def count(self):
+            self.count_calls += 1
+            return 0
+
+        async def update_collection_description(self, description):
+            updates.append(description)
+            return True
+
+    config = _DummyConfig(_DummyEmbedder())
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    storage = _FakeStorage()
+    created = await init_context_collection(storage)
+
+    assert created is False
+    assert storage.count_calls == 2
+    assert len(updates) == 1
+    assert '"provider": "local"' in updates[0]
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_allows_empty_metadata_dict_for_empty_legacy_collection(
+    monkeypatch,
+):
+    updates = []
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {}
 
         async def count(self):
             return 0
@@ -170,6 +210,92 @@ async def test_init_context_collection_backfills_metadata_for_empty_legacy_colle
     assert created is False
     assert len(updates) == 1
     assert '"provider": "local"' in updates[0]
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_skips_validation_when_metadata_api_is_absent(
+    monkeypatch,
+):
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+    config = _DummyConfig(_DummyEmbedder())
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    created = await init_context_collection(_FakeStorage())
+
+    assert created is False
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_rejects_legacy_metadata_when_count_is_unavailable(
+    monkeypatch,
+):
+    updates = []
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {"Description": "Unified context collection"}
+
+        async def update_collection_description(self, description):  # pragma: no cover
+            updates.append(description)
+            raise AssertionError("should not backfill when count is unavailable")
+
+    config = _DummyConfig(_DummyEmbedder())
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    with pytest.raises(EmbeddingRebuildRequiredError, match="vector count is unavailable"):
+        await init_context_collection(_FakeStorage())
+
+    assert updates == []
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_rechecks_empty_legacy_collection_before_backfill(
+    monkeypatch,
+):
+    updates = []
+
+    class _FakeStorage:
+        def __init__(self):
+            self.counts = iter([0, 1])
+
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {"Description": "Unified context collection"}
+
+        async def count(self):
+            return next(self.counts)
+
+        async def update_collection_description(self, description):  # pragma: no cover
+            updates.append(description)
+            raise AssertionError("should not backfill after a concurrent insert")
+
+    config = _DummyConfig(_DummyEmbedder())
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    with pytest.raises(EmbeddingRebuildRequiredError, match="Confirm compatibility"):
+        await init_context_collection(_FakeStorage())
+
+    assert updates == []
 
 
 @pytest.mark.asyncio
@@ -203,6 +329,72 @@ async def test_init_context_collection_rejects_mismatched_nonempty_collection(mo
 
     with pytest.raises(EmbeddingRebuildRequiredError, match="Rebuild is required"):
         await init_context_collection(_FakeStorage())
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_rejects_nonempty_legacy_collection_without_confirmation(
+    monkeypatch,
+):
+    updates = []
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {"Description": "Unified context collection"}
+
+        async def count(self):
+            return 3
+
+        async def update_collection_description(self, description):  # pragma: no cover
+            updates.append(description)
+            raise AssertionError("should not backfill non-empty collection without confirmation")
+
+    config = _DummyConfig(_DummyEmbedder())
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    with pytest.raises(EmbeddingRebuildRequiredError, match="Confirm compatibility"):
+        await init_context_collection(_FakeStorage())
+    assert updates == []
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_backfills_nonempty_legacy_collection_when_confirmed(
+    monkeypatch,
+):
+    updates = []
+
+    class _FakeStorage:
+        async def create_collection(self, name, schema):
+            del name, schema
+            return False
+
+        async def get_collection_meta(self):
+            return {"Description": "Unified context collection"}
+
+        async def count(self):
+            return 3
+
+        async def update_collection_description(self, description):
+            updates.append(description)
+            return True
+
+    config = _DummyConfig(_DummyEmbedder())
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: config,
+    )
+
+    created = await init_context_collection(_FakeStorage(), allow_metadata_backfill=True)
+
+    assert created is False
+    assert len(updates) == 1
+    assert '"provider": "local"' in updates[0]
 
 
 def test_build_embedding_metadata_hashes_resolved_local_model_path(tmp_path):

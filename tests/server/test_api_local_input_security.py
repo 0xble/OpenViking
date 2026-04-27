@@ -122,13 +122,13 @@ def loopback_http_url():
 
 
 async def test_import_ovpack_accepts_temp_uploaded_file(
-    client: httpx.AsyncClient,
+    root_client: httpx.AsyncClient,
     upload_temp_dir,
 ):
     ovpack_file = upload_temp_dir / "demo.ovpack"
     ovpack_file.write_bytes(_build_ovpack_bytes())
 
-    resp = await client.post(
+    resp = await root_client.post(
         "/api/v1/pack/import",
         json={
             "temp_file_id": ovpack_file.name,
@@ -167,13 +167,13 @@ async def test_import_ovpack_rejects_legacy_temp_path_field(client: httpx.AsyncC
 
 
 async def test_import_ovpack_rejects_forged_temp_file_id(
-    client: httpx.AsyncClient,
+    root_client: httpx.AsyncClient,
     upload_temp_dir,
 ):
     outside_file = upload_temp_dir.parent / "outside.ovpack"
     outside_file.write_bytes(_build_ovpack_bytes())
 
-    resp = await client.post(
+    resp = await root_client.post(
         "/api/v1/pack/import",
         json={
             "temp_file_id": "../outside.ovpack",
