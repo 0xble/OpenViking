@@ -1,7 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import os
-
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
@@ -187,6 +186,7 @@ class VLMConfig(BaseModel):
             "model": self.model,
             "temperature": self.temperature,
             "max_retries": self.max_retries,
+            "timeout": self.timeout,
             "provider": name,
             "thinking": self.thinking,
             "max_tokens": self.max_tokens,
@@ -204,14 +204,14 @@ class VLMConfig(BaseModel):
     def get_completion(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion."""
         return self.get_vlm_instance().get_completion(
             prompt=prompt,
-            thinking=thinking,
+            thinking=self.thinking if thinking is None else thinking,
             tools=tools,
             messages=messages,
         )
@@ -219,14 +219,14 @@ class VLMConfig(BaseModel):
     async def get_completion_async(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion asynchronously."""
         return await self.get_vlm_instance().get_completion_async(
             prompt=prompt,
-            thinking=thinking,
+            thinking=self.thinking if thinking is None else thinking,
             tools=tools,
             messages=messages,
         )
@@ -239,7 +239,7 @@ class VLMConfig(BaseModel):
         self,
         prompt: str = "",
         images: Optional[list] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
@@ -247,7 +247,7 @@ class VLMConfig(BaseModel):
         return self.get_vlm_instance().get_vision_completion(
             prompt=prompt,
             images=images,
-            thinking=thinking,
+            thinking=self.thinking if thinking is None else thinking,
             tools=tools,
             messages=messages,
         )
@@ -256,7 +256,7 @@ class VLMConfig(BaseModel):
         self,
         prompt: str = "",
         images: Optional[list] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
@@ -264,7 +264,7 @@ class VLMConfig(BaseModel):
         return await self.get_vlm_instance().get_vision_completion_async(
             prompt=prompt,
             images=images,
-            thinking=thinking,
+            thinking=self.thinking if thinking is None else thinking,
             tools=tools,
             messages=messages,
         )

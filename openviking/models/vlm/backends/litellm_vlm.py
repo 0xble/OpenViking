@@ -211,9 +211,10 @@ class LiteLLMVLMProvider(VLMBase):
         messages: list,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
     ) -> dict[str, Any]:
         """Build kwargs for LiteLLM call."""
+        effective_thinking = self._thinking if thinking is None else thinking
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -239,8 +240,10 @@ class LiteLLMVLMProvider(VLMBase):
         provider = self._detected_provider or detect_provider_by_model(model)
         if provider == "dashscope":
             extra = kwargs.get("extra_body", {})
-            extra["enable_thinking"] = thinking
+            extra["enable_thinking"] = effective_thinking
             kwargs["extra_body"] = extra
+        elif provider == "gemini" and effective_thinking:
+            kwargs["thinking"] = {"type": "enabled"}
 
         # Workaround for LiteLLM bug where Gemini context-caching path emits
         # both `cachedContent` and `toolConfig`, which Gemini rejects with a
@@ -298,7 +301,7 @@ class LiteLLMVLMProvider(VLMBase):
     def _build_text_kwargs(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -311,7 +314,7 @@ class LiteLLMVLMProvider(VLMBase):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -331,7 +334,7 @@ class LiteLLMVLMProvider(VLMBase):
     def get_completion(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -360,7 +363,7 @@ class LiteLLMVLMProvider(VLMBase):
     async def get_completion_async(
         self,
         prompt: str = "",
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -391,7 +394,7 @@ class LiteLLMVLMProvider(VLMBase):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
@@ -418,7 +421,7 @@ class LiteLLMVLMProvider(VLMBase):
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
-        thinking: bool = False,
+        thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:

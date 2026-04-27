@@ -19,10 +19,18 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Session-internal files that should never be summarized by the semantic pipeline.
-# These are canonical archives (e.g. session transcripts) whose content provides
-# no additional retrieval value and would only waste tokens and add latency.
-_SKIP_FILENAMES = frozenset({"messages.jsonl"})
+_SESSION_IMPORT_PREFIX = "viking://resources/imported/sessions/"
+_SKIP_SUMMARY_FILENAMES = frozenset({"messages.jsonl"})
+
+
+def _should_skip_vlm_summary(file_path: str) -> bool:
+    """Return True for generated session internals that should still be vectorized."""
+    file_name = file_path.rsplit("/", 1)[-1]
+    if file_name in _SKIP_SUMMARY_FILENAMES:
+        return True
+    if not file_path.startswith(_SESSION_IMPORT_PREFIX):
+        return False
+    return file_name.endswith(".jsonl") or ".jsonl_" in file_name
 
 
 @dataclass
@@ -109,6 +117,7 @@ class SemanticDagExecutor:
         self._vectorize_lock = asyncio.Lock()
         self._file_change_status: Dict[str, bool] = {}
         self._dir_change_status: Dict[str, bool] = {}
+        self._summary_skipped_files: set[str] = set()
         self._overview_cache: Dict[str, Dict[str, str]] = {}
         self._overview_cache_lock = asyncio.Lock()
         self._refresh_task: Optional[asyncio.Task] = None
@@ -296,7 +305,7 @@ class SemanticDagExecutor:
 
         for entry in entries:
             name = entry.get("name", "")
-            if not name or name.startswith(".") or name in [".", ".."] or name in _SKIP_FILENAMES:
+            if not name or name.startswith(".") or name in [".", ".."]:
                 continue
 
             item_uri = VikingURI(uri).join(name).uri
@@ -448,6 +457,9 @@ class SemanticDagExecutor:
         """Generate file summary and notify parent completion."""
 
         file_name = file_path.split("/")[-1]
+        skip_vlm_summary = _should_skip_vlm_summary(file_path)
+        if skip_vlm_summary:
+            self._summary_skipped_files.add(file_path)
         need_vectorize = True
         try:
             summary_dict = None
@@ -464,9 +476,12 @@ class SemanticDagExecutor:
             else:
                 self._file_change_status[file_path] = True
             if summary_dict is None:
-                summary_dict = await self._processor._generate_single_file_summary(
-                    file_path, llm_sem=self._llm_sem, ctx=self._ctx
-                )
+                if skip_vlm_summary:
+                    summary_dict = {"name": file_name, "summary": ""}
+                else:
+                    summary_dict = await self._processor._generate_single_file_summary(
+                        file_path, llm_sem=self._llm_sem, ctx=self._ctx
+                    )
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             summary_dict = {"name": file_name, "summary": ""}
@@ -542,6 +557,8 @@ class SemanticDagExecutor:
     def _finalize_file_summaries(self, node: DirNode) -> List[Dict[str, str]]:
         summaries: List[Dict[str, str]] = []
         for idx, file_path in enumerate(node.file_paths):
+            if file_path in self._summary_skipped_files:
+                continue
             item = node.file_summaries[idx]
             if item is None:
                 summaries.append({"name": file_path.split("/")[-1], "summary": ""})

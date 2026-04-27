@@ -102,6 +102,45 @@ def test_litellm_build_kwargs_includes_timeout():
     assert kwargs["timeout"] == 90.0
 
 
+def test_litellm_gemini_uses_configured_thinking_by_default():
+    from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
+
+    vlm = LiteLLMVLMProvider(
+        {
+            "provider": "litellm",
+            "model": "gemini-3.1-flash-lite-preview",
+            "api_key": "sk-x",
+            "thinking": True,
+        }
+    )
+
+    kwargs = vlm._build_text_kwargs(prompt="hi")
+    assert kwargs["thinking"] == {"type": "enabled"}
+
+    kwargs = vlm._build_text_kwargs(prompt="hi", thinking=False)
+    assert "thinking" not in kwargs
+
+
+def test_vlm_config_uses_configured_thinking_by_default():
+    class _FakeVLM:
+        def __init__(self):
+            self.calls = []
+
+        def get_completion(self, **kwargs):
+            self.calls.append(kwargs)
+            return "ok"
+
+    cfg = VLMConfig(model="gpt-4o-mini", api_key="sk-x", thinking=True)
+    fake = _FakeVLM()
+    cfg._vlm_instance = fake
+
+    cfg.get_completion("hi")
+    assert fake.calls[-1]["thinking"] is True
+
+    cfg.get_completion("hi", thinking=False)
+    assert fake.calls[-1]["thinking"] is False
+
+
 def test_vlm_config_propagates_timeout_to_codex_backend():
     cfg = VLMConfig(
         provider="openai-codex",
