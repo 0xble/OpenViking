@@ -182,6 +182,11 @@ class _FakeLockManager:
     def create_handle(self):
         return self.handle
 
+    def get_handle(self, handle_id):
+        if handle_id == self.handle.id:
+            return self.handle
+        return None
+
     async def acquire_subtree(self, handle, path, timeout=None):
         self.acquire_calls.append({"handle": handle.id, "path": path, "timeout": timeout})
         return True
@@ -297,7 +302,7 @@ async def test_resource_write_passes_timeout_to_lock_acquisition(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_memory_write_timeout_after_enqueue_does_not_release_lock(monkeypatch):
+async def test_memory_write_timeout_after_enqueue_keeps_lock_released(monkeypatch):
     file_uri = "viking://user/default/memories/preferences/theme.md"
     root_uri = "viking://user/default/memories/preferences"
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
@@ -318,9 +323,10 @@ async def test_memory_write_timeout_after_enqueue_does_not_release_lock(monkeypa
         del uri, context_type, ctx
         return None
 
+    enqueue_calls = []
+
     async def _fake_enqueue_memory_refresh(**kwargs):
-        del kwargs
-        return None
+        enqueue_calls.append(kwargs)
 
     async def _fake_wait_for_request(*, telemetry_id, timeout):
         del telemetry_id
@@ -339,7 +345,104 @@ async def test_memory_write_timeout_after_enqueue_does_not_release_lock(monkeypa
             wait=True,
         )
 
-    assert lock_manager.release_calls == []
+    assert enqueue_calls[0]["lifecycle_lock_handle_id"] == ""
+    assert lock_manager.release_calls == ["lock-1"]
+
+
+@pytest.mark.asyncio
+async def test_memory_write_no_wait_releases_lock_after_enqueue(monkeypatch):
+    file_uri = "viking://user/default/memories/preferences/theme.md"
+    root_uri = "viking://user/default/memories/preferences"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    lock_manager = _FakeLockManager()
+    enqueue_calls = []
+    wait_calls = []
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_lock_manager",
+        lambda: lock_manager,
+    )
+
+    async def _fake_write_in_place(uri, content, *, mode, ctx):
+        del uri, content, mode, ctx
+        return None
+
+    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
+        del uri, context_type, ctx
+        return None
+
+    async def _fake_enqueue_memory_refresh(**kwargs):
+        enqueue_calls.append(kwargs)
+
+    async def _fake_wait_for_request(*, telemetry_id, timeout):
+        wait_calls.append({"telemetry_id": telemetry_id, "timeout": timeout})
+        return {}
+
+    monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
+    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
+    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
+    monkeypatch.setattr(coordinator, "_wait_for_request", _fake_wait_for_request)
+
+    result = await coordinator.write(
+        uri=file_uri,
+        content="updated",
+        ctx=ctx,
+        wait=False,
+    )
+
+    assert result["queue_status"] is None
+    assert enqueue_calls[0]["lifecycle_lock_handle_id"] == ""
+    assert lock_manager.release_calls == ["lock-1"]
+    assert wait_calls == []
+
+
+@pytest.mark.asyncio
+async def test_memory_write_wait_success_releases_lock_before_wait(monkeypatch):
+    file_uri = "viking://user/default/memories/preferences/theme.md"
+    root_uri = "viking://user/default/memories/preferences"
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    viking_fs = _FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
+    coordinator = ContentWriteCoordinator(viking_fs=viking_fs)
+    lock_manager = _FakeLockManager()
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_lock_manager",
+        lambda: lock_manager,
+    )
+
+    async def _fake_write_in_place(uri, content, *, mode, ctx):
+        del uri, content, mode, ctx
+        return None
+
+    async def _fake_vectorize_single_file(uri, *, context_type, ctx):
+        del uri, context_type, ctx
+        return None
+
+    enqueue_calls = []
+
+    async def _fake_enqueue_memory_refresh(**kwargs):
+        enqueue_calls.append(kwargs)
+
+    async def _fake_wait_for_request(*, telemetry_id, timeout):
+        del telemetry_id, timeout
+        return {"Semantic": {"processed": 1}, "Embedding": {"processed": 2}}
+
+    monkeypatch.setattr(coordinator, "_write_in_place", _fake_write_in_place)
+    monkeypatch.setattr(coordinator, "_vectorize_single_file", _fake_vectorize_single_file)
+    monkeypatch.setattr(coordinator, "_enqueue_memory_refresh", _fake_enqueue_memory_refresh)
+    monkeypatch.setattr(coordinator, "_wait_for_request", _fake_wait_for_request)
+
+    await coordinator.write(
+        uri=file_uri,
+        content="updated",
+        ctx=ctx,
+        wait=True,
+    )
+
+    assert enqueue_calls[0]["lifecycle_lock_handle_id"] == ""
+    assert lock_manager.release_calls == ["lock-1"]
 
 
 @pytest.mark.asyncio

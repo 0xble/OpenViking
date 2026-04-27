@@ -150,6 +150,7 @@ class ContentWriteCoordinator:
                 if wait
                 else None
             )
+            await self._release_transferred_lock_after_wait(wait=wait, handle_id=handle.id)
             return {
                 "uri": normalized_uri,
                 "root_uri": root_uri,
@@ -389,6 +390,14 @@ class ContentWriteCoordinator:
             raise DeadlineExceededError("queue processing", timeout) from exc
         return tracker.build_queue_status(telemetry_id)
 
+    async def _release_transferred_lock_after_wait(self, *, wait: bool, handle_id: str) -> None:
+        if not wait or not handle_id:
+            return
+        lock_manager = get_lock_manager()
+        handle = lock_manager.get_handle(handle_id)
+        if handle:
+            await lock_manager.release(handle)
+
     async def _vectorize_single_file(
         self,
         uri: str,
@@ -455,7 +464,7 @@ class ContentWriteCoordinator:
             await lock_manager.release(handle)
             raise InvalidArgumentError(f"resource is busy and cannot be written now: {uri}")
 
-        lock_transferred = False
+        lock_released = False
         try:
             if wait and telemetry_id:
                 get_request_wait_tracker().register_request(telemetry_id)
@@ -469,9 +478,10 @@ class ContentWriteCoordinator:
                 root_uri=root_uri,
                 modified_uri=uri,
                 ctx=ctx,
-                lifecycle_lock_handle_id=handle.id,
+                lifecycle_lock_handle_id="",
             )
-            lock_transferred = True
+            await lock_manager.release(handle)
+            lock_released = True
             queue_status = (
                 await self._wait_for_request(telemetry_id=telemetry_id, timeout=timeout)
                 if wait
@@ -489,7 +499,7 @@ class ContentWriteCoordinator:
                 "queue_status": queue_status,
             }
         except Exception:
-            if not lock_transferred:
+            if not lock_released:
                 await lock_manager.release(handle)
             raise
         finally:
@@ -650,6 +660,7 @@ class ContentWriteCoordinator:
                 if wait
                 else None
             )
+            await self._release_transferred_lock_after_wait(wait=wait, handle_id=handle.id)
             return {
                 "uri": uri,
                 "root_uri": root_uri,

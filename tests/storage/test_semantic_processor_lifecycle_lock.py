@@ -3,11 +3,15 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
+from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.semantic_dag import DagStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class _FakeHandle:
@@ -45,6 +49,19 @@ class _FakeVikingFS:
     def _uri_to_path(self, uri, ctx=None):
         del ctx
         return f"/fake/{uri.replace('://', '/').strip('/')}"
+
+
+class _FakeMemoryVikingFS:
+    async def ls(self, uri, ctx=None):
+        del uri, ctx
+        return [{"name": "lease.md", "isDir": False}]
+
+    async def read_file(self, uri, ctx=None):
+        del uri, ctx
+        return ""
+
+    async def write_file(self, uri, content, ctx=None):
+        del uri, content, ctx
 
 
 @pytest.mark.asyncio
@@ -86,3 +103,55 @@ async def test_semantic_processor_does_not_release_lock_owned_by_dag(monkeypatch
     )
 
     assert lock_manager.release_calls == []
+
+
+@pytest.mark.asyncio
+async def test_memory_embedding_completion_also_releases_lifecycle_lock(monkeypatch):
+    processor = SemanticProcessor()
+    processor._current_ctx = RequestContext(
+        user=UserIdentifier.the_default_user(),
+        role=Role.ROOT,
+    )
+    msg = SemanticMsg(
+        uri="viking://agent/qa/memories/tools",
+        context_type="memory",
+        telemetry_id="telemetry-1",
+        lifecycle_lock_handle_id="lock-1",
+    )
+    release = AsyncMock()
+    registered = {}
+
+    class _FakeEmbeddingTaskTracker:
+        async def register(self, **kwargs):
+            registered.update(kwargs)
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: _FakeMemoryVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: _FakeEmbeddingTaskTracker(),
+    )
+    monkeypatch.setattr(
+        processor,
+        "_generate_single_file_summary",
+        AsyncMock(return_value={"name": "lease.md", "summary": "Lease note"}),
+    )
+    monkeypatch.setattr(
+        processor,
+        "_generate_overview",
+        AsyncMock(return_value="# Overview\n\nLease note"),
+    )
+    monkeypatch.setattr(processor, "_vectorize_directory", AsyncMock())
+    monkeypatch.setattr(processor, "_release_memory_lifecycle_lock", release)
+
+    await processor._process_memory_directory(msg)
+
+    assert registered["semantic_msg_id"] == msg.id
+    release.assert_awaited_once_with("lock-1")
+
+    release.reset_mock()
+    await registered["on_complete"]()
+
+    release.assert_awaited_once_with("lock-1")

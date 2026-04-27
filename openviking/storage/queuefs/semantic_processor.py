@@ -644,7 +644,11 @@ class SemanticProcessor(DequeueHandlerBase):
                 from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
 
                 async def _on_complete() -> None:
-                    get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
+                    try:
+                        get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
+                    finally:
+                        if msg.lifecycle_lock_handle_id:
+                            await self._release_memory_lifecycle_lock(msg.lifecycle_lock_handle_id)
 
                 tracker = EmbeddingTaskTracker.get_instance()
                 await tracker.register(
