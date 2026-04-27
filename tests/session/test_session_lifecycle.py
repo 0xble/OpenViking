@@ -57,6 +57,18 @@ class TestSessionLoad:
         # Verify messages loaded
         assert len(new_session.messages) > 0
 
+    async def test_load_moved_session_uses_requested_session_id(self, client: AsyncOpenViking):
+        """Moved session directories should not preserve stale meta session IDs."""
+        old_session = client.session(session_id="legacy_session_id")
+        await old_session.ensure_exists()
+
+        await client.mv(old_session.uri, "viking://session/prefixed-legacy_session_id")
+
+        moved_session = client.session(session_id="prefixed-legacy_session_id")
+        await moved_session.load()
+
+        assert moved_session.meta.session_id == "prefixed-legacy_session_id"
+
     async def test_load_nonexistent_session(self, client: AsyncOpenViking):
         """Test loading nonexistent session"""
         session = client.session(session_id="nonexistent_session_xyz")

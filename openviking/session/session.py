@@ -236,6 +236,7 @@ class Session:
                 f"{self._session_uri}/.meta.json", ctx=self.ctx
             )
             self._meta = SessionMeta.from_dict(json.loads(meta_content))
+            self._meta.session_id = self.session_id
         except Exception:
             # Old session without meta — derive from existing data
             self._meta.message_count = len(self._messages)
