@@ -11,6 +11,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.storage.content_write import ContentWriteCoordinator
 from openviking.telemetry.context import bind_telemetry
 from openviking.telemetry.operation import OperationTelemetry
+from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -39,6 +40,36 @@ class _FakeRequestWaitTracker:
 class _ExplodingQueueManager:
     async def wait_complete(self, *args, **kwargs):
         raise AssertionError("global queue wait should not be used")
+
+
+class _ImmediateSemanticDoneQueue:
+    async def enqueue(self, msg):
+        get_request_wait_tracker().mark_semantic_done(msg.telemetry_id, msg.id)
+        return msg.id
+
+
+class _ImmediateSemanticDoneQueueManager:
+    SEMANTIC = "Semantic"
+
+    def get_queue(self, name, allow_create=False):
+        del allow_create
+        assert name == self.SEMANTIC
+        return _ImmediateSemanticDoneQueue()
+
+
+class _DeduplicatedSemanticQueue:
+    async def enqueue(self, msg):
+        del msg
+        return "deduplicated"
+
+
+class _DeduplicatedSemanticQueueManager:
+    SEMANTIC = "Semantic"
+
+    def get_queue(self, name, allow_create=False):
+        del allow_create
+        assert name == self.SEMANTIC
+        return _DeduplicatedSemanticQueue()
 
 
 class _FakeVikingFS:
@@ -248,9 +279,14 @@ async def test_content_write_wait_uses_request_tracker(monkeypatch):
     coordinator = ContentWriteCoordinator(
         viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
     )
+    async def _fake_acquire_subtree(handle, path, timeout=None):
+        del timeout
+        return await _return_true(handle, path)
+
     lock_manager = SimpleNamespace(
         create_handle=lambda: SimpleNamespace(id="lock-1"),
-        acquire_subtree=lambda handle, path: _return_true(handle, path),
+        acquire_subtree=_fake_acquire_subtree,
+        get_handle=lambda handle_id: SimpleNamespace(id=handle_id),
         release=lambda handle: _return_none(handle),
     )
 
@@ -311,9 +347,14 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
     coordinator = ContentWriteCoordinator(
         viking_fs=_FakeVikingFS(file_uri=file_uri, root_uri=root_uri)
     )
+    async def _fake_acquire_subtree(handle, path, timeout=None):
+        del timeout
+        return await _return_true(handle, path)
+
     lock_manager = SimpleNamespace(
         create_handle=lambda: SimpleNamespace(id="lock-1"),
-        acquire_subtree=lambda handle, path: _return_true(handle, path),
+        acquire_subtree=_fake_acquire_subtree,
+        get_handle=lambda handle_id: SimpleNamespace(id=handle_id),
         release=lambda handle: _return_none(handle),
     )
 
@@ -357,6 +398,70 @@ async def test_content_write_wait_uses_request_tracker_when_telemetry_disabled(m
     assert tracker.wait_calls == [(telemetry.telemetry_id, 5.0)]
     assert tracker.build_calls == [telemetry.telemetry_id]
     assert tracker.cleaned == [telemetry.telemetry_id]
+
+
+@pytest.mark.asyncio
+async def test_memory_refresh_registers_wait_root_before_enqueue(monkeypatch):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    telemetry = OperationTelemetry(operation="content.write", enabled=True)
+    tracker = get_request_wait_tracker()
+    coordinator = ContentWriteCoordinator(
+        viking_fs=_FakeVikingFS(
+            file_uri="viking://user/default/memories/events/note.md",
+            root_uri="viking://user/default/memories/events",
+        )
+    )
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_queue_manager",
+        lambda: _ImmediateSemanticDoneQueueManager(),
+    )
+
+    with bind_telemetry(telemetry):
+        tracker.register_request(telemetry.telemetry_id)
+        try:
+            await coordinator._enqueue_memory_refresh(
+                root_uri="viking://user/default/memories/events",
+                modified_uri="viking://user/default/memories/events/note.md",
+                ctx=ctx,
+                lifecycle_lock_handle_id="",
+            )
+            assert tracker.is_complete(telemetry.telemetry_id)
+            assert tracker.build_queue_status(telemetry.telemetry_id)["Semantic"]["processed"] == 1
+        finally:
+            tracker.cleanup(telemetry.telemetry_id)
+
+
+@pytest.mark.asyncio
+async def test_memory_refresh_completes_wait_root_when_deduplicated(monkeypatch):
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.USER)
+    telemetry = OperationTelemetry(operation="content.write", enabled=True)
+    tracker = get_request_wait_tracker()
+    coordinator = ContentWriteCoordinator(
+        viking_fs=_FakeVikingFS(
+            file_uri="viking://user/default/memories/events/note.md",
+            root_uri="viking://user/default/memories/events",
+        )
+    )
+
+    monkeypatch.setattr(
+        "openviking.storage.content_write.get_queue_manager",
+        lambda: _DeduplicatedSemanticQueueManager(),
+    )
+
+    with bind_telemetry(telemetry):
+        tracker.register_request(telemetry.telemetry_id)
+        try:
+            await coordinator._enqueue_memory_refresh(
+                root_uri="viking://user/default/memories/events",
+                modified_uri="viking://user/default/memories/events/note.md",
+                ctx=ctx,
+                lifecycle_lock_handle_id="",
+            )
+            assert tracker.is_complete(telemetry.telemetry_id)
+            assert tracker.build_queue_status(telemetry.telemetry_id)["Semantic"]["processed"] == 0
+        finally:
+            tracker.cleanup(telemetry.telemetry_id)
 
 
 async def _return_true(handle, path):
