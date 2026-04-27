@@ -17,7 +17,7 @@ Commands:
   upstream-parity Verify local CI is pinned to upstream workflow hashes
   lint             Mirror upstream PR lint on changed Python files
   test             Mirror upstream lite test workflow locally
-  test-full        Alias for the current upstream full test command set
+  test-full        Run the full local pytest suite
   api              Run API integration tests with local server
   api-effect       Run slow API effect tests with local server
   docs             Build VitePress docs
@@ -164,6 +164,14 @@ check_test_lite() {
   build_cpp_extensions_for_ci
   export PYTHONPATH="${PYTHONPATH:-}:$repo_root"
   run uv run python tests/integration/test_quick_start_lite.py
+}
+
+check_test_full() {
+  need uv
+  export PYTHONPATH="${PYTHONPATH:-}:$repo_root"
+  step "uv run --extra test pytest --no-cov -q --tb=short"
+  ulimit -n 4096 2>/dev/null || true
+  uv run --extra test pytest --no-cov -q --tb=short
 }
 
 write_api_config() {
@@ -408,7 +416,7 @@ case "$command" in
   upstream-parity) check_upstream_parity ;;
   lint) check_lint ;;
   test) check_test_lite ;;
-  test-full) check_test_lite ;;
+  test-full) check_test_full ;;
   api) run_api_suite basic ;;
   api-effect) run_api_suite effect ;;
   docs) check_docs ;;
