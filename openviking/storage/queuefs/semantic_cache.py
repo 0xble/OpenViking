@@ -6,11 +6,13 @@ import json
 from typing import Dict, List
 
 SUMMARY_CACHE_FILENAME = ".summary_cache.json"
+OVERVIEW_HASH_FILENAME = ".overview.hash"
 MANAGED_HIDDEN_SEMANTIC_FILES = frozenset(
     {
         ".abstract.md",
         ".overview.md",
         SUMMARY_CACHE_FILENAME,
+        OVERVIEW_HASH_FILENAME,
     }
 )
 SEMANTIC_PLACEHOLDER_MARKERS = (

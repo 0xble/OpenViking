@@ -3,14 +3,15 @@
 """Semantic DAG executor with event-driven lazy dispatch."""
 
 import asyncio
+import functools
 import hashlib
 import json
-import threading
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs.semantic_cache import (
+    OVERVIEW_HASH_FILENAME,
     SUMMARY_CACHE_FILENAME,
     parse_summary_cache,
     serialize_summary_cache,
@@ -25,40 +26,20 @@ logger = get_logger(__name__)
 _SESSION_IMPORT_PREFIX = "viking://resources/imported/sessions/"
 _SKIP_SUMMARY_FILENAMES = frozenset({"messages.jsonl"})
 
-# Sidecar that lets us skip the VLM call when the input bundle is byte-identical
-# to a prior render. See _compute_overview_input_hash for what's hashed.
-OVERVIEW_HASH_FILENAME = ".overview.hash"
 _OVERVIEW_PROMPT_ID = "semantic.overview_generation"
-_overview_prompt_sha_cache: Optional[str] = None
-_overview_prompt_sha_lock = threading.Lock()
 
 
+@functools.lru_cache(maxsize=1)
 def _get_overview_prompt_sha() -> str:
-    """sha256 of the overview prompt template body, cached after first read.
+    """sha256 of the overview prompt template body. Auto-invalidates on edit."""
+    try:
+        from openviking.prompts.manager import get_manager
 
-    Auto-invalidates the overview cache if the template is edited; avoids the
-    fragility of bumping the YAML version field manually.
-    """
-    global _overview_prompt_sha_cache
-    if _overview_prompt_sha_cache is not None:
-        return _overview_prompt_sha_cache
-    with _overview_prompt_sha_lock:
-        if _overview_prompt_sha_cache is not None:
-            return _overview_prompt_sha_cache
-        try:
-            from openviking.prompts.manager import get_manager
-
-            template = get_manager().load_template(_OVERVIEW_PROMPT_ID)
-            _overview_prompt_sha_cache = hashlib.sha256(
-                template.template.encode("utf-8")
-            ).hexdigest()
-        except Exception as exc:
-            logger.warning(
-                f"[SemanticDag] Failed to read overview prompt for cache key, "
-                f"caching falls back to disabled: {exc}"
-            )
-            _overview_prompt_sha_cache = ""
-    return _overview_prompt_sha_cache
+        template = get_manager().load_template(_OVERVIEW_PROMPT_ID)
+        return hashlib.sha256(template.template.encode("utf-8")).hexdigest()
+    except Exception as exc:
+        logger.warning(f"[SemanticDag] Failed to read overview prompt; cache disabled: {exc}")
+        return ""
 
 
 def _should_skip_vlm_summary(file_path: str) -> bool:
@@ -692,6 +673,7 @@ class SemanticDagExecutor:
         children_changed = True
         abstract = ""
         overview_input_hash = ""
+        hash_cache_hit = False
         try:
             overview = None
             abstract = None
@@ -714,6 +696,7 @@ class SemanticDagExecutor:
                 if cached is not None:
                     overview, abstract = cached
                     need_vectorize = False
+                    hash_cache_hit = True
                     logger.debug(f"[SemanticDag] {dir_uri} overview cache hit; skipping VLM")
                 else:
                     async with self._llm_sem:
@@ -728,30 +711,37 @@ class SemanticDagExecutor:
             if callable(validate_semantic_artifacts):
                 validate_semantic_artifacts(dir_uri, overview, abstract)
 
-            # Write directly — protected by the outer lifecycle SUBTREE lock
-            wrote_outputs = False
-            try:
-                await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)
-                await self._viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx)
-                wrote_outputs = True
-            except Exception:
-                logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
+            # Skip the .overview.md / .abstract.md / .overview.hash / summary_cache
+            # rewrites on hash-cache hit: outputs already match what's on disk.
+            if not hash_cache_hit:
+                # Write directly — protected by the outer lifecycle SUBTREE lock
+                wrote_outputs = False
+                try:
+                    await self._viking_fs.write_file(
+                        f"{dir_uri}/.overview.md", overview, ctx=self._ctx
+                    )
+                    await self._viking_fs.write_file(
+                        f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx
+                    )
+                    wrote_outputs = True
+                except Exception:
+                    logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
 
-            if wrote_outputs and overview_input_hash:
-                await self._write_overview_hash(dir_uri, overview_input_hash)
+                if wrote_outputs and overview_input_hash:
+                    await self._write_overview_hash(dir_uri, overview_input_hash)
 
-            try:
-                async with node.lock:
-                    file_summaries = self._finalize_file_summaries(node)
-                await self._viking_fs.write_file(
-                    f"{dir_uri}/{SUMMARY_CACHE_FILENAME}",
-                    serialize_summary_cache(file_summaries),
-                    ctx=self._ctx,
-                )
-            except Exception as e:
-                logger.info(
-                    f"[SemanticDag] Failed to write {SUMMARY_CACHE_FILENAME} for {dir_uri}: {e}"
-                )
+                try:
+                    async with node.lock:
+                        file_summaries = self._finalize_file_summaries(node)
+                    await self._viking_fs.write_file(
+                        f"{dir_uri}/{SUMMARY_CACHE_FILENAME}",
+                        serialize_summary_cache(file_summaries),
+                        ctx=self._ctx,
+                    )
+                except Exception as e:
+                    logger.info(
+                        f"[SemanticDag] Failed to write {SUMMARY_CACHE_FILENAME} for {dir_uri}: {e}"
+                    )
 
             try:
                 if need_vectorize:

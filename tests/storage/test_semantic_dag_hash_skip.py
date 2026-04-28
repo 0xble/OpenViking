@@ -100,8 +100,8 @@ def _make_executor(monkeypatch, fake_fs, processor):
 
 
 def _seed_prompt_sha(monkeypatch, value: str):
-    """Force the cached prompt SHA to a known value to keep tests deterministic."""
-    monkeypatch.setattr(semantic_dag, "_overview_prompt_sha_cache", value)
+    """Force the prompt SHA to a known value to keep tests deterministic."""
+    monkeypatch.setattr(semantic_dag, "_get_overview_prompt_sha", lambda: value)
 
 
 def test_compute_overview_input_hash_is_deterministic(monkeypatch):
@@ -263,3 +263,33 @@ async def test_overview_task_skips_vlm_on_cache_hit(monkeypatch):
 
     await executor.run(root_uri)
     assert processor.overview_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_overview_task_skips_disk_writes_on_cache_hit(monkeypatch):
+    """Cache hit must avoid rewriting .overview.md/.abstract.md/.overview.hash."""
+    _mock_transaction_layer(monkeypatch)
+    _seed_prompt_sha(monkeypatch, "stub-prompt-sha")
+    root_uri = "viking://resources/cache-no-rewrite"
+    tree = {
+        root_uri: [
+            {"name": "doc.md", "isDir": False},
+        ],
+    }
+    fake_fs = _FakeVikingFS(tree)
+    processor = _FakeProcessor()
+    executor = _make_executor(monkeypatch, fake_fs, processor)
+
+    expected_files = [{"name": "doc.md", "summary": "summary"}]
+    expected_hash = executor._compute_overview_input_hash(expected_files, [])
+
+    fake_fs._files[f"{root_uri}/{OVERVIEW_HASH_FILENAME}"] = expected_hash
+    fake_fs._files[f"{root_uri}/.overview.md"] = "cached-overview"
+    fake_fs._files[f"{root_uri}/.abstract.md"] = "cached-abstract"
+
+    await executor.run(root_uri)
+
+    written_paths = [path for path, _ in fake_fs.writes]
+    assert f"{root_uri}/.overview.md" not in written_paths
+    assert f"{root_uri}/.abstract.md" not in written_paths
+    assert f"{root_uri}/{OVERVIEW_HASH_FILENAME}" not in written_paths
