@@ -169,9 +169,23 @@ check_test_lite() {
 check_test_full() {
   need uv
   export PYTHONPATH="${PYTHONPATH:-}:$repo_root"
-  step "uv run --extra test pytest --no-cov -q --tb=short"
+  # Exclude tests that bill against real cloud APIs (Gemini, Voyage,
+  # Volcengine, Vault, etc.) on every push. Two-layer filter:
+  #   --ignore=tests/integration/   skips the directory containing the
+  #                                 *_e2e.py and *_it.py real-API tests
+  #                                 (some lack pytest.mark.integration but
+  #                                 still hit real APIs via requires_api_key)
+  #   -m "not integration"          safety net for any integration-marked
+  #                                 tests living elsewhere (e.g. session/memory)
+  # Override with OPENVIKING_CHECK_RUN_INTEGRATION=1 or use `bin/check api`
+  # which provisions sandboxed config with dummy keys.
+  local extra_args=("--ignore=tests/integration" "-m" "not integration")
+  if [ "${OPENVIKING_CHECK_RUN_INTEGRATION:-0}" = "1" ]; then
+    extra_args=()
+  fi
+  step "uv run --extra test pytest --no-cov -q --tb=short ${extra_args[*]}"
   ulimit -n 4096 2>/dev/null || true
-  uv run --extra test pytest --no-cov -q --tb=short
+  uv run --extra test pytest --no-cov -q --tb=short "${extra_args[@]}"
 }
 
 write_api_config() {
