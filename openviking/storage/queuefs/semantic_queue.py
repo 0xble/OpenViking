@@ -13,8 +13,12 @@ from .semantic_msg import SemanticMsg
 
 logger = get_logger(__name__)
 
-# Coalesce rapid re-enqueues for the same memory parent directory (github #769).
-_MEMORY_PARENT_SEMANTIC_DEDUPE_SEC = 45.0
+# Coalesce rapid re-enqueues for the same parent directory across context types
+# during burst writes (memory: github #769; resource/session: github #505).
+_PARENT_SEMANTIC_DEDUPE_SEC = 45.0
+
+# Context types whose parent-semantic enqueues benefit from coalescing.
+_DEDUPE_CONTEXT_TYPES = frozenset({"memory", "resource", "session"})
 
 
 class SemanticQueue(NamedQueue):
@@ -22,34 +26,35 @@ class SemanticQueue(NamedQueue):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._memory_parent_semantic_last: dict[str, float] = {}
-        self._memory_parent_semantic_lock = threading.Lock()
+        self._parent_semantic_dedupe_last: dict[str, float] = {}
+        self._parent_semantic_dedupe_lock = threading.Lock()
 
     @staticmethod
-    def _memory_parent_semantic_key(msg: SemanticMsg) -> str:
-        return f"{msg.account_id}|{msg.user_id}|{msg.agent_id}|{msg.uri}"
+    def _parent_semantic_dedupe_key(msg: SemanticMsg) -> str:
+        return f"{msg.context_type}|{msg.account_id}|{msg.user_id}|{msg.agent_id}|{msg.uri}"
 
     async def enqueue(self, msg: SemanticMsg) -> str:
         """Serialize SemanticMsg object and store in queue."""
-        if msg.context_type == "memory":
-            key = self._memory_parent_semantic_key(msg)
+        if msg.context_type in _DEDUPE_CONTEXT_TYPES:
+            key = self._parent_semantic_dedupe_key(msg)
             now = time.monotonic()
-            with self._memory_parent_semantic_lock:
-                last = self._memory_parent_semantic_last.get(key, 0.0)
-                if now - last < _MEMORY_PARENT_SEMANTIC_DEDUPE_SEC:
+            with self._parent_semantic_dedupe_lock:
+                last = self._parent_semantic_dedupe_last.get(key, 0.0)
+                if now - last < _PARENT_SEMANTIC_DEDUPE_SEC:
                     logger.debug(
-                        "[SemanticQueue] Skipping duplicate memory semantic enqueue for %s "
-                        "(within %.0fs dedupe window; see #769)",
+                        "[SemanticQueue] Skipping duplicate %s semantic enqueue for %s "
+                        "(within %.0fs dedupe window; see #769, #505)",
+                        msg.context_type,
                         msg.uri,
-                        _MEMORY_PARENT_SEMANTIC_DEDUPE_SEC,
+                        _PARENT_SEMANTIC_DEDUPE_SEC,
                     )
                     return "deduplicated"
-                self._memory_parent_semantic_last[key] = now
-                if len(self._memory_parent_semantic_last) > 2000:
-                    cutoff = now - (_MEMORY_PARENT_SEMANTIC_DEDUPE_SEC * 4)
-                    stale = [k for k, t in self._memory_parent_semantic_last.items() if t < cutoff]
+                self._parent_semantic_dedupe_last[key] = now
+                if len(self._parent_semantic_dedupe_last) > 2000:
+                    cutoff = now - (_PARENT_SEMANTIC_DEDUPE_SEC * 4)
+                    stale = [k for k, t in self._parent_semantic_dedupe_last.items() if t < cutoff]
                     for k in stale[:800]:
-                        self._memory_parent_semantic_last.pop(k, None)
+                        self._parent_semantic_dedupe_last.pop(k, None)
 
         return await super().enqueue(msg.to_dict())
 
