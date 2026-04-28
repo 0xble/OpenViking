@@ -3,8 +3,11 @@
 """Semantic DAG executor with event-driven lazy dispatch."""
 
 import asyncio
+import hashlib
+import json
+import threading
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Dict, List, Optional
+from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs.semantic_cache import (
@@ -21,6 +24,41 @@ logger = get_logger(__name__)
 
 _SESSION_IMPORT_PREFIX = "viking://resources/imported/sessions/"
 _SKIP_SUMMARY_FILENAMES = frozenset({"messages.jsonl"})
+
+# Sidecar that lets us skip the VLM call when the input bundle is byte-identical
+# to a prior render. See _compute_overview_input_hash for what's hashed.
+OVERVIEW_HASH_FILENAME = ".overview.hash"
+_OVERVIEW_PROMPT_ID = "semantic.overview_generation"
+_overview_prompt_sha_cache: Optional[str] = None
+_overview_prompt_sha_lock = threading.Lock()
+
+
+def _get_overview_prompt_sha() -> str:
+    """sha256 of the overview prompt template body, cached after first read.
+
+    Auto-invalidates the overview cache if the template is edited; avoids the
+    fragility of bumping the YAML version field manually.
+    """
+    global _overview_prompt_sha_cache
+    if _overview_prompt_sha_cache is not None:
+        return _overview_prompt_sha_cache
+    with _overview_prompt_sha_lock:
+        if _overview_prompt_sha_cache is not None:
+            return _overview_prompt_sha_cache
+        try:
+            from openviking.prompts.manager import get_manager
+
+            template = get_manager().load_template(_OVERVIEW_PROMPT_ID)
+            _overview_prompt_sha_cache = hashlib.sha256(
+                template.template.encode("utf-8")
+            ).hexdigest()
+        except Exception as exc:
+            logger.warning(
+                f"[SemanticDag] Failed to read overview prompt for cache key, "
+                f"caching falls back to disabled: {exc}"
+            )
+            _overview_prompt_sha_cache = ""
+    return _overview_prompt_sha_cache
 
 
 def _should_skip_vlm_summary(file_path: str) -> bool:
@@ -576,6 +614,76 @@ class SemanticDagExecutor:
                 results.append(item)
         return results
 
+    def _compute_overview_input_hash(
+        self,
+        file_summaries: List[Dict[str, str]],
+        children_abstracts: List[Dict[str, str]],
+    ) -> str:
+        """sha256 of the inputs that determine the rendered overview prompt.
+
+        Two renders share a hash iff they would produce the same VLM prompt:
+        same prompt template, same model, same output_language config, same
+        ordered file_summaries and children_abstracts.
+        """
+        prompt_sha = _get_overview_prompt_sha()
+        if not prompt_sha:
+            return ""
+
+        try:
+            from openviking_cli.utils.config import get_openviking_config
+
+            config = get_openviking_config()
+            model = getattr(getattr(config, "vlm", None), "model", "") or ""
+            override = getattr(config, "output_language_override", "") or ""
+        except Exception:
+            model = ""
+            override = ""
+
+        bundle = {
+            "prompt_sha": prompt_sha,
+            "model": model,
+            "output_language_override": override,
+            "files": file_summaries,
+            "children": children_abstracts,
+        }
+        payload = json.dumps(bundle, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    async def _read_cached_overview(
+        self, dir_uri: str, expected_hash: str
+    ) -> Optional[Tuple[str, str]]:
+        """Return (overview, abstract) from disk iff the hash sidecar matches."""
+        if not expected_hash:
+            return None
+        try:
+            cached_hash = await self._viking_fs.read_file(
+                f"{dir_uri}/{OVERVIEW_HASH_FILENAME}", ctx=self._ctx
+            )
+        except Exception:
+            return None
+        if not cached_hash or cached_hash.strip() != expected_hash:
+            return None
+        try:
+            overview = await self._viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=self._ctx)
+            abstract = await self._viking_fs.read_file(f"{dir_uri}/.abstract.md", ctx=self._ctx)
+        except Exception:
+            return None
+        if not overview or not abstract:
+            return None
+        return overview, abstract
+
+    async def _write_overview_hash(self, dir_uri: str, overview_hash: str) -> None:
+        if not overview_hash:
+            return
+        try:
+            await self._viking_fs.write_file(
+                f"{dir_uri}/{OVERVIEW_HASH_FILENAME}", overview_hash, ctx=self._ctx
+            )
+        except Exception as exc:
+            logger.info(
+                f"[SemanticDag] Failed to write {OVERVIEW_HASH_FILENAME} for {dir_uri}: {exc}"
+            )
+
     async def _overview_task(self, dir_uri: str) -> None:
         node = self._nodes.get(dir_uri)
         if not node:
@@ -583,6 +691,7 @@ class SemanticDagExecutor:
         need_vectorize = True
         children_changed = True
         abstract = ""
+        overview_input_hash = ""
         try:
             overview = None
             abstract = None
@@ -598,12 +707,21 @@ class SemanticDagExecutor:
                 async with node.lock:
                     file_summaries = self._finalize_file_summaries(node)
                     children_abstracts = self._finalize_children_abstracts(node)
-                async with self._llm_sem:
-                    overview = await self._processor._generate_overview(
-                        dir_uri, file_summaries, children_abstracts
-                    )
-                abstract = self._processor._extract_abstract_from_overview(overview)
-                overview, abstract = self._processor._enforce_size_limits(overview, abstract)
+                overview_input_hash = self._compute_overview_input_hash(
+                    file_summaries, children_abstracts
+                )
+                cached = await self._read_cached_overview(dir_uri, overview_input_hash)
+                if cached is not None:
+                    overview, abstract = cached
+                    need_vectorize = False
+                    logger.debug(f"[SemanticDag] {dir_uri} overview cache hit; skipping VLM")
+                else:
+                    async with self._llm_sem:
+                        overview = await self._processor._generate_overview(
+                            dir_uri, file_summaries, children_abstracts
+                        )
+                    abstract = self._processor._extract_abstract_from_overview(overview)
+                    overview, abstract = self._processor._enforce_size_limits(overview, abstract)
             validate_semantic_artifacts = getattr(
                 self._processor, "_validate_semantic_artifacts", None
             )
@@ -611,11 +729,16 @@ class SemanticDagExecutor:
                 validate_semantic_artifacts(dir_uri, overview, abstract)
 
             # Write directly — protected by the outer lifecycle SUBTREE lock
+            wrote_outputs = False
             try:
                 await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)
                 await self._viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx)
+                wrote_outputs = True
             except Exception:
                 logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
+
+            if wrote_outputs and overview_input_hash:
+                await self._write_overview_hash(dir_uri, overview_input_hash)
 
             try:
                 async with node.lock:
