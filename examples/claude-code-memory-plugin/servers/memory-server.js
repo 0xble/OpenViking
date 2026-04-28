@@ -542,6 +542,85 @@ function pickMemoriesForInjection(items, limit, queryText) {
 function totalCommitMemories(result) {
     return Object.values(result.memories_extracted ?? {}).reduce((sum, count) => sum + count, 0);
 }
+const MEMORY_BODY_MAX_CHARS = 500;
+function singularize(plural) {
+    if (plural.endsWith("ies"))
+        return plural.replace(/ies$/, "y");
+    if (plural.endsWith("s"))
+        return plural.replace(/s$/, "");
+    return plural;
+}
+function humanBytes(n) {
+    if (n < 1024)
+        return `${n} B`;
+    return `${(n / 1024).toFixed(1)} KB`;
+}
+function bucketSingularFromUri(uri) {
+    const m = uri.match(/\/memories\/([^/]+)/);
+    if (!m)
+        return "memory";
+    const seg = m[1].replace(/\.md$/, "");
+    if (seg === "profile")
+        return "profile";
+    return singularize(seg);
+}
+function prettyTitleFromUri(uri) {
+    const stem = uri.split("/").pop()?.replace(/\.md$/, "") ?? "";
+    if (!stem || stem.startsWith("mem_"))
+        return "(unnamed)";
+    return stem
+        .replace(/[_-]+/g, " ")
+        .split(" ")
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join(" ");
+}
+function quoteBody(text, max) {
+    if (!text)
+        return "";
+    const truncated = text.length > max;
+    const shown = truncated ? text.slice(0, max).trimEnd() : text;
+    const lines = shown.split("\n").map((l) => `> ${l}`).join("\n");
+    if (truncated) {
+        return `${lines}\n[showing first ${max} of ${text.length.toLocaleString()} chars]`;
+    }
+    return lines;
+}
+function formatMemoryWriteMessage(opts) {
+    const verb = opts.created ? "Created" : opts.mode === "append" ? "Appended to" : "Updated";
+    const bucket = bucketSingularFromUri(opts.uri);
+    const title = prettyTitleFromUri(opts.uri);
+    const sizeStr = humanBytes(opts.writtenBytes);
+    const titlePart = title === "(unnamed)" ? "(unnamed)" : `"${title}"`;
+    const header = bucket === "profile"
+        ? `${verb} profile memory (${sizeStr}).`
+        : `${verb} ${bucket} memory ${titlePart} (${sizeStr}).`;
+    const body = quoteBody(opts.content, MEMORY_BODY_MAX_CHARS);
+    return body ? `${header}\n${opts.uri}\n\n${body}` : `${header}\n${opts.uri}`;
+}
+function formatMemoryForgetMessage(uri, score) {
+    const bucket = bucketSingularFromUri(uri);
+    const title = prettyTitleFromUri(uri);
+    const scoreSuffix = typeof score === "number" ? ` (matched at ${(score * 100).toFixed(0)}%)` : "";
+    const titlePart = title === "(unnamed)" ? "(unnamed)" : `"${title}"`;
+    const header = bucket === "profile"
+        ? `Forgot profile memory${scoreSuffix}.`
+        : `Forgot ${bucket} memory ${titlePart}${scoreSuffix}.`;
+    return `${header}\n${uri}`;
+}
+function formatMemoryStoreMessage(opts) {
+    const cats = opts.memoriesByCategory ?? {};
+    const total = Object.values(cats).reduce((sum, n) => sum + (n ?? 0), 0);
+    const breakdown = Object.entries(cats)
+        .filter(([, n]) => (n ?? 0) > 0)
+        .map(([cat, n]) => `${n} ${n === 1 ? singularize(cat) : cat}`)
+        .join(", ");
+    const header = total === 0
+        ? "Stored input but extracted 0 memories."
+        : `Extracted ${total} ${total === 1 ? "memory" : "memories"}${breakdown ? ` (${breakdown})` : ""}.`;
+    const body = quoteBody(opts.text ?? "", MEMORY_BODY_MAX_CHARS);
+    return body ? `${header}\n\n${body}` : header;
+}
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -681,18 +760,14 @@ server.tool("memory_store", "Store information into OpenViking long-term memory.
                     }],
             };
         }
-        if (count === 0) {
-            return {
-                content: [{
-                        type: "text",
-                        text: "Committed session, but OpenViking extracted 0 memory item(s).",
-                    }],
-            };
-        }
+        const storeMessage = formatMemoryStoreMessage({
+            text,
+            memoriesByCategory: result.memories_extracted,
+        });
         return {
             content: [{
                     type: "text",
-                    text: `Stored memory. Extracted ${count} item(s).`,
+                    text: storeMessage,
                 }],
         };
     }
@@ -724,12 +799,18 @@ server.tool("memory_write", "Save text verbatim at a specified memory URI and re
         };
     }
     const result = await client.writeContent(uri, content, mode ?? "replace");
-    const verb = result.created ? "created" : "updated";
+    const message = formatMemoryWriteMessage({
+        uri: result.uri,
+        content,
+        mode: result.mode,
+        created: result.created ?? false,
+        writtenBytes: result.written_bytes,
+    });
     return {
         content: [
             {
                 type: "text",
-                text: `${verb} ${result.uri}`,
+                text: message,
             },
         ],
     };
@@ -746,7 +827,7 @@ server.tool("memory_forget", "Delete a memory from OpenViking. Provide an exact 
             return { content: [{ type: "text", text: `Refusing to delete non-memory URI: ${uri}` }] };
         }
         await client.deleteUri(uri);
-        return { content: [{ type: "text", text: `Deleted memory: ${uri}` }] };
+        return { content: [{ type: "text", text: formatMemoryForgetMessage(uri) }] };
     }
     if (!query) {
         return { content: [{ type: "text", text: "Please provide either a uri or query parameter." }] };
@@ -780,7 +861,14 @@ server.tool("memory_forget", "Delete a memory from OpenViking. Provide an exact 
     const top = candidates[0];
     if (candidates.length === 1 && clampScore(top.score) >= 0.85) {
         await client.deleteUri(top.uri);
-        return { content: [{ type: "text", text: `Deleted memory: ${top.uri}` }] };
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: formatMemoryForgetMessage(top.uri, top.score ?? undefined),
+                },
+            ],
+        };
     }
     // List candidates for confirmation
     const list = candidates
