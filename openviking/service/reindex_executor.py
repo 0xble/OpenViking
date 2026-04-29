@@ -32,6 +32,7 @@ from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.storage.transaction import LockContext, get_lock_manager
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_utils import (
     get_context_type_for_uri,
     get_resource_content_type,
@@ -425,6 +426,7 @@ class ReindexExecutor:
         self, *, uri: str, context_type: str, ctx: RequestContext
     ) -> None:
         processor = SemanticProcessor()
+        telemetry = get_current_telemetry()
         msg = SemanticMsg(
             uri=uri,
             context_type=context_type,
@@ -434,6 +436,7 @@ class ReindexExecutor:
             agent_id=ctx.user.agent_id,
             role=ctx.role.value,
             skip_vectorization=True,
+            operation=telemetry.operation,
         )
         await processor.on_dequeue({"data": msg.to_json()})
 

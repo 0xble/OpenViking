@@ -137,6 +137,7 @@ class SessionCompressor:
                     role=ctx.role.value,
                     changes=changes_dict,
                     telemetry_id=telemetry.telemetry_id,
+                    operation=telemetry.operation,
                 )
                 await semantic_queue.enqueue(msg)
                 if msg.telemetry_id:

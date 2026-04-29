@@ -300,6 +300,46 @@ async def test_semantic_processor_binds_registered_operation_telemetry(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_semantic_processor_binds_message_operation_when_collector_expired(monkeypatch):
+    processor = SemanticProcessor()
+
+    class FakeVikingFS:
+        async def ls(self, uri, ctx=None):
+            return []
+
+    class _FakeDagExecutor:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, root_uri):
+            telemetry = get_current_telemetry()
+            assert telemetry.operation == "resources.add_resource"
+            assert telemetry.enabled is False
+
+        def get_stats(self):
+            return DagStats()
+
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+        lambda: FakeVikingFS(),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        lambda **kwargs: _FakeDagExecutor(**kwargs),
+    )
+
+    await processor.on_dequeue(
+        SemanticMsg(
+            uri="viking://resources/demo",
+            context_type="resource",
+            recursive=False,
+            telemetry_id="expired-telemetry",
+            operation="resources.add_resource",
+        ).to_dict()
+    )
+
+
+@pytest.mark.asyncio
 async def test_semantic_processor_binds_metric_account_context(monkeypatch):
     processor = SemanticProcessor()
     ran = {"value": False}

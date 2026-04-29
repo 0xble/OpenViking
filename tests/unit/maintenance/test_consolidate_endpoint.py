@@ -12,10 +12,12 @@ from openviking.server.routers.maintenance import (
     MemoryMaintenanceRequest,
     _build_consolidator,
     _consolidation_payload,
+    _maintenance_operation,
     _maintenance_resource_id,
     _resolve_maintenance_scopes,
     _run_memory_maintenance_scopes,
 )
+from openviking.telemetry import get_current_telemetry
 
 
 def test_consolidate_request_defaults():
@@ -49,6 +51,13 @@ def test_consolidate_request_accepts_canaries_with_top_n():
     assert body.canaries is not None
     assert body.canaries[0].top_n == 1
     assert body.canaries[1].top_n == 5
+
+
+def test_maintenance_operation_binds_operation_for_usage_attribution():
+    with _maintenance_operation("maintenance.memory.run"):
+        telemetry = get_current_telemetry()
+        assert telemetry.operation == "maintenance.memory.run"
+        assert telemetry.enabled is False
 
 
 def test_memory_maintenance_request_defaults_to_dry_run():

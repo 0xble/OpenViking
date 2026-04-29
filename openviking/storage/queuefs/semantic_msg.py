@@ -38,6 +38,7 @@ class SemanticMsg:
     # Additional flags
     skip_vectorization: bool = False
     telemetry_id: str = ""
+    operation: str = ""
     target_uri: str = ""
     lifecycle_lock_handle_id: str = ""
     is_code_repo: bool = False
@@ -56,6 +57,7 @@ class SemanticMsg:
         role: str = "root",
         skip_vectorization: bool = False,
         telemetry_id: str = "",
+        operation: str = "",
         target_uri: str = "",
         lifecycle_lock_handle_id: str = "",
         is_code_repo: bool = False,
@@ -71,6 +73,7 @@ class SemanticMsg:
         self.role = role
         self.skip_vectorization = skip_vectorization
         self.telemetry_id = telemetry_id
+        self.operation = operation
         self.target_uri = target_uri
         self.lifecycle_lock_handle_id = lifecycle_lock_handle_id
         self.is_code_repo = is_code_repo
@@ -111,6 +114,7 @@ class SemanticMsg:
             role=data.get("role", "root"),
             skip_vectorization=data.get("skip_vectorization", False),
             telemetry_id=data.get("telemetry_id", ""),
+            operation=data.get("operation", ""),
             target_uri=data.get("target_uri", ""),
             lifecycle_lock_handle_id=data.get("lifecycle_lock_handle_id", ""),
             is_code_repo=data.get("is_code_repo", False),

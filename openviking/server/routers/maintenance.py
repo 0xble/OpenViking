@@ -5,6 +5,7 @@
 import asyncio
 import hashlib
 import json
+from contextlib import contextmanager
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Body
@@ -15,6 +16,7 @@ from openviking.server.auth import require_role
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ErrorInfo, Response
+from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -24,6 +26,13 @@ router = APIRouter(prefix="/api/v1/maintenance", tags=["maintenance"])
 
 CONSOLIDATE_TASK_TYPE = "memory_consolidation"
 MEMORY_MAINTENANCE_TASK_TYPE = "memory_maintenance"
+
+
+@contextmanager
+def _maintenance_operation(operation: str):
+    """Bind operation context for maintenance work that can outlive HTTP telemetry."""
+    with bind_telemetry(OperationTelemetry(operation=operation, enabled=False)):
+        yield
 
 
 class CanarySpec(BaseModel):
@@ -127,12 +136,13 @@ async def consolidate(
                 ),
             )
         consolidator = _build_consolidator(service, _ctx)
-        result = await consolidator.run(
-            uri,
-            _ctx,
-            dry_run=request.dry_run,
-            canaries=_canaries_from_request(request.canaries),
-        )
+        with _maintenance_operation("maintenance.consolidate"):
+            result = await consolidator.run(
+                uri,
+                _ctx,
+                dry_run=request.dry_run,
+                canaries=_canaries_from_request(request.canaries),
+            )
         return Response(status="ok", result=_consolidation_payload(result))
 
     task = tracker.create_if_no_running(
@@ -241,7 +251,8 @@ async def _background_consolidate_tracked(
     tracker.start(task_id)
     try:
         consolidator = _build_consolidator(service, ctx)
-        result = await consolidator.run(uri, ctx, dry_run=dry_run, canaries=canaries)
+        with _maintenance_operation("maintenance.consolidate"):
+            result = await consolidator.run(uri, ctx, dry_run=dry_run, canaries=canaries)
         tracker.complete(task_id, _consolidation_payload(result))
         logger.info("Background consolidation completed: uri=%s task=%s", uri, task_id)
     except Exception as exc:
@@ -306,14 +317,15 @@ async def run_memory_maintenance(
                     message="Selected memory scopes already have maintenance in progress",
                 ),
             )
-        runs = await _run_memory_maintenance_scopes(
-            service,
-            manager,
-            scope_uris,
-            request.dry_run,
-            _ctx,
-            _canaries_from_request(request.canaries),
-        )
+        with _maintenance_operation("maintenance.memory.run"):
+            runs = await _run_memory_maintenance_scopes(
+                service,
+                manager,
+                scope_uris,
+                request.dry_run,
+                _ctx,
+                _canaries_from_request(request.canaries),
+            )
         return Response(
             status="ok",
             result={"status": "completed", "dry_run": request.dry_run, "runs": runs},
@@ -434,14 +446,15 @@ async def _background_memory_maintenance_tracked(
     tracker.start(task_id)
     manager = _build_maintenance_manager(service)
     try:
-        runs = await _run_memory_maintenance_scopes(
-            service,
-            manager,
-            scope_uris,
-            dry_run,
-            ctx,
-            canaries,
-        )
+        with _maintenance_operation("maintenance.memory.run"):
+            runs = await _run_memory_maintenance_scopes(
+                service,
+                manager,
+                scope_uris,
+                dry_run,
+                ctx,
+                canaries,
+            )
         tracker.complete(
             task_id,
             {"status": "completed", "dry_run": dry_run, "runs": runs},

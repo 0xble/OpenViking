@@ -39,7 +39,12 @@ from openviking.storage.queuefs.semantic_cache import (
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import bind_telemetry, bind_telemetry_stage, resolve_telemetry
+from openviking.telemetry import (
+    OperationTelemetry,
+    bind_telemetry,
+    bind_telemetry_stage,
+    resolve_telemetry,
+)
 from openviking.telemetry.request_wait_tracker import get_request_wait_tracker
 from openviking.telemetry.span_models import create_root_span_attributes
 from openviking.utils.circuit_breaker import (
@@ -302,6 +307,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 self.report_success()
                 return None
             collector = resolve_telemetry(msg.telemetry_id)
+            if collector is None and msg.operation:
+                collector = OperationTelemetry(operation=msg.operation, enabled=False)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
             with telemetry_ctx:
                 root_attrs = create_root_span_attributes(
