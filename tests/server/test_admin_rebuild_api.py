@@ -149,12 +149,18 @@ async def test_reindex_memory_semantic_and_vectors_rebuilds_full_subtree(monkeyp
 
     seen = {"semantic": [], "vectors": []}
 
+    class FakeVikingFS:
+        async def stat(self, uri, ctx=None):
+            del uri, ctx
+            return {"isDir": True}
+
     async def fake_run_semantic_processor(self, *, uri, context_type, ctx):
         seen["semantic"].append((uri, context_type))
 
     async def fake_reindex_memory_vectors(self, *, uri, counters, ctx):
         seen["vectors"].append(uri)
 
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
     monkeypatch.setattr(ReindexExecutor, "_run_semantic_processor", fake_run_semantic_processor)
     monkeypatch.setattr(ReindexExecutor, "_reindex_memory_vectors", fake_reindex_memory_vectors)
 
@@ -174,6 +180,45 @@ async def test_reindex_memory_semantic_and_vectors_rebuilds_full_subtree(monkeyp
 
     assert seen["semantic"] == [("viking://user/default/memories", "memory")]
     assert seen["vectors"] == ["viking://user/default/memories"]
+
+
+@pytest.mark.asyncio
+async def test_reindex_memory_file_semantics_target_parent_directory(monkeypatch):
+    from openviking.service.reindex_executor import ReindexExecutor, _ReindexCounters
+
+    seen = {"semantic": [], "vectors": []}
+
+    class FakeVikingFS:
+        async def stat(self, uri, ctx=None):
+            del uri, ctx
+            return {"isDir": False}
+
+    async def fake_run_semantic_processor(self, *, uri, context_type, ctx):
+        seen["semantic"].append((uri, context_type))
+
+    async def fake_reindex_memory_vectors(self, *, uri, counters, ctx):
+        seen["vectors"].append(uri)
+
+    monkeypatch.setattr("openviking.service.reindex_executor.get_viking_fs", lambda: FakeVikingFS())
+    monkeypatch.setattr(ReindexExecutor, "_run_semantic_processor", fake_run_semantic_processor)
+    monkeypatch.setattr(ReindexExecutor, "_reindex_memory_vectors", fake_reindex_memory_vectors)
+
+    service = ReindexExecutor()
+    counters = _ReindexCounters()
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="test", user_id="alice", agent_id="default"),
+        role=Role.ROOT,
+    )
+
+    await service._reindex_memory(
+        uri="viking://user/default/memories/preferences/editor.md",
+        mode="semantic_and_vectors",
+        counters=counters,
+        ctx=ctx,
+    )
+
+    assert seen["semantic"] == [("viking://user/default/memories/preferences", "memory")]
+    assert seen["vectors"] == ["viking://user/default/memories/preferences/editor.md"]
 
 
 @pytest.mark.asyncio

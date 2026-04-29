@@ -196,10 +196,14 @@ async def reindex(
 ):
     """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
     service = get_service()
-    result = await service.reindex(
-        uri=body.uri,
-        mode=body.mode,
-        wait=body.wait,
-        ctx=ctx,
+    execution = await run_operation(
+        operation="content.reindex",
+        telemetry=False,
+        fn=lambda: service.reindex(
+            uri=body.uri,
+            mode=body.mode,
+            wait=body.wait,
+            ctx=ctx,
+        ),
     )
-    return Response(status="ok", result=result)
+    return Response(status="ok", result=execution.result)

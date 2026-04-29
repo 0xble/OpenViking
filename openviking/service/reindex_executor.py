@@ -417,10 +417,24 @@ class ReindexExecutor:
         ctx: RequestContext,
     ) -> None:
         if mode == "semantic_and_vectors":
-            await self._run_semantic_processor(uri=uri, context_type="memory", ctx=ctx)
+            semantic_uri = await self._memory_semantic_target(uri, ctx=ctx)
+            await self._run_semantic_processor(uri=semantic_uri, context_type="memory", ctx=ctx)
             await self._reindex_memory_vectors(uri=uri, counters=counters, ctx=ctx)
             return
         await self._reindex_memory_vectors(uri=uri, counters=counters, ctx=ctx)
+
+    async def _memory_semantic_target(self, uri: str, *, ctx: RequestContext) -> str:
+        """Return the memory directory whose summaries should be regenerated."""
+        try:
+            stat = await get_viking_fs().stat(uri, ctx=ctx)
+        except Exception:
+            return uri
+        if stat.get("isDir", stat.get("is_dir")):
+            return uri
+        parent_uri = VikingURI(uri.split("#", 1)[0]).parent
+        if parent_uri is None:
+            return uri
+        return parent_uri.uri
 
     async def _run_semantic_processor(
         self, *, uri: str, context_type: str, ctx: RequestContext

@@ -247,6 +247,26 @@ async def test_reindex_sync_success_returns_ok_payload(client, monkeypatch):
     assert body["result"]["mode"] == "semantic_and_vectors"
 
 
+async def test_reindex_sync_binds_operation_telemetry(client, monkeypatch):
+    seen = {}
+
+    class FakeService:
+        async def reindex(self, *, uri, mode, wait, ctx):
+            from openviking.telemetry import get_current_telemetry
+
+            del uri, mode, wait, ctx
+            seen["operation"] = get_current_telemetry().operation
+            return {"status": "completed"}
+
+    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
+    response = await client.post(
+        "/api/v1/content/reindex",
+        json={"uri": "viking://resources/demo", "mode": "semantic_and_vectors", "wait": True},
+    )
+    assert response.status_code == 200
+    assert seen == {"operation": "content.reindex"}
+
+
 async def test_reindex_async_returns_task_id(client, monkeypatch):
     class FakeService:
         async def reindex(self, *, uri, mode, wait, ctx):
