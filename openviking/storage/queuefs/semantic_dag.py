@@ -23,6 +23,8 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Legacy OpenViking Sync raw-session sidecars used this resource namespace.
+# New steady-state imports should keep transcripts under viking://session.
 _SESSION_IMPORT_PREFIX = "viking://resources/imported/sessions/"
 _SKIP_SUMMARY_FILENAMES = frozenset({"messages.jsonl"})
 
