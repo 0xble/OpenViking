@@ -10,7 +10,6 @@ exports.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import threading
@@ -21,6 +20,17 @@ from typing import Any
 
 _LOCK = threading.Lock()
 _DEFAULT_PATH = Path.home() / ".openviking" / "usage" / "vlm_calls.jsonl"
+
+if os.name == "nt":
+    import msvcrt
+
+    _fcntl = None
+else:
+    msvcrt = None
+    try:
+        import fcntl as _fcntl
+    except ImportError:
+        _fcntl = None
 
 
 def _ledger_path() -> Path:
@@ -58,13 +68,38 @@ def record_vlm_call(
     line = json.dumps(event, sort_keys=True, separators=(",", ":"))
     with _LOCK:
         with path.open("a", encoding="utf-8") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            _lock_file(handle)
             try:
                 handle.write(line + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
             finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                _unlock_file(handle)
+
+
+def _lock_file(handle: Any) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(handle.fileno(), _fcntl.LOCK_EX)
+        return
+    if msvcrt is not None:
+        _windows_lock(handle, msvcrt.LK_LOCK)
+
+
+def _unlock_file(handle: Any) -> None:
+    if _fcntl is not None:
+        _fcntl.flock(handle.fileno(), _fcntl.LOCK_UN)
+        return
+    if msvcrt is not None:
+        _windows_lock(handle, msvcrt.LK_UNLCK)
+
+
+def _windows_lock(handle: Any, mode: int) -> None:
+    position = handle.tell()
+    handle.seek(0)
+    try:
+        msvcrt.locking(handle.fileno(), mode, 1)
+    finally:
+        handle.seek(position)
 
 
 def read_vlm_usage_summary(*, now: datetime | None = None) -> dict[str, Any]:
