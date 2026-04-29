@@ -163,7 +163,7 @@ async def write(
     request: WriteContentRequest = Body(...),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Write text content to a file and refresh semantics/vectors.
+    """Write text content to a file directly without semantic/vector refresh.
 
     For memory URIs, creates the file (and missing parent dirs) when it does
     not yet exist; non-memory scopes require the target file to exist. The

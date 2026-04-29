@@ -168,7 +168,7 @@ openviking read viking://resources/docs/api.md
 
 ### write()
 
-修改一个已存在的文件，或在 `mode="create"` 时创建新文件，并自动刷新相关语义与向量。
+修改一个已存在的文件，或在 `mode="create"` 时创建新文件。该接口是直接存储写入，不获取语义生命周期锁、不等待队列、也不刷新语义/向量产物。
 
 **参数**
 
@@ -177,15 +177,17 @@ openviking read viking://resources/docs/api.md
 | uri | str | 是 | - | 已存在文件的 URI |
 | content | str | 是 | - | 要写入的新内容 |
 | mode | str | 否 | `replace` | `replace`、`append` 或 `create` |
-| wait | bool | 否 | `false` | 是否等待后台语义/向量刷新完成 |
-| timeout | float | 否 | `null` | 当 `wait=true` 时的超时时间（秒） |
+| wait | bool | 否 | `false` | 为保持兼容而接受，但会被忽略 |
+| timeout | float | 否 | `null` | 为保持兼容而接受，但会被忽略 |
 
 **说明**
 
-- `replace` 和 `append` 要求文件已存在；`create` 仅用于创建新文件，目标路径已存在时返回 `409 Conflict`。目录始终会被拒绝。
+- 对非 memory 作用域，`replace` 和 `append` 要求文件已存在。Memory URI 可通过 `replace` 创建；对不存在的 memory 文件执行 `append` 会按 `replace` 处理。
+- `create` 仅用于创建新文件，目标路径已存在时返回 `409 Conflict`。目录始终会被拒绝。
 - `create` 只允许以下文本类扩展名：`.md`、`.txt`、`.json`、`.yaml`、`.yml`、`.toml`、`.py`、`.js`、`.ts`。父目录会自动创建。
 - 不允许直接写入派生语义文件：`.abstract.md`、`.overview.md`、`.relations.json`。
-- 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`；写入后一定会自动刷新相关语义与向量。
+- 公共 API 已不再接受 `regenerate_semantics` 或 `revectorize`。
+- 直接写入会在内容持久化后返回；需要语义或向量保持新鲜时，请显式运行 reindex/refresh 流程。
 
 **Python SDK (Embedded / HTTP)**
 
@@ -194,7 +196,6 @@ result = client.write(
     "viking://resources/docs/api.md",
     "# Updated API\n\nFresh content.",
     mode="replace",
-    wait=True,
 )
 print(result["root_uri"])
 ```
@@ -212,8 +213,7 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
   -d '{
     "uri": "viking://resources/docs/api.md",
     "content": "# Updated API\n\nFresh content.",
-    "mode": "replace",
-    "wait": true
+    "mode": "replace"
   }'
 ```
 
@@ -221,8 +221,7 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
 
 ```bash
 openviking write viking://resources/docs/api.md \
-  --content "# Updated API\n\nFresh content." \
-  --wait
+  --content "# Updated API\n\nFresh content."
 ```
 
 **响应**
@@ -236,20 +235,12 @@ openviking write viking://resources/docs/api.md \
     "context_type": "resource",
     "mode": "replace",
     "written_bytes": 29,
-    "semantic_updated": true,
-    "vector_updated": true,
-    "queue_status": {
-      "Semantic": {
-        "processed": 1,
-        "error_count": 0,
-        "errors": []
-      },
-      "Embedding": {
-        "processed": 2,
-        "error_count": 0,
-        "errors": []
-      }
-    }
+    "content_updated": true,
+    "semantic_status": "not_refreshed",
+    "vector_status": "not_refreshed",
+    "semantic_updated": false,
+    "vector_updated": false,
+    "queue_status": null
   }
 }
 ```

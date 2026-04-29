@@ -266,7 +266,7 @@ class FSService:
         wait: bool = False,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
-        """Write file content and refresh semantics/vectors.
+        """Write file content directly without semantic/vector refresh.
 
         For memory URIs, creates the file (and missing parent dirs) when it
         does not yet exist. For other scopes, the target file must exist.

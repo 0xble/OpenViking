@@ -597,7 +597,7 @@ class AsyncHTTPClient(BaseClient):
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
-        """Write text content to an existing file and refresh semantics/vectors."""
+        """Write text content directly without semantic/vector refresh."""
         telemetry = self._validate_telemetry(telemetry)
         uri = VikingURI.normalize(uri)
         response = await self._http.post(

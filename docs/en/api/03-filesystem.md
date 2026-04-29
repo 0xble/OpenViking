@@ -20,7 +20,7 @@ Phase 1 intentionally keeps the scope narrow:
 Behavior notes:
 
 - Creating a new file through WebDAV triggers OpenViking semantic generation for that file path.
-- Replacing an existing file through WebDAV refreshes related semantics and vectors, same as `write()`.
+- Replacing an existing file through WebDAV updates storage immediately. Use explicit reindex flows when semantic/vector artifacts must be refreshed.
 - User-created dot-directories and dot-files remain visible unless they match one of the reserved internal filenames above.
 
 ## API Reference
@@ -168,7 +168,7 @@ openviking read viking://resources/docs/api.md
 
 ### write()
 
-Update an existing file, or create a new one when `mode="create"`, and automatically refresh related semantics and vectors.
+Update an existing file, or create a new one when `mode="create"`. This is a direct storage write and does not acquire semantic lifecycle locks, wait on queues, or refresh semantic/vector artifacts.
 
 **Parameters**
 
@@ -177,15 +177,17 @@ Update an existing file, or create a new one when `mode="create"`, and automatic
 | uri | str | Yes | - | Existing file URI |
 | content | str | Yes | - | New content to write |
 | mode | str | No | `replace` | `replace`, `append`, or `create` |
-| wait | bool | No | `false` | Wait for background semantic/vector refresh |
-| timeout | float | No | `null` | Timeout in seconds when `wait=true` |
+| wait | bool | No | `false` | Accepted for backward compatibility and ignored |
+| timeout | float | No | `null` | Accepted for backward compatibility and ignored |
 
 **Notes**
 
-- `replace` and `append` require the file to exist; `create` targets a new file and returns `409 Conflict` when the path already exists. Directories are always rejected.
+- `replace` and `append` require existing files for non-memory scopes. Memory URIs may be created with `replace`; `append` to a missing memory file is treated as `replace`.
+- `create` targets a new file and returns `409 Conflict` when the path already exists. Directories are always rejected.
 - `create` only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically.
 - Derived semantic files cannot be written directly: `.abstract.md`, `.overview.md`, `.relations.json`.
-- The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
+- The public API no longer accepts `regenerate_semantics` or `revectorize`.
+- Direct writes return after content is persisted. Run an explicit reindex/refresh flow when semantic or vector freshness is required.
 
 **Python SDK (Embedded / HTTP)**
 
@@ -194,7 +196,6 @@ result = client.write(
     "viking://resources/docs/api.md",
     "# Updated API\n\nFresh content.",
     mode="replace",
-    wait=True,
 )
 print(result["root_uri"])
 ```
@@ -212,8 +213,7 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
   -d '{
     "uri": "viking://resources/docs/api.md",
     "content": "# Updated API\n\nFresh content.",
-    "mode": "replace",
-    "wait": true
+    "mode": "replace"
   }'
 ```
 
@@ -221,8 +221,7 @@ curl -X POST "http://localhost:1933/api/v1/content/write" \
 
 ```bash
 openviking write viking://resources/docs/api.md \
-  --content "# Updated API\n\nFresh content." \
-  --wait
+  --content "# Updated API\n\nFresh content."
 ```
 
 **Response**
@@ -236,20 +235,12 @@ openviking write viking://resources/docs/api.md \
     "context_type": "resource",
     "mode": "replace",
     "written_bytes": 29,
-    "semantic_updated": true,
-    "vector_updated": true,
-    "queue_status": {
-      "Semantic": {
-        "processed": 1,
-        "error_count": 0,
-        "errors": []
-      },
-      "Embedding": {
-        "processed": 2,
-        "error_count": 0,
-        "errors": []
-      }
-    }
+    "content_updated": true,
+    "semantic_status": "not_refreshed",
+    "vector_status": "not_refreshed",
+    "semantic_updated": false,
+    "vector_updated": false,
+    "queue_status": null
   }
 }
 ```

@@ -214,7 +214,6 @@ function isMemoryUri(uri: string): boolean {
 class OpenVikingClient {
   private resolvedSpaceByScope: Partial<Record<ScopeName, string>> = {};
   private runtimeIdentity: { userId: string; agentId: string } | null = null;
-  private manualWriteQueues = new Map<string, Promise<void>>();
 
   constructor(
     private readonly baseUrl: string,
@@ -451,42 +450,7 @@ class OpenVikingClient {
     content: string,
     mode: "replace" | "append" = "replace",
   ): Promise<{ uri: string; created: boolean; mode: string; written_bytes: number }> {
-    return this.enqueueManualWrite(manualWriteRootKey(uri), () => this.writeContentWithRetry(uri, content, mode));
-  }
-
-  private async enqueueManualWrite<T>(rootKey: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.manualWriteQueues.get(rootKey) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const queued = previous.catch(() => undefined).then(() => current);
-    this.manualWriteQueues.set(rootKey, queued);
-
-    await previous.catch(() => undefined);
-    try {
-      return await operation();
-    } finally {
-      release();
-      if (this.manualWriteQueues.get(rootKey) === queued) {
-        this.manualWriteQueues.delete(rootKey);
-      }
-    }
-  }
-
-  private async writeContentWithRetry(
-    uri: string,
-    content: string,
-    mode: "replace" | "append",
-  ): Promise<{ uri: string; created: boolean; mode: string; written_bytes: number }> {
-    for (let attempt = 0; ; attempt += 1) {
-      try {
-        return await this.writeContentOnce(uri, content, mode);
-      } catch (error) {
-        if (!isBusyWriteError(error) || attempt >= MANUAL_WRITE_BUSY_RETRIES) throw error;
-        await sleep(busyRetryDelayMs(attempt));
-      }
-    }
+    return this.writeContentOnce(uri, content, mode);
   }
 
   private async writeContentOnce(
@@ -498,9 +462,8 @@ class OpenVikingClient {
       "/api/v1/content/write",
       {
         method: "POST",
-        body: JSON.stringify({ uri, content, mode, wait: false, timeout: MANUAL_WRITE_LOCK_TIMEOUT_SECONDS }),
+        body: JSON.stringify({ uri, content, mode, wait: false }),
       },
-      extendedWriteTimeoutMs(this.timeoutMs),
     );
     return {
       uri: String(r.uri),
@@ -745,33 +708,6 @@ function formatMemoryStoreMessage(opts: {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-const DEFAULT_WRITE_REQUEST_TIMEOUT_MS = 120_000;
-const MANUAL_WRITE_LOCK_TIMEOUT_SECONDS = 30;
-const MANUAL_WRITE_BUSY_RETRIES = 5;
-
-function extendedWriteTimeoutMs(timeoutMs: number): number {
-  return Math.max(timeoutMs, DEFAULT_WRITE_REQUEST_TIMEOUT_MS);
-}
-
-function manualWriteRootKey(uri: string): string {
-  const parts = uri.split("/");
-  const memoriesIdx = parts.indexOf("memories");
-  if (memoriesIdx < 0) return uri;
-  const tail = parts.slice(memoriesIdx + 1).filter(Boolean);
-  const end = tail.length <= 1 ? memoriesIdx + 1 : memoriesIdx + 2;
-  return parts.slice(0, end).join("/");
-}
-
-function isBusyWriteError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.includes("resource is busy") || message.includes("cannot be written now");
-}
-
-function busyRetryDelayMs(attempt: number): number {
-  const base = Math.min(1000 * 2 ** attempt, 5000);
-  return base + Math.floor(Math.random() * 250);
 }
 
 // ---------------------------------------------------------------------------

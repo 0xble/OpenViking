@@ -369,41 +369,7 @@ describe("OpenVikingClient resource and skill import", () => {
     await assertion;
   });
 
-  it("uses an extended request timeout for wait=true content writes", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((resolve, reject) => {
-      init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
-      setTimeout(() => {
-        resolve(okResponse({
-          uri: "viking://user/alice/memories/preferences/lease.md",
-          root_uri: "viking://user/alice/memories/preferences",
-          context_type: "memory",
-          mode: "replace",
-          created: true,
-          written_bytes: 42,
-          semantic_updated: true,
-          vector_updated: true,
-        }));
-      }, 20_000);
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-
-    const client = makeClient(15_000);
-    const pending = client.writeContent(
-      "viking://user/alice/memories/preferences/lease.md",
-      "lease terms",
-      { wait: true, timeout: 60 },
-    );
-
-    await vi.advanceTimersByTimeAsync(20_000);
-
-    await expect(pending).resolves.toMatchObject({
-      uri: "viking://user/alice/memories/preferences/lease.md",
-      created: true,
-    });
-  });
-
-  it("adds a default lock wait timeout without waiting on semantic queues", async () => {
+  it("sends direct content writes without lock timeout fields", async () => {
     const fetchMock = vi.fn().mockResolvedValue(okResponse({
       uri: "viking://user/alice/memories/preferences/lease.md",
       root_uri: "viking://user/alice/memories/preferences",
@@ -411,8 +377,12 @@ describe("OpenVikingClient resource and skill import", () => {
       mode: "replace",
       created: false,
       written_bytes: 42,
-      semantic_updated: true,
-      vector_updated: true,
+      content_updated: true,
+      semantic_status: "not_refreshed",
+      vector_status: "not_refreshed",
+      semantic_updated: false,
+      vector_updated: false,
+      queue_status: null,
     }));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -422,43 +392,26 @@ describe("OpenVikingClient resource and skill import", () => {
       "lease terms",
     );
 
-    expect(JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body))).toMatchObject({
+    const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body));
+    expect(body).toMatchObject({
       uri: "viking://user/alice/memories/preferences/lease.md",
-      timeout: 30,
       wait: false,
     });
+    expect(body).not.toHaveProperty("timeout");
   });
 
-  it("retries brief busy responses for manual content writes", async () => {
-    vi.useFakeTimers();
-    vi.spyOn(Math, "random").mockReturnValue(0);
+  it("does not retry busy responses for direct content writes", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(errorResponse("resource is busy and cannot be written now"))
-      .mockResolvedValueOnce(okResponse({
-        uri: "viking://user/alice/memories/preferences/lease.md",
-        root_uri: "viking://user/alice/memories/preferences",
-        context_type: "memory",
-        mode: "replace",
-        created: false,
-        written_bytes: 42,
-        semantic_updated: true,
-        vector_updated: true,
-      }));
+      .mockResolvedValueOnce(errorResponse("resource is busy and cannot be written now"));
     vi.stubGlobal("fetch", fetchMock);
 
     const client = makeClient();
-    const pending = client.writeContent(
+    await expect(client.writeContent(
       "viking://user/alice/memories/preferences/lease.md",
       "lease terms",
-    );
-
-    await vi.advanceTimersByTimeAsync(1000);
-
-    await expect(pending).resolves.toMatchObject({
-      uri: "viking://user/alice/memories/preferences/lease.md",
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    )).rejects.toThrow(/resource is busy/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps polling wait=true commit long enough for slow Phase 2 completion", async () => {

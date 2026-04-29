@@ -440,7 +440,7 @@ class AsyncOpenViking:
         timeout: Optional[float] = None,
         telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
-        """Write text content to an existing file and refresh semantics/vectors."""
+        """Write text content directly without semantic/vector refresh."""
         await self._ensure_initialized()
         return await self._client.write(
             uri=uri,

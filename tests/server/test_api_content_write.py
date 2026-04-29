@@ -64,6 +64,12 @@ async def test_write_replaces_existing_resource_file(client_with_resource):
     assert body["status"] == "ok"
     assert body["result"]["uri"] == file_uri
     assert body["result"]["mode"] == "replace"
+    assert body["result"]["content_updated"] is True
+    assert body["result"]["semantic_status"] == "not_refreshed"
+    assert body["result"]["vector_status"] == "not_refreshed"
+    assert body["result"]["semantic_updated"] is False
+    assert body["result"]["vector_updated"] is False
+    assert body["result"]["queue_status"] is None
 
     read_resp = await client.get("/api/v1/content/read", params={"uri": file_uri})
     assert read_resp.status_code == 200
@@ -119,8 +125,8 @@ async def test_write_rejects_removed_semantic_flags(client_with_resource):
 #
 # Memory URIs (viking://<scope>/<owner>/memories/...) can be created through
 # /content/write when the target file does not yet exist. Parent directories
-# are auto-created and the file is indexed via the standard memory-refresh
-# path, so the new memory is immediately discoverable via semantic retrieval.
+# are auto-created, but direct writes are storage-only and do not refresh
+# semantic or vector indexes.
 
 
 async def test_write_creates_new_memory_with_generated_filename(client):
@@ -141,6 +147,12 @@ async def test_write_creates_new_memory_with_generated_filename(client):
     assert result["context_type"] == "memory"
     assert result["created"] is True
     assert result["mode"] == "replace"
+    assert result["content_updated"] is True
+    assert result["semantic_status"] == "not_refreshed"
+    assert result["vector_status"] == "not_refreshed"
+    assert result["semantic_updated"] is False
+    assert result["vector_updated"] is False
+    assert result["queue_status"] is None
 
     read_resp = await client.get("/api/v1/content/read", params={"uri": uri})
     assert read_resp.status_code == 200
