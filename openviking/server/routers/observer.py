@@ -86,6 +86,16 @@ async def observer_lock(
     return Response(status="ok", result=_component_to_dict(component))
 
 
+@router.get("/transaction")
+async def observer_transaction(
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Get transaction lock system status."""
+    service = get_service()
+    component = service.debug.observer.lock
+    return Response(status="ok", result=_component_to_dict(component))
+
+
 @router.get("/retrieval")
 async def observer_retrieval(
     _ctx: RequestContext = Depends(get_request_context),

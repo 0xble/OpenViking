@@ -41,6 +41,17 @@ async def test_observer_models(client: httpx.AsyncClient):
     assert "is_healthy" in result
 
 
+async def test_observer_transaction_alias(client: httpx.AsyncClient):
+    """GET /api/v1/observer/transaction should return lock status."""
+    resp = await client.get("/api/v1/observer/transaction")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    assert result["name"] == "lock"
+    assert "is_healthy" in result
+
+
 async def test_observer_system(client: httpx.AsyncClient):
     """GET /api/v1/observer/system should return full system status."""
     resp = await client.get("/api/v1/observer/system")
