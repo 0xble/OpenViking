@@ -201,10 +201,12 @@ class VLMBase(ABC):
         try:
             from openviking.telemetry import get_current_telemetry, get_current_telemetry_stage
 
-            get_current_telemetry().add_token_usage(
+            current_telemetry = get_current_telemetry()
+            current_stage = get_current_telemetry_stage()
+            current_telemetry.add_token_usage(
                 prompt_tokens,
                 completion_tokens,
-                stage=get_current_telemetry_stage() or "vlm",
+                stage=current_stage or "vlm",
             )
         except Exception as e:
             # Telemetry must never break model inference.
@@ -237,6 +239,34 @@ class VLMBase(ABC):
             if logger.isEnabledFor(logging.DEBUG):
                 logger.debug(
                     "vlm.update_token_usage metrics emit failed provider=%s model_name=%s err=%s: %s",
+                    provider,
+                    model_name,
+                    type(e).__name__,
+                    e,
+                )
+
+        try:
+            from openviking.models.vlm.usage_ledger import record_vlm_call
+            from openviking.observability.context import get_root_observability_context
+            from openviking.telemetry import get_current_telemetry, get_current_telemetry_stage
+
+            root_context = get_root_observability_context()
+            current_telemetry = get_current_telemetry()
+            operation = getattr(current_telemetry, "operation", None)
+            record_vlm_call(
+                provider=str(provider),
+                model_name=str(model_name),
+                duration_seconds=float(duration_seconds),
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                account_id=root_context.account_id if root_context is not None else None,
+                operation=None if operation == "noop" else operation,
+                stage=get_current_telemetry_stage() or "vlm",
+            )
+        except Exception as e:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "vlm.update_token_usage usage ledger emit failed provider=%s model_name=%s err=%s: %s",
                     provider,
                     model_name,
                     type(e).__name__,

@@ -5,7 +5,7 @@ Debug Service - provides system status query and health check.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
@@ -29,6 +29,7 @@ class ComponentStatus:
     is_healthy: bool
     has_errors: bool
     status: str
+    data: Optional[Dict[str, Any]] = None
 
     def __str__(self) -> str:
         health = "healthy" if self.is_healthy else "unhealthy"
@@ -150,11 +151,19 @@ class ObserverService:
             embedding_instance=embedding_instance,
             rerank_instance=rerank_instance,
         )
+        usage_data = None
+        try:
+            from openviking.models.vlm.usage_ledger import read_vlm_usage_summary
+
+            usage_data = {"vlm_usage": read_vlm_usage_summary()}
+        except Exception:
+            usage_data = None
         return ComponentStatus(
             name="models",
             is_healthy=observer.is_healthy(),
             has_errors=observer.has_errors(),
             status=observer.get_status_table(),
+            data=usage_data,
         )
 
     @property

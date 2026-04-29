@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 import openviking.service.session_service as session_service_module
+from openviking.message import Message, TextPart
 from openviking.metrics.datasources.session import SessionLifecycleDataSource
 from openviking.server.identity import RequestContext, Role
 from openviking.service.session_service import SessionService
@@ -83,3 +84,28 @@ async def test_sessions_returns_empty_and_logs_when_storage_listing_fails(
 
     assert result == []
     debug.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_extract_skips_heartbeat_only_session(monkeypatch: pytest.MonkeyPatch):
+    compressor = Mock()
+    compressor.extract_long_term_memories = AsyncMock()
+    service = SessionService(viking_fs=Mock(), session_compressor=compressor)
+    ctx = _make_ctx()
+    session = Mock()
+    session.load_latest_archive_messages = AsyncMock(
+        return_value=[
+            Message(
+                id="m1",
+                role="user",
+                parts=[TextPart(text="[OPENCLAW_HEARTBEAT] HEARTBEAT_OK")],
+            )
+        ]
+    )
+
+    monkeypatch.setattr(service, "get", AsyncMock(return_value=session))
+
+    result = await service.extract("sess-heartbeat", ctx)
+
+    assert result == []
+    compressor.extract_long_term_memories.assert_not_awaited()

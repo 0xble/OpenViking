@@ -68,3 +68,22 @@ class TestGeminiCacheControlStripping:
             tools=tools,
         )
         assert kwargs["messages"] == [sentinel]
+
+    def test_flash_lite_defaults_to_lowest_reasoning_when_thinking_disabled(self):
+        vlm = _vlm("gemini-3.1-flash-lite-preview")
+        kwargs = vlm._build_kwargs(
+            model="gemini/gemini-3.1-flash-lite-preview",
+            messages=[{"role": "user", "content": "summarize"}],
+        )
+        assert kwargs["reasoning_effort"] == "disable"
+        assert "thinking" not in kwargs
+
+    def test_flash_lite_honors_explicit_thinking_opt_in(self):
+        vlm = _vlm("gemini-3.1-flash-lite-preview")
+        kwargs = vlm._build_kwargs(
+            model="gemini/gemini-3.1-flash-lite-preview",
+            messages=[{"role": "user", "content": "reason carefully"}],
+            thinking=True,
+        )
+        assert kwargs["thinking"] == {"type": "enabled"}
+        assert "reasoning_effort" not in kwargs

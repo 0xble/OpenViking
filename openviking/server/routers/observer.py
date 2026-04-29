@@ -23,12 +23,15 @@ router = APIRouter(prefix="/api/v1/observer", tags=["observer"])
 
 def _component_to_dict(component: ComponentStatus) -> dict:
     """Convert ComponentStatus to dict."""
-    return {
+    payload = {
         "name": component.name,
         "is_healthy": component.is_healthy,
         "has_errors": component.has_errors,
         "status": component.status,
     }
+    if component.data is not None:
+        payload["data"] = component.data
+    return payload
 
 
 def _system_to_dict(status: SystemStatus) -> dict:

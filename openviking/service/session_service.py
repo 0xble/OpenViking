@@ -321,6 +321,9 @@ class SessionService:
         messages = await session.load_latest_archive_messages()
         if not messages:
             messages = session.messages
+        if _is_synthetic_extract_session(messages):
+            self._record_lifecycle_metric("extract", "skip")
+            return []
 
         memories = await self._session_compressor.extract_long_term_memories(
             messages=messages,
@@ -330,3 +333,28 @@ class SessionService:
         )
         self._record_lifecycle_metric("extract", "ok")
         return memories
+
+
+def _is_synthetic_extract_session(messages: List[Any]) -> bool:
+    if not messages:
+        return True
+    user_messages = [message for message in messages if getattr(message, "role", "") == "user"]
+    text = "\n".join(str(getattr(message, "content", "") or "") for message in messages).strip()
+    normalized = text.lower()
+    if not user_messages:
+        return True
+    if len(normalized) <= 120 and any(
+        marker in normalized
+        for marker in (
+            "heartbeat_ok",
+            "[openclaw_heartbeat]",
+            "heartbeat",
+            "healthcheck",
+            "health check",
+        )
+    ):
+        return True
+    meaningful_user_text = "\n".join(
+        str(getattr(message, "content", "") or "").strip() for message in user_messages
+    ).strip()
+    return len(meaningful_user_text) < 8 and len(normalized) < 200

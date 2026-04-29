@@ -102,6 +102,11 @@ def detect_provider_by_model(model: str) -> str | None:
     return None
 
 
+def _is_gemini_flash_lite(model: str) -> bool:
+    normalized = model.lower()
+    return "gemini-3.1-flash-lite" in normalized or "gemini-3-flash-lite" in normalized
+
+
 class LiteLLMVLMProvider(VLMBase):
     """
     Multi-provider VLM implementation based on LiteLLM.
@@ -242,8 +247,14 @@ class LiteLLMVLMProvider(VLMBase):
             extra = kwargs.get("extra_body", {})
             extra["enable_thinking"] = effective_thinking
             kwargs["extra_body"] = extra
-        elif provider == "gemini" and effective_thinking:
-            kwargs["thinking"] = {"type": "enabled"}
+        elif provider == "gemini":
+            if effective_thinking:
+                kwargs["thinking"] = {"type": "enabled"}
+            elif _is_gemini_flash_lite(model):
+                # Gemini 3 Flash-Lite cannot fully disable thinking. Ask LiteLLM
+                # for the lowest reasoning path so background extraction and
+                # summarization do not silently run at the provider default.
+                kwargs["reasoning_effort"] = "disable"
 
         # Workaround for LiteLLM bug where Gemini context-caching path emits
         # both `cachedContent` and `toolConfig`, which Gemini rejects with a
