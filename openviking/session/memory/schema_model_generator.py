@@ -21,6 +21,13 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 
+def _field_default(field_name: str, field_type: FieldType) -> Any:
+    """Return a tolerant default for schema fields that are optional provenance."""
+    if field_name == "ranges" and field_type == FieldType.STRING:
+        return ""
+    return ...
+
+
 def to_pascal_case(s: str) -> str:
     """Convert snake_case or kebab-case to PascalCase."""
     # Replace non-alphanumeric with spaces
@@ -86,7 +93,10 @@ class SchemaModelGenerator:
                 # Immutable fields: only base type, required
                 field_definitions[field.name] = (
                     base_type,
-                    Field(..., description=field.description),
+                    Field(
+                        _field_default(field.name, field.field_type),
+                        description=field.description,
+                    ),
                 )
             else:
                 # Mutable fields: Union[base_type, patch_type], optional

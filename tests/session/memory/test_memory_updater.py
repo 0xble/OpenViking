@@ -13,6 +13,7 @@ from openviking.server.identity import AccountNamespacePolicy, RequestContext, R
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import (
+    ExtractContext,
     MemoryUpdater,
     MemoryUpdateResult,
 )
@@ -82,6 +83,14 @@ class TestMemoryUpdateResult:
 
 class TestMemoryUpdater:
     """Tests for MemoryUpdater."""
+
+    def test_extract_context_unknown_date_parts_for_missing_ranges(self):
+        """Missing provenance ranges should still render stable URI path segments."""
+        context = ExtractContext([])
+
+        assert context.get_year("") == "unknown"
+        assert context.get_month("") == "unknown"
+        assert context.get_day("") == "unknown"
 
     def test_create(self):
         """Test creating a MemoryUpdater."""

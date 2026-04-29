@@ -1616,3 +1616,51 @@ async def test_openviking_service_reindex_uses_default_root_context(monkeypatch)
     assert seen["ctx"].user.account_id == "acct"
     assert seen["ctx"].user.user_id == "alice"
     assert seen["ctx"].user.agent_id == "assistant"
+
+
+@pytest.mark.asyncio
+async def test_reindex_executor_defers_lock_conflicts(monkeypatch):
+    import openviking.service.reindex_executor as reindex_executor_module
+    from openviking.service.reindex_executor import ReindexExecutor
+    from openviking.storage.errors import LockAcquisitionError
+
+    class FakeVikingFS:
+        def _uri_to_path(self, uri, ctx=None):
+            return "/local/acct/resources/demo/file.txt"
+
+        async def stat(self, uri, ctx=None):
+            return {"isDir": False}
+
+    class FakeService:
+        viking_fs = FakeVikingFS()
+        vikingdb_manager = object()
+
+    class BusyLockContext:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            raise LockAcquisitionError("resource is busy")
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(reindex_executor_module, "get_service", lambda: FakeService())
+    monkeypatch.setattr(reindex_executor_module, "get_lock_manager", lambda: object())
+    monkeypatch.setattr(reindex_executor_module, "LockContext", BusyLockContext)
+
+    ctx = RequestContext(
+        user=UserIdentifier(account_id="acct", user_id="alice", agent_id="assistant"),
+        role=Role.ROOT,
+    )
+
+    result = await ReindexExecutor().execute(
+        uri="viking://resources/demo/file.txt",
+        mode="vectors_only",
+        wait=True,
+        ctx=ctx,
+    )
+
+    assert result["status"] == "deferred"
+    assert result["failed_records"] == 0
+    assert result["warnings"]

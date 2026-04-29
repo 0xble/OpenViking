@@ -22,6 +22,7 @@ from openviking.server.identity import RequestContext
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session.memory.utils.messages import parse_memory_file_with_fields
 from openviking.storage.collection_schemas import TextEmbeddingHandler
+from openviking.storage.errors import LockAcquisitionError
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.queuefs.semantic_cache import (
     MANAGED_HIDDEN_SEMANTIC_FILES,
@@ -258,40 +259,57 @@ class ReindexExecutor:
             async with LockContext(get_lock_manager(), [lock_path], lock_mode=lock_mode):
                 yield
 
-        async with _maybe_lock():
-            if object_type == "global_namespace":
-                await self._reindex_global_namespace(
-                    uri=uri,
-                    mode=mode,
-                    counters=counters,
-                    ctx=ctx,
-                )
-            elif object_type == "agent_namespace":
-                await self._reindex_agent_namespace(
-                    uri=uri,
-                    mode=mode,
-                    counters=counters,
-                    ctx=ctx,
-                )
-            elif object_type == "user_namespace":
-                await self._reindex_user_namespace(
-                    uri=uri,
-                    mode=mode,
-                    counters=counters,
-                    ctx=ctx,
-                )
-            elif object_type == "resource":
-                await self._reindex_resource(uri=uri, mode=mode, counters=counters, ctx=ctx)
-            elif object_type == "skill":
-                await self._reindex_skill(uri=uri, mode=mode, counters=counters, ctx=ctx)
-            elif object_type == "memory":
-                await self._reindex_memory(uri=uri, mode=mode, counters=counters, ctx=ctx)
-            else:
-                raise OpenVikingError(
-                    f"Unsupported reindex type: {object_type}",
-                    code="UNSUPPORTED_URI",
-                    details={"uri": uri},
-                )
+        try:
+            async with _maybe_lock():
+                if object_type == "global_namespace":
+                    await self._reindex_global_namespace(
+                        uri=uri,
+                        mode=mode,
+                        counters=counters,
+                        ctx=ctx,
+                    )
+                elif object_type == "agent_namespace":
+                    await self._reindex_agent_namespace(
+                        uri=uri,
+                        mode=mode,
+                        counters=counters,
+                        ctx=ctx,
+                    )
+                elif object_type == "user_namespace":
+                    await self._reindex_user_namespace(
+                        uri=uri,
+                        mode=mode,
+                        counters=counters,
+                        ctx=ctx,
+                    )
+                elif object_type == "resource":
+                    await self._reindex_resource(uri=uri, mode=mode, counters=counters, ctx=ctx)
+                elif object_type == "skill":
+                    await self._reindex_skill(uri=uri, mode=mode, counters=counters, ctx=ctx)
+                elif object_type == "memory":
+                    await self._reindex_memory(uri=uri, mode=mode, counters=counters, ctx=ctx)
+                else:
+                    raise OpenVikingError(
+                        f"Unsupported reindex type: {object_type}",
+                        code="UNSUPPORTED_URI",
+                        details={"uri": uri},
+                    )
+        except LockAcquisitionError as err:
+            warning = f"reindex lock unavailable for {uri}: {err}"
+            logger.warning(warning)
+            counters.warnings.append(warning)
+            return {
+                "status": "deferred",
+                "uri": uri,
+                "object_type": object_type,
+                "mode": mode,
+                "scanned_records": counters.scanned_records,
+                "rebuilt_records": counters.rebuilt_records,
+                "unsupported_records": counters.unsupported_records,
+                "failed_records": counters.failed_records,
+                "duration_ms": int((time.perf_counter() - started_at) * 1000),
+                "warnings": counters.warnings,
+            }
 
         return {
             "status": "completed",

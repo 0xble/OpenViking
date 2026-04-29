@@ -130,6 +130,25 @@ class TestSchemaModelGenerator:
         profile_model = models["profile"]
         assert "content" in profile_model.model_fields
 
+    def test_provenance_ranges_field_defaults_to_empty_string(self, real_registry):
+        """Missing message ranges should not discard otherwise valid memories."""
+        generator = SchemaModelGenerator(real_registry)
+        operations_model = generator.create_structured_operations_model()
+
+        operations = operations_model.model_validate(
+            {
+                "events": [
+                    {
+                        "event_name": "follow_up",
+                        "goal": "Track follow-up",
+                        "summary": "The user asked to track a follow-up.",
+                    }
+                ]
+            }
+        )
+
+        assert operations.events[0].ranges == ""
+
     def test_create_discriminated_union_model(self, real_registry):
         """Test creating the union model wrapper."""
         generator = SchemaModelGenerator(real_registry)
