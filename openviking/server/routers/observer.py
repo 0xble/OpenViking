@@ -29,8 +29,9 @@ def _component_to_dict(component: ComponentStatus) -> dict:
         "has_errors": component.has_errors,
         "status": component.status,
     }
-    if component.data is not None:
-        payload["data"] = component.data
+    data = getattr(component, "data", None)
+    if data is not None:
+        payload["data"] = data
     return payload
 
 
