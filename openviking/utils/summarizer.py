@@ -105,7 +105,7 @@ class Summarizer:
                     role=ctx.role.value,
                     skip_vectorization=skip_vectorization,
                     telemetry_id=telemetry.telemetry_id,
-                    operation=telemetry.operation,
+                    operation=getattr(telemetry, "operation", ""),
                     target_uri=target_uri if target_uri != source_uri else None,
                     lifecycle_lock_handle_id=lifecycle_lock_handle_id,
                     is_code_repo=kwargs.get("is_code_repo", False),
