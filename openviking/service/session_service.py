@@ -348,11 +348,13 @@ def _is_synthetic_extract_session(messages: List[Any]) -> bool:
         for marker in (
             "heartbeat_ok",
             "[openclaw_heartbeat]",
-            "heartbeat",
             "healthcheck",
             "health check",
+            "health_check",
         )
     ):
+        return True
+    if normalized in {"heartbeat", "ping"}:
         return True
     meaningful_user_text = "\n".join(
         str(getattr(message, "content", "") or "").strip() for message in user_messages

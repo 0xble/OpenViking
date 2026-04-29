@@ -75,7 +75,7 @@ class TestGeminiCacheControlStripping:
             model="gemini/gemini-3.1-flash-lite-preview",
             messages=[{"role": "user", "content": "summarize"}],
         )
-        assert kwargs["reasoning_effort"] == "disable"
+        assert kwargs["reasoning_effort"] == "minimal"
         assert "thinking" not in kwargs
 
     def test_flash_lite_honors_explicit_thinking_opt_in(self):

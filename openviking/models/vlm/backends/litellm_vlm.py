@@ -254,7 +254,7 @@ class LiteLLMVLMProvider(VLMBase):
                 # Gemini 3 Flash-Lite cannot fully disable thinking. Ask LiteLLM
                 # for the lowest reasoning path so background extraction and
                 # summarization do not silently run at the provider default.
-                kwargs["reasoning_effort"] = "disable"
+                kwargs["reasoning_effort"] = "minimal"
 
         # Workaround for LiteLLM bug where Gemini context-caching path emits
         # both `cachedContent` and `toolConfig`, which Gemini rejects with a
