@@ -10,6 +10,7 @@ exports.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import threading
@@ -57,7 +58,13 @@ def record_vlm_call(
     line = json.dumps(event, sort_keys=True, separators=(",", ":"))
     with _LOCK:
         with path.open("a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                handle.write(line + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def read_vlm_usage_summary(*, now: datetime | None = None) -> dict[str, Any]:
