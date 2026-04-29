@@ -357,7 +357,20 @@ def _is_synthetic_extract_session(messages: List[Any]) -> bool:
     if normalized in {"heartbeat", "ping"}:
         return True
     meaningful_user_text = "\n".join(_message_text(message) for message in user_messages).strip()
-    return len(meaningful_user_text) < 8 and len(normalized) < 200
+    if not meaningful_user_text:
+        return True
+    if len(meaningful_user_text) >= 8 or len(normalized) >= 200:
+        return False
+    assistant_text = "\n".join(
+        _message_text(message)
+        for message in messages
+        if getattr(message, "role", "") == "assistant"
+    ).strip()
+    has_short_prompt_signal = (
+        any(marker in meaningful_user_text for marker in ("?", "!", "."))
+        or len(meaningful_user_text.split()) > 1
+    )
+    return not has_short_prompt_signal and len(assistant_text) < 20
 
 
 def _message_text(value: Any) -> str:

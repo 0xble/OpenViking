@@ -117,3 +117,11 @@ def test_synthetic_session_detection_extracts_structured_text():
     message.content = [{"type": "text", "text": "Remember that I prefer concise reviews."}]
 
     assert session_service_module._is_synthetic_extract_session([message]) is False
+
+
+def test_synthetic_session_detection_keeps_short_real_prompts():
+    message = Mock()
+    message.role = "user"
+    message.content = [{"type": "text", "text": "Help?"}]
+
+    assert session_service_module._is_synthetic_extract_session([message]) is False
