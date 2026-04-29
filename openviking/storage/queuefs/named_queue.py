@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 import abc
+import contextvars
 import json
 import threading
 from dataclasses import dataclass, field
@@ -13,6 +14,19 @@ if TYPE_CHECKING:
     from openviking.pyagfs import AGFSClient
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class _ProcessToken:
+    """Tracks terminal status reporting for one dequeued message."""
+
+    queue_id: int
+    is_reported: bool = False
+
+
+_current_process_token: contextvars.ContextVar[Optional[_ProcessToken]] = contextvars.ContextVar(
+    "openviking_queue_process_token", default=None
+)
 
 
 @dataclass
@@ -134,15 +148,54 @@ class NamedQueue:
                 on_error=self._on_process_error,
             )
 
-    def _on_dequeue_start(self) -> None:
+    def _on_dequeue_start(self) -> _ProcessToken:
         """Called on dequeue."""
         with self._lock:
             self._in_progress += 1
+        return _ProcessToken(queue_id=id(self))
+
+    def _mark_current_process_reported(self) -> bool:
+        """Return False when the current message already reported a terminal status."""
+        token = _current_process_token.get()
+        if token is None or token.queue_id != id(self):
+            return True
+        if token.is_reported:
+            return False
+        token.is_reported = True
+        return True
+
+    def _finish_process_if_unreported(
+        self,
+        token: _ProcessToken,
+        error_msg: Optional[str] = None,
+        data: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Close status accounting when a handler returns without reporting."""
+        if token.is_reported:
+            return
+        token.is_reported = True
+        with self._lock:
+            self._in_progress = max(0, self._in_progress - 1)
+            if error_msg is None:
+                self._processed += 1
+                return
+            self._error_count += 1
+            self._errors.append(
+                QueueError(
+                    timestamp=datetime.now(),
+                    message=error_msg,
+                    data=data,
+                )
+            )
+            if len(self._errors) > self.MAX_ERRORS:
+                self._errors = self._errors[-self.MAX_ERRORS :]
 
     def _on_process_success(self) -> None:
         """Called on processing success."""
+        if not self._mark_current_process_reported():
+            return
         with self._lock:
-            self._in_progress -= 1
+            self._in_progress = max(0, self._in_progress - 1)
             self._processed += 1
 
     def _on_process_requeue(self) -> None:
@@ -152,8 +205,10 @@ class NamedQueue:
 
     def _on_process_error(self, error_msg: str, data: Optional[Dict[str, Any]] = None) -> None:
         """Called on processing failure."""
+        if not self._mark_current_process_reported():
+            return
         with self._lock:
-            self._in_progress -= 1
+            self._in_progress = max(0, self._in_progress - 1)
             self._error_count += 1
             self._errors.append(
                 QueueError(
@@ -249,6 +304,19 @@ class NamedQueue:
             raw = str(content).encode("utf-8")
         return json.loads(raw.decode("utf-8"))
 
+    async def _run_dequeue_handler(
+        self,
+        data: Optional[Dict[str, Any]],
+        token: _ProcessToken,
+    ) -> Optional[Dict[str, Any]]:
+        context_token = _current_process_token.set(token)
+        try:
+            if self._dequeue_handler:
+                return await self._dequeue_handler.on_dequeue(data)
+            return data
+        finally:
+            _current_process_token.reset(context_token)
+
     async def dequeue(self) -> Optional[Dict[str, Any]]:
         """Dequeue a message, process it, then ack to confirm deletion.
 
@@ -261,6 +329,8 @@ class NamedQueue:
         on the next startup resets the message back to 'pending' for retry.
         """
         await self._ensure_initialized()
+        process_token: Optional[_ProcessToken] = None
+        data: Optional[Dict[str, Any]] = None
         try:
             data = self._read_queue_message()
             if data is None:
@@ -268,14 +338,17 @@ class NamedQueue:
             # Capture message ID before passing data to handler (handler may modify it)
             msg_id = data.get("id", "") if isinstance(data, dict) else ""
             if self._dequeue_handler:
-                self._on_dequeue_start()
-                data = await self._dequeue_handler.on_dequeue(data)
+                process_token = self._on_dequeue_start()
+                data = await self._run_dequeue_handler(data, process_token)
+                self._finish_process_if_unreported(process_token)
             # Ack unconditionally after handler returns (success or handled error).
             # If on_dequeue raises, the exception propagates and ack is skipped —
             # the message will be recovered on next startup.
             await self.ack(msg_id)
             return data
         except Exception as e:
+            if process_token is not None:
+                self._finish_process_if_unreported(process_token, str(e), data)
             logger.debug(f"[NamedQueue] Dequeue failed for {self.name}: {e}")
             return None
 
@@ -288,13 +361,19 @@ class NamedQueue:
             logger.debug(f"[NamedQueue] Dequeue raw failed for {self.name}: {e}")
             return None
 
-    async def process_dequeued(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def process_dequeued(
+        self,
+        data: Dict[str, Any],
+        process_token: Optional[_ProcessToken] = None,
+    ) -> Optional[Dict[str, Any]]:
         """Invoke the dequeue handler on already-fetched raw data.
 
         NOTE: caller must call _on_dequeue_start() before invoking this method
         so that in_progress is incremented atomically with the dequeue.
         """
         if self._dequeue_handler:
+            if process_token is not None:
+                return await self._run_dequeue_handler(data, process_token)
             return await self._dequeue_handler.on_dequeue(data)
         return data
 

@@ -208,17 +208,18 @@ class QueueManager:
         sem = asyncio.Semaphore(max_concurrent)
         active_tasks: Set[asyncio.Task] = set()
 
-        async def process_one(data: Dict[str, Any]) -> None:
+        async def process_one(data: Dict[str, Any], process_token: Any) -> None:
             async with sem:
                 msg_id = data.get("id", "") if isinstance(data, dict) else ""
                 try:
-                    await queue.process_dequeued(data)
+                    await queue.process_dequeued(data, process_token)
+                    queue._finish_process_if_unreported(process_token)
                     # Ack after successful processing (delete from persistent storage).
                     await queue.ack(msg_id)
                 except Exception as e:
                     # Handler did not call report_error; decrement in_progress manually.
                     # Do NOT ack — let RecoverStale re-queue on next startup.
-                    queue._on_process_error(str(e), data)
+                    queue._finish_process_if_unreported(process_token, str(e), data)
                     logger.error(f"[QueueManager] Concurrent worker error for {queue.name}: {e}")
 
         while not stop_event.is_set():
@@ -238,8 +239,8 @@ class QueueManager:
                     break
                 # Increment before task creation to close the race window where
                 # size=0 and in_progress=0 between dequeue_raw() and task execution.
-                queue._on_dequeue_start()
-                task = asyncio.create_task(process_one(data))
+                process_token = queue._on_dequeue_start()
+                task = asyncio.create_task(process_one(data, process_token))
                 active_tasks.add(task)
                 logger.debug(
                     f"[QueueManager] Dispatched concurrent task for {queue.name} "
