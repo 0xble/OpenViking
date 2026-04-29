@@ -339,7 +339,7 @@ def _is_synthetic_extract_session(messages: List[Any]) -> bool:
     if not messages:
         return True
     user_messages = [message for message in messages if getattr(message, "role", "") == "user"]
-    text = "\n".join(str(getattr(message, "content", "") or "") for message in messages).strip()
+    text = "\n".join(_message_text(message) for message in messages).strip()
     normalized = text.lower()
     if not user_messages:
         return True
@@ -356,7 +356,35 @@ def _is_synthetic_extract_session(messages: List[Any]) -> bool:
         return True
     if normalized in {"heartbeat", "ping"}:
         return True
-    meaningful_user_text = "\n".join(
-        str(getattr(message, "content", "") or "").strip() for message in user_messages
-    ).strip()
+    meaningful_user_text = "\n".join(_message_text(message) for message in user_messages).strip()
     return len(meaningful_user_text) < 8 and len(normalized) < 200
+
+
+def _message_text(value: Any) -> str:
+    content = getattr(value, "content", None)
+    if content:
+        extracted = _text_from_value(content)
+        if extracted:
+            return extracted
+    parts = getattr(value, "parts", None)
+    return _text_from_value(parts)
+
+
+def _text_from_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        return " ".join(filter(None, (_text_from_value(item) for item in value))).strip()
+    if isinstance(value, dict):
+        if value.get("type") == "text" and value.get("text"):
+            return str(value["text"]).strip()
+        for key in ("text", "content"):
+            if value.get(key):
+                return _text_from_value(value[key])
+        return ""
+    text = getattr(value, "text", None)
+    if text:
+        return str(text).strip()
+    return ""

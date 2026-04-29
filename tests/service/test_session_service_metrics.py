@@ -109,3 +109,11 @@ async def test_extract_skips_heartbeat_only_session(monkeypatch: pytest.MonkeyPa
 
     assert result == []
     compressor.extract_long_term_memories.assert_not_awaited()
+
+
+def test_synthetic_session_detection_extracts_structured_text():
+    message = Mock()
+    message.role = "user"
+    message.content = [{"type": "text", "text": "Remember that I prefer concise reviews."}]
+
+    assert session_service_module._is_synthetic_extract_session([message]) is False
