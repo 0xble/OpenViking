@@ -530,6 +530,69 @@ function totalCommitMemories(r: CommitSessionResult): number {
   return Object.values(m).reduce((sum, n) => sum + (n ?? 0), 0);
 }
 
+const MEMORY_WRITE_BODY_MAX_CHARS = 500;
+
+function singularizeMemoryBucket(plural: string): string {
+  if (plural.endsWith("ies")) return plural.replace(/ies$/, "y");
+  if (plural.endsWith("s")) return plural.replace(/s$/, "");
+  return plural;
+}
+
+function humanBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  return `${(n / 1024).toFixed(1)} KB`;
+}
+
+function bucketSingularFromUri(uri: string): string {
+  const match = uri.match(/\/memories\/([^/]+)/);
+  if (!match) return "memory";
+  const segment = match[1]!.replace(/\.md$/, "");
+  if (segment === "profile") return "profile";
+  return singularizeMemoryBucket(segment);
+}
+
+function prettyTitleFromUri(uri: string): string {
+  const stem = uri.split("/").pop()?.replace(/\.md$/, "") ?? "";
+  if (!stem || stem.startsWith("mem_")) return "(unnamed)";
+  return stem
+    .replace(/[_-]+/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function quoteMemoryBody(text: string, max: number): string {
+  if (!text) return "";
+  const truncated = text.length > max;
+  const shown = truncated ? text.slice(0, max).trimEnd() : text;
+  const lines = shown.split("\n").map((line) => `> ${line}`).join("\n");
+  if (truncated) {
+    return `${lines}\n[showing first ${max} of ${text.length.toLocaleString()} chars]`;
+  }
+  return lines;
+}
+
+function formatMemoryWriteMessage(opts: {
+  uri: string;
+  content: string;
+  mode: string;
+  created: boolean;
+  writtenBytes: number;
+}): string {
+  const verb = opts.created ? "Created" : opts.mode === "append" ? "Appended to" : "Updated";
+  const bucket = bucketSingularFromUri(opts.uri);
+  const title = prettyTitleFromUri(opts.uri);
+  const sizeStr = humanBytes(opts.writtenBytes);
+  const titlePart = title === "(unnamed)" ? "(unnamed)" : `"${title}"`;
+  const header =
+    bucket === "profile"
+      ? `${verb} profile memory (${sizeStr}).`
+      : `${verb} ${bucket} memory ${titlePart} (${sizeStr}).`;
+  const body = quoteMemoryBody(opts.content, MEMORY_WRITE_BODY_MAX_CHARS);
+  return body ? `${header}\n${opts.uri}\n\n${body}` : `${header}\n${opts.uri}`;
+}
+
 const contextEnginePlugin = {
   id: "openviking",
   name: "Context Engine (OpenViking)",
@@ -1735,8 +1798,15 @@ const contextEnginePlugin = {
             api.logger.info?.(
               `openviking: memory_write ${verb} ${result.uri} (${result.written_bytes} bytes)`,
             );
+            const message = formatMemoryWriteMessage({
+              uri: result.uri,
+              content,
+              mode: result.mode,
+              created: result.created ?? false,
+              writtenBytes: result.written_bytes,
+            });
             return {
-              content: [{ type: "text", text: `${verb} ${result.uri}` }],
+              content: [{ type: "text", text: message }],
               details: {
                 action: "stored",
                 uri: result.uri,

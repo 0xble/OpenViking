@@ -202,6 +202,54 @@ describe("Tool: memory_write (behavioral)", () => {
     expect(tool.description).toContain("verbatim");
   });
 
+  it("returns readable write text while preserving structured details", async () => {
+    const uri = "viking://user/brianle/memories/preferences/coffee_pref.md";
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith("/api/v1/content/write")) {
+        return okResponse({
+          uri,
+          root_uri: "viking://user/brianle/memories/preferences",
+          context_type: "memory",
+          mode: "replace",
+          created: true,
+          written_bytes: 37,
+          content_updated: true,
+          semantic_status: "not_refreshed",
+          vector_status: "not_refreshed",
+          semantic_updated: false,
+          vector_updated: false,
+          queue_status: null,
+        });
+      }
+      return okResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { factoryTools, api } = setupPlugin();
+    contextEnginePlugin.register(api as any);
+    const factory = factoryTools.get("memory_write");
+    expect(factory).toBeDefined();
+    const tool = factory!({ sessionId: "test-session", sessionKey: "sk" });
+
+    const result = await tool.execute("tc-memory-write", {
+      uri,
+      content: "Brian prefers cold brew over hot coffee.",
+    }) as ToolResult;
+
+    const text = result.content[0]!.text;
+    expect(text).toContain('Created preference memory "Coffee Pref" (37 B).');
+    expect(text).toContain(uri);
+    expect(text).toContain("> Brian prefers cold brew over hot coffee.");
+    expect(text).not.toMatch(/^(created|updated|wrote) viking:\/\//);
+    expect(result.details).toMatchObject({
+      action: "stored",
+      uri,
+      created: true,
+      mode: "replace",
+      writtenBytes: 37,
+    });
+  });
+
   it("uses requesterSenderId to populate role_id for user writes", async () => {
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.endsWith("/api/v1/system/status")) {
