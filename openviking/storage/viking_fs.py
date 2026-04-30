@@ -51,11 +51,12 @@ from openviking_cli.utils.uri import VikingURI
 if TYPE_CHECKING:
     from openviking.storage.transaction.lock_handle import LockHandle
     from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-    from openviking_cli.utils.config import RerankConfig
+    from openviking_cli.utils.config import RerankConfig, RetrievalConfig
 
 logger = get_logger(__name__)
 
 RESOURCE_METADATA_FILENAME = ".resource.metadata.json"
+_DEFAULT_GREP_FILE_CONCURRENCY = 6
 
 
 def _ensure_non_empty_search_query(query: str) -> None:
@@ -129,6 +130,7 @@ def init_viking_fs(
     agfs: Any,
     query_embedder: Optional[Any] = None,
     rerank_config: Optional["RerankConfig"] = None,
+    retrieval_config: Optional["RetrievalConfig"] = None,
     vector_store: Optional["VikingVectorIndexBackend"] = None,
     timeout: int = 10,
     enable_recorder: bool = False,
@@ -141,6 +143,7 @@ def init_viking_fs(
         agfs_config: AGFS configuration object for backend settings
         query_embedder: Embedder instance
         rerank_config: Rerank configuration
+        retrieval_config: Retrieval ranking configuration
         vector_store: Vector store instance
         enable_recorder: Whether to enable IO recording
         encryptor: FileEncryptor instance for encryption/decryption
@@ -151,6 +154,7 @@ def init_viking_fs(
         agfs=agfs,
         query_embedder=query_embedder,
         rerank_config=rerank_config,
+        retrieval_config=retrieval_config,
         vector_store=vector_store,
         encryptor=encryptor,
     )
@@ -222,6 +226,7 @@ class VikingFS:
         agfs: Any,
         query_embedder: Optional[Any] = None,
         rerank_config: Optional["RerankConfig"] = None,
+        retrieval_config: Optional["RetrievalConfig"] = None,
         vector_store: Optional["VikingVectorIndexBackend"] = None,
         timeout: int = 10,
         encryptor: Optional[Any] = None,
@@ -229,6 +234,7 @@ class VikingFS:
         self.agfs = agfs
         self.query_embedder = query_embedder
         self.rerank_config = rerank_config
+        self.retrieval_config = retrieval_config
         self.vector_store = vector_store
         self._encryptor = encryptor
         self._resource_metadata_locks: dict[str, asyncio.Lock] = {}
@@ -675,15 +681,14 @@ class VikingFS:
             self._ensure_access(excluded_prefix, ctx)
 
         results = []
+        candidate_files: list[str] = []
         files_scanned = 0
         scan_limit = max(node_limit * 1000, node_limit) if node_limit else None
         scan_truncated = False
 
         async def search_recursive(current_uri: str, current_depth: int):
-            nonlocal files_scanned, scan_truncated
-            if node_limit and len(results) >= node_limit:
-                return
-            if scan_limit and files_scanned >= scan_limit:
+            nonlocal scan_truncated
+            if scan_limit and len(candidate_files) >= scan_limit:
                 scan_truncated = True
                 return
 
@@ -706,9 +711,7 @@ class VikingFS:
                 return
 
             for entry in entries:
-                if node_limit and len(results) >= node_limit:
-                    break
-                if scan_limit and files_scanned >= scan_limit:
+                if scan_limit and len(candidate_files) >= scan_limit:
                     scan_truncated = True
                     break
 
@@ -724,28 +727,49 @@ class VikingFS:
                 else:
                     if not matches_entry_time_bounds(entry, since_dt, until_dt):
                         continue
-                    files_scanned += 1
-                    try:
-                        content = await self.read(entry_uri, ctx=ctx)
-                        if isinstance(content, bytes):
-                            content = content.decode("utf-8", errors="replace")
+                    candidate_files.append(entry_uri)
 
-                        lines = content.split("\n")
-                        for line_num, line in enumerate(lines, 1):
-                            if compiled_pattern.search(line):
-                                results.append(
-                                    {
-                                        "line": line_num,
-                                        "uri": entry_uri,
-                                        "content": line,
-                                    }
-                                )
-                                if node_limit and len(results) >= node_limit:
-                                    break
-                    except Exception as e:
-                        logger.debug(f"Failed to grep {entry_uri}: {e}")
+        async def read_candidate(entry_uri: str) -> tuple[str, Optional[str]]:
+            try:
+                content = await asyncio.to_thread(
+                    self.agfs.read, self._uri_to_path(entry_uri, ctx=ctx), 0, -1
+                )
+                if isinstance(content, bytes):
+                    raw = content
+                elif content is not None and hasattr(content, "content"):
+                    raw = content.content
+                else:
+                    raw = b""
+                if self._encryptor:
+                    raw = await self._decrypt_content(raw, ctx=ctx)
+                return entry_uri, raw.decode("utf-8", errors="replace")
+            except Exception as e:
+                logger.debug(f"Failed to grep {entry_uri}: {e}")
+                return entry_uri, None
 
         await search_recursive(uri, 0)
+        for start in range(0, len(candidate_files), _DEFAULT_GREP_FILE_CONCURRENCY):
+            if node_limit and len(results) >= node_limit:
+                break
+            batch = candidate_files[start : start + _DEFAULT_GREP_FILE_CONCURRENCY]
+            read_results = await asyncio.gather(*(read_candidate(entry_uri) for entry_uri in batch))
+            for entry_uri, content in read_results:
+                if node_limit and len(results) >= node_limit:
+                    break
+                if content is None:
+                    continue
+                files_scanned += 1
+                for line_num, line in enumerate(content.split("\n"), 1):
+                    if compiled_pattern.search(line):
+                        results.append(
+                            {
+                                "line": line_num,
+                                "uri": entry_uri,
+                                "content": line,
+                            }
+                        )
+                        if node_limit and len(results) >= node_limit:
+                            break
 
         return {
             "matches": results,
@@ -1126,6 +1150,7 @@ class VikingFS:
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
+            retrieval_config=self.retrieval_config,
         )
 
         # Infer context_type (None = search all types)
@@ -1287,6 +1312,7 @@ class VikingFS:
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
+            retrieval_config=self.retrieval_config,
         )
 
         async def _execute(tq: TypedQuery):

@@ -38,6 +38,7 @@ from .parser_config import (
 )
 from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
+from .retrieval_config import RetrievalConfig
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig
 from .vlm_config import VLMConfig
@@ -63,6 +64,11 @@ class OpenVikingConfig(BaseModel):
     vlm: VLMConfig = Field(default_factory=VLMConfig, description="VLM configuration")
 
     rerank: RerankConfig = Field(default_factory=RerankConfig, description="Rerank configuration")
+
+    retrieval: RetrievalConfig = Field(
+        default_factory=RetrievalConfig,
+        description="Retrieval ranking configuration",
+    )
 
     # Encryption configuration
     encryption: EncryptionConfig = Field(
@@ -133,16 +139,6 @@ class OpenVikingConfig(BaseModel):
         description=(
             "Fallback language used by memory extraction and semantic processing when dominant "
             "user language cannot be confidently detected"
-        ),
-    )
-
-    output_language_override: str = Field(
-        default="",
-        description=(
-            "When non-empty, bypasses content-based language detection for memory extraction "
-            "and semantic summaries/overviews and forces this language instead. Use when your "
-            "corpus is mixed-language but you want summaries pinned to a single language "
-            "(e.g., 'en', 'zh-CN', 'ja'). Leave empty (default) to auto-detect per content."
         ),
     )
 

@@ -6,7 +6,7 @@ Synchronous OpenViking client implementation.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
     from openviking.session import Session
@@ -196,7 +196,7 @@ class SyncOpenViking:
     def search(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         session: Optional["Session"] = None,
         session_id: Optional[str] = None,
         limit: int = 10,
@@ -227,7 +227,7 @@ class SyncOpenViking:
     def find(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,

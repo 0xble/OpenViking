@@ -69,6 +69,14 @@ def test_local_build_gate_smoke_tests_ragfs_binding_import():
     assert "from openviking.pyagfs import get_binding_client" in check_script
 
 
+def test_setup_extracts_windows_ragfs_python_pyd_from_maturin_wheel():
+    setup_py = _read_text("setup.py")
+
+    assert 'basename == "ragfs_python.pyd"' in setup_py
+    assert 'basename.startswith("ragfs_python.abi3.")' in setup_py
+    assert "stable-ABI native extension" in setup_py
+
+
 def test_windows_abi3_backend_uses_stable_python_linkage():
     setup_py = _read_text("setup.py")
     src_cmake = _read_text("src/CMakeLists.txt")

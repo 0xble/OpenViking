@@ -242,7 +242,7 @@ class SyncHTTPClient:
     def search(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         session: Optional[Any] = None,
         session_id: Optional[str] = None,
         limit: int = 10,
@@ -275,7 +275,7 @@ class SyncHTTPClient:
     def find(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         limit: int = 10,
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,

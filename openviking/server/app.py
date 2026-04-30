@@ -22,6 +22,7 @@ from openviking.server.config import (
 from openviking.server.dependencies import set_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import AuthMode
+from openviking.server.mcp_endpoint import create_mcp_app, mcp_lifespan
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.routers import (
     admin_router,
@@ -134,7 +135,8 @@ def create_app(
         tracer_module.init_tracer_from_server_config(config)
         init_otel_log_handler_from_server_config(config)
 
-        yield
+        async with mcp_lifespan():
+            yield
 
         # Cleanup
         from openviking.metrics.global_api import shutdown_metrics_async
@@ -301,5 +303,6 @@ def create_app(
     app.include_router(tasks_router)
     app.include_router(webdav_router)
     app.include_router(bot_router, prefix="/bot/v1")
+    app.mount("/mcp", create_mcp_app())
 
     return app

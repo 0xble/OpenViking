@@ -41,7 +41,8 @@ export type BuildMemoryLinesOptions = {
 }
 
 export type BuildMemoryLinesWithBudgetOptions = BuildMemoryLinesOptions & {
-  recallTokenBudget: number;
+  recallMaxInjectedChars?: number;
+  recallTokenBudget?: number;
 }
 
 export type RecallPromptSectionResult = {
@@ -150,7 +151,9 @@ export async function buildMemoryLinesWithBudget(
   includedMemories: FindResultItem[];
   estimatedTokens: number;
 }> {
-  let budgetRemaining = options.recallTokenBudget;
+  const shouldUseCharBudget = typeof options.recallMaxInjectedChars === "number";
+  let budgetRemaining =
+    options.recallMaxInjectedChars ?? options.recallTokenBudget ?? Infinity;
   const lines: string[] = [];
   const includedMemories: FindResultItem[] = [];
   let totalTokens = 0;
@@ -164,14 +167,18 @@ export async function buildMemoryLinesWithBudget(
     const line = `- [${item.category ?? "memory"}] ${content}`;
     const lineTokens = estimateTokenCount(line);
 
-    if (lineTokens > budgetRemaining && lines.length > 0) {
+    if (shouldUseCharBudget) {
+      if (line.length > budgetRemaining) {
+        continue;
+      }
+    } else if (lineTokens > budgetRemaining && lines.length > 0) {
       break;
     }
 
     lines.push(line);
     includedMemories.push(item);
     totalTokens += lineTokens;
-    budgetRemaining -= lineTokens;
+    budgetRemaining -= shouldUseCharBudget ? line.length : lineTokens;
   }
 
   return { lines, includedMemories, estimatedTokens: totalTokens };

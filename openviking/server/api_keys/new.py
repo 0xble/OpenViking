@@ -82,17 +82,20 @@ class NewAPIKeyManager:
         self,
         root_key: str,
         viking_fs: VikingFS,
-        encryption_enabled: bool = False,
+        api_key_hashing_enabled: bool = False,
     ):
         """Initialize NewAPIKeyManager.
 
         Args:
             root_key: Global root API key for administrative access.
             viking_fs: VikingFS client for persistent storage of user keys.
-            encryption_enabled: Whether API key hashing is enabled.
+            api_key_hashing_enabled: Whether API key Argon2id hashing is enabled.
+                Default: false - rely on file-level AES encryption for protection.
         """
         # Delegate to legacy manager for all core functionality
-        self._legacy = LegacyAPIKeyManager(root_key, viking_fs, encryption_enabled)
+        self._legacy = LegacyAPIKeyManager(
+            root_key, viking_fs, api_key_hashing_enabled=api_key_hashing_enabled
+        )
 
     async def load(self) -> None:
         """Load accounts and user keys from VikingFS into memory."""
@@ -197,7 +200,7 @@ class NewAPIKeyManager:
 
         now = datetime.now(timezone.utc).isoformat()
 
-        if self._legacy._encryption_enabled:
+        if self._legacy._api_key_hashing_enabled:
             stored_key = self._legacy._hash_api_key(key)
             is_hashed = True
             key_prefix = self._legacy._get_key_prefix(key)
@@ -210,7 +213,7 @@ class NewAPIKeyManager:
             "role": "admin",
             "key": stored_key,
         }
-        if self._legacy._encryption_enabled:
+        if self._legacy._api_key_hashing_enabled:
             user_info["key_prefix"] = key_prefix
 
         # Add to legacy's data structures
@@ -265,7 +268,7 @@ class NewAPIKeyManager:
         # Generate new format key
         key = generate_api_key(account_id, user_id)
 
-        if self._legacy._encryption_enabled:
+        if self._legacy._api_key_hashing_enabled:
             stored_key = self._legacy._hash_api_key(key)
             is_hashed = True
             key_prefix = self._legacy._get_key_prefix(key)
@@ -278,7 +281,7 @@ class NewAPIKeyManager:
             "role": role,
             "key": stored_key,
         }
-        if self._legacy._encryption_enabled:
+        if self._legacy._api_key_hashing_enabled:
             user_info["key_prefix"] = key_prefix
 
         account.users[user_id] = user_info
@@ -340,7 +343,7 @@ class NewAPIKeyManager:
         # Generate new key in new format
         new_key = generate_api_key(account_id, user_id)
 
-        if self._legacy._encryption_enabled:
+        if self._legacy._api_key_hashing_enabled:
             new_stored_key = self._legacy._hash_api_key(new_key)
             new_is_hashed = True
             new_key_prefix = self._legacy._get_key_prefix(new_key)
@@ -351,7 +354,7 @@ class NewAPIKeyManager:
 
         # Update user info
         account.users[user_id]["key"] = new_stored_key
-        if self._legacy._encryption_enabled:
+        if self._legacy._api_key_hashing_enabled:
             account.users[user_id]["key_prefix"] = new_key_prefix
         else:
             if "key_prefix" in account.users[user_id]:
@@ -427,8 +430,8 @@ class NewAPIKeyManager:
         return self._legacy._root_key
 
     @property
-    def _encryption_enabled(self):
-        return self._legacy._encryption_enabled
+    def _api_key_hashing_enabled(self):
+        return self._legacy._api_key_hashing_enabled
 
     # ---- Helper method proxies for backward compatibility ----
 

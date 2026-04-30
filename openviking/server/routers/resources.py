@@ -18,6 +18,7 @@ from openviking.server.local_input_guard import (
     resolve_uploaded_temp_file_id,
 )
 from openviking.server.models import Response
+from openviking.server.responses import response_from_result
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
@@ -191,11 +192,7 @@ async def temp_upload(
         telemetry=telemetry,
         fn=_upload,
     )
-    return Response(
-        status="ok",
-        result=execution.result,
-        telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    return response_from_result(execution.result, telemetry=execution.telemetry)
 
 
 @router.post("/resources")
@@ -280,11 +277,7 @@ async def patch_resource_metadata(
             ctx=_ctx,
         ),
     )
-    return Response(
-        status="ok",
-        result=execution.result,
-        telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    return response_from_result(execution.result, telemetry=execution.telemetry)
 
 
 @router.post("/skills")
@@ -312,8 +305,4 @@ async def add_skill(
             allow_local_path_resolution=allow_local_path_resolution,
         ),
     )
-    return Response(
-        status="ok",
-        result=execution.result,
-        telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    return response_from_result(execution.result, telemetry=execution.telemetry)

@@ -496,12 +496,12 @@ export function createSessionAgentResolver(configAgentId: string) {
       resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
       branch = "session_resolved";
     } else if (!configAgentId || configAgentId === "default") {
-      resolvedBeforeSanitize = "default";
-      resolved = "default";
+      resolvedBeforeSanitize = "main";
+      resolved = "main";
       branch = "default_no_session";
     } else {
-      resolvedBeforeSanitize = configAgentId;
-      resolved = sanitizeOpenVikingAgentIdHeader(configAgentId);
+      resolvedBeforeSanitize = `${configAgentId}_main`;
+      resolved = sanitizeOpenVikingAgentIdHeader(resolvedBeforeSanitize);
       branch = "config_only_fallback";
     }
 
