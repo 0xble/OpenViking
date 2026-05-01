@@ -490,7 +490,31 @@ class MemoryConsolidator:
             seen_clusters.add(key)
             clusters.append(list(cluster_by_uri.values()))
 
-        return clusters
+        return self._merge_overlapping_clusters(clusters)
+
+    @staticmethod
+    def _merge_overlapping_clusters(clusters: List[List[Context]]) -> List[List[Context]]:
+        """Collapse clusters that share any URI into one deterministic group."""
+        merged: List[Dict[str, Context]] = []
+        for cluster in clusters:
+            by_uri = {item.uri: item for item in cluster if item.uri}
+            if len(by_uri) < 2:
+                continue
+
+            overlap_indexes = [
+                idx for idx, existing in enumerate(merged) if set(existing).intersection(by_uri)
+            ]
+            if not overlap_indexes:
+                merged.append(by_uri)
+                continue
+
+            target_idx = overlap_indexes[0]
+            merged[target_idx].update(by_uri)
+            for idx in reversed(overlap_indexes[1:]):
+                merged[target_idx].update(merged[idx])
+                del merged[idx]
+
+        return [list(group.values()) for group in merged if len(group) >= 2]
 
     async def _consolidate(
         self,
@@ -505,6 +529,9 @@ class MemoryConsolidator:
 
         for cluster in clusters:
             try:
+                cluster_uris = {item.uri for item in cluster}
+                if cluster_uris.intersection(result.applied_uris):
+                    continue
                 contents = await self._fetch_cluster_contents(cluster, ctx)
                 decision = await self.dedup.consolidate_cluster(
                     cluster=cluster,

@@ -138,6 +138,37 @@ class TestRunHappyPath:
         assert any("merge_skipped_empty_content" in e for e in result.errors)
 
     @pytest.mark.asyncio
+    async def test_overlapping_clusters_are_consolidated_once(self):
+        first_cluster = [
+            _ctx("viking://agent/a/memories/skills/keeper"),
+            _ctx("viking://agent/a/memories/skills/dup"),
+        ]
+        second_cluster = [
+            _ctx("viking://agent/a/memories/skills/dup"),
+            _ctx("viking://agent/a/memories/skills/other"),
+        ]
+        decision = ClusterDecision(
+            decision=ClusterDecisionType.KEEP_AND_MERGE,
+            cluster=first_cluster,
+            keeper_uri="viking://agent/a/memories/skills/keeper",
+            merge_into=["viking://agent/a/memories/skills/dup"],
+            merged_content="merged body",
+            merged_abstract="merged abstract",
+            reason="same fact",
+        )
+        consolidator = _make_consolidator(cluster_decision=decision)
+        consolidator._cluster_scope = AsyncMock(return_value=[first_cluster, second_cluster])
+
+        result = await consolidator.run(
+            "viking://agent/a/memories/skills/",
+            _make_request_ctx(),
+        )
+
+        consolidator.dedup.consolidate_cluster.assert_awaited_once()
+        assert len(result.cluster_decisions) == 1
+        assert result.ops_applied["merged"] == 1
+
+    @pytest.mark.asyncio
     async def test_keep_and_delete_archives_invalidated_members(self):
         cluster = [
             _ctx("viking://agent/a/memories/preferences/k"),
