@@ -9,6 +9,8 @@ from contextlib import asynccontextmanager
 from typing import Callable, Optional
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -34,6 +36,7 @@ from openviking.server.routers import (
     metrics_router,
     observer_router,
     pack_router,
+    privacy_configs_router,
     relations_router,
     resources_router,
     search_router,
@@ -105,7 +108,7 @@ def create_app(
             api_key_manager = APIKeyManager(
                 root_key=config.root_api_key,
                 viking_fs=service.viking_fs,
-                encryption_enabled=config.encryption_enabled,
+                api_key_hashing_enabled=config.api_key_hashing_enabled,
             )
             await api_key_manager.load()
             app.state.api_key_manager = api_key_manager
@@ -240,6 +243,42 @@ def create_app(
             ).model_dump(),
         )
 
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error_handler(request: Request, exc: RequestValidationError):
+        errors = jsonable_encoder(
+            exc.errors(),
+            custom_encoder={bytes: lambda value: value.decode("utf-8", errors="replace")},
+        )
+        message = "; ".join(
+            f"{'.'.join(str(part) for part in error.get('loc', ()) if part != 'body')}: {error.get('msg', '')}".strip(
+                ": "
+            )
+            for error in errors
+        )
+        error_types = {str(error.get("type", "")) for error in errors}
+        has_empty_body = any(
+            tuple(error.get("loc", ())) == ("body",) and error.get("type") == "missing"
+            for error in errors
+        )
+        status_code = (
+            400
+            if has_empty_body
+            or error_types
+            & {"json_invalid", "model_attributes_type", "value_error", "literal_error"}
+            else 422
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content=Response(
+                status="error",
+                error=ErrorInfo(
+                    code="INVALID_ARGUMENT",
+                    message=message or "Invalid request body",
+                    details={"validation_errors": errors},
+                ),
+            ).model_dump(),
+        )
+
     # Catch-all for unhandled exceptions so clients always get JSON
     @app.exception_handler(Exception)
     async def general_error_handler(request: Request, exc: Exception):
@@ -297,6 +336,7 @@ def create_app(
     app.include_router(stats_router)
     app.include_router(maintenance_router)
     app.include_router(pack_router)
+    app.include_router(privacy_configs_router)
     app.include_router(debug_router)
     app.include_router(observer_router)
     app.include_router(metrics_router)

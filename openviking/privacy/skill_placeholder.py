@@ -18,29 +18,49 @@ def build_placeholder(skill_name: str, field_name: str) -> str:
 
 
 def _replace_structured_value(content: str, raw_value: str, placeholder: str) -> tuple[str, bool]:
-    replacements = (
-        (f'"{raw_value}"', f'"{placeholder}"'),
-        (f"'{raw_value}'", f"'{placeholder}'"),
-        (f": {raw_value}\n", f": {placeholder}\n"),
-        (f": {raw_value}\r\n", f": {placeholder}\r\n"),
-        (f":{raw_value}\n", f":{placeholder}\n"),
-        (f":{raw_value}\r\n", f":{placeholder}\r\n"),
-        (f": {raw_value}", f": {placeholder}"),
-        (f":{raw_value}", f":{placeholder}"),
-        (f"= {raw_value}\n", f"= {placeholder}\n"),
-        (f"= {raw_value}\r\n", f"= {placeholder}\r\n"),
-        (f"={raw_value}\n", f"={placeholder}\n"),
-        (f"={raw_value}\r\n", f"={placeholder}\r\n"),
-        (f"= {raw_value}", f"= {placeholder}"),
-        (f"={raw_value}", f"={placeholder}"),
-    )
-
+    lines = content.splitlines(keepends=True)
+    output: list[str] = []
     replaced = False
-    for old, new in replacements:
-        if old in content:
-            content = content.replace(old, new)
+
+    for line in lines:
+        newline = ""
+        body = line
+        if body.endswith("\r\n"):
+            body = body[:-2]
+            newline = "\r\n"
+        elif body.endswith("\n"):
+            body = body[:-1]
+            newline = "\n"
+        elif body.endswith("\r"):
+            body = body[:-1]
+            newline = "\r"
+
+        delimiter_positions = [pos for pos in (body.find(":"), body.find("=")) if pos >= 0]
+        if not delimiter_positions:
+            output.append(line)
+            continue
+
+        delimiter_index = min(delimiter_positions)
+        value_start = delimiter_index + 1
+        while value_start < len(body) and body[value_start] == " ":
+            value_start += 1
+
+        prefix = body[:value_start]
+        value = body[value_start:]
+        quote = ""
+        inner_value = value
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            quote = value[0]
+            inner_value = value[1:-1]
+
+        if inner_value == raw_value:
+            replacement = f"{quote}{placeholder}{quote}" if quote else placeholder
+            output.append(f"{prefix}{replacement}{newline}")
             replaced = True
-    return content, replaced
+        else:
+            output.append(line)
+
+    return "".join(output), replaced
 
 
 def placeholderize_skill_content_with_blocks(

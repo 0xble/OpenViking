@@ -252,6 +252,19 @@ class VikingFS:
         bound = self._bound_ctx.get()
         return bound or self._default_ctx()
 
+    def _create_hierarchical_retriever(
+        self, retriever_cls: Any, storage: Any, embedder: Any
+    ) -> Any:
+        kwargs = {
+            "storage": storage,
+            "embedder": embedder,
+            "rerank_config": getattr(self, "rerank_config", None),
+        }
+        retrieval_config = getattr(self, "retrieval_config", None)
+        if retrieval_config is not None:
+            kwargs["retrieval_config"] = retrieval_config
+        return retriever_cls(**kwargs)
+
     async def _encrypt_content(self, content: bytes, ctx: Optional[RequestContext] = None) -> bytes:
         """Encrypt content if encryption is enabled."""
         if not self._encryptor:
@@ -1146,11 +1159,10 @@ class VikingFS:
         if not embedder:
             raise RuntimeError("Embedder not configured.")
 
-        retriever = HierarchicalRetriever(
+        retriever = self._create_hierarchical_retriever(
+            HierarchicalRetriever,
             storage=storage,
             embedder=embedder,
-            rerank_config=self.rerank_config,
-            retrieval_config=self.retrieval_config,
         )
 
         # Infer context_type (None = search all types)
@@ -1308,11 +1320,10 @@ class VikingFS:
         # Concurrent execution
         storage = self._get_vector_store()
         embedder = self._get_embedder()
-        retriever = HierarchicalRetriever(
+        retriever = self._create_hierarchical_retriever(
+            HierarchicalRetriever,
             storage=storage,
             embedder=embedder,
-            rerank_config=self.rerank_config,
-            retrieval_config=self.retrieval_config,
         )
 
         async def _execute(tq: TypedQuery):
@@ -1987,9 +1998,11 @@ class VikingFS:
         # Verify the file exists before reading, because AGFS read returns
         # empty bytes for non-existent files instead of raising an error.
         try:
-            self.agfs.stat(path)
+            info = self.agfs.stat(path)
         except Exception:
             raise NotFoundError(uri, "file")
+        if isinstance(info, dict) and info.get("isDir", info.get("is_dir")):
+            raise InvalidArgumentError(f"Cannot read directory as file: {uri}")
         try:
             content = self.agfs.read(path)
             if isinstance(content, bytes):

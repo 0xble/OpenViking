@@ -19,6 +19,24 @@ class SkillPrivacyExtractionResult:
     replacement_content_blocks: list[str] = field(default_factory=list)
 
 
+def _extract_structured_values(content: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in content.splitlines():
+        delimiter_positions = [pos for pos in (line.find(":"), line.find("=")) if pos >= 0]
+        if not delimiter_positions:
+            continue
+        delimiter_index = min(delimiter_positions)
+        key = line[:delimiter_index].strip()
+        value = line[delimiter_index + 1 :].strip()
+        if not key or not value or " " in key:
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        if value:
+            values[key] = value
+    return values
+
+
 async def extract_skill_privacy_values(
     *,
     skill_name: str,
@@ -45,6 +63,8 @@ async def extract_skill_privacy_values(
                 for key, value in raw_values.items()
                 if str(key).strip()
             }
+    if not values:
+        values = _extract_structured_values(content)
 
     placeholder_result = placeholderize_skill_content_with_blocks(content, skill_name, values)
     return SkillPrivacyExtractionResult(

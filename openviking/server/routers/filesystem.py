@@ -14,7 +14,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidURIError, NotFoundError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])
 
@@ -114,6 +114,8 @@ async def stat(
             raise NotFoundError(uri, "file")
         raise
     except Exception as exc:
+        if isinstance(exc, InvalidURIError) and "Invalid scope" in exc.details.get("reason", ""):
+            raise NotFoundError(uri, "file") from exc
         mapped = map_exception(exc, resource=uri)
         if mapped is not None:
             raise mapped from exc

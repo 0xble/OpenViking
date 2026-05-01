@@ -380,6 +380,24 @@ class OpenVikingService:
             await self._vikingdb_manager.close()
             self._vikingdb_manager = None
 
+        if self._viking_fs:
+            agfs = getattr(self._viking_fs, "agfs", None)
+            if (
+                agfs
+                and callable(getattr(agfs, "mounts", None))
+                and callable(getattr(agfs, "unmount", None))
+            ):
+                try:
+                    for mount in agfs.mounts():
+                        mount_path = mount.get("path") if isinstance(mount, dict) else None
+                        if mount_path:
+                            try:
+                                agfs.unmount(mount_path)
+                            except Exception:
+                                logger.debug("Failed to unmount AGFS path %s", mount_path)
+                except Exception:
+                    logger.debug("Failed to list AGFS mounts during service close")
+
         self._viking_fs = None
         self._resource_processor = None
         self._skill_processor = None

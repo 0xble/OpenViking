@@ -78,6 +78,11 @@ class S3Config(BaseModel):
         "escaped in place as !HH hexadecimal bytes, while / ! - _ . * ' ( ) remain unescaped.",
     )
 
+    normalize_encoding_chars: str = Field(
+        default="?#%+@",
+        description="Characters normalized when S3 key encoding normalization is enabled.",
+    )
+
     model_config = {"extra": "forbid"}
 
     def validate_config(self):

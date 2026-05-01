@@ -290,12 +290,17 @@ class VLMConfig(BaseModel):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion asynchronously."""
-        return await self.get_vlm_instance().get_completion_async(
-            prompt=prompt,
-            thinking=self.thinking if thinking is None else thinking,
-            tools=tools,
-            messages=messages,
-        )
+        try:
+            return await self.get_vlm_instance().get_completion_async(
+                prompt=prompt,
+                thinking=self.thinking if thinking is None else thinking,
+                tools=tools,
+                messages=messages,
+            )
+        except TypeError as exc:
+            if "unexpected keyword argument 'prompt'" not in str(exc):
+                raise
+            return await self.get_vlm_instance().get_completion_async(prompt)
 
     def is_available(self) -> bool:
         """Check if LLM is configured."""

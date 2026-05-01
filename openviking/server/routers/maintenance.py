@@ -9,13 +9,16 @@ from contextlib import contextmanager
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Body
-from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 
 from openviking.maintenance.memory_consolidator import DEFAULT_CANARY_LIMIT
 from openviking.server.auth import require_role
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.responses import response_from_result
+from openviking.server.telemetry import run_operation
 from openviking.telemetry import OperationTelemetry, bind_telemetry
 from openviking_cli.utils import get_logger
 
@@ -67,6 +70,20 @@ class MemoryMaintenanceRequest(BaseModel):
     canaries: Optional[List[CanarySpec]] = None
 
 
+class ReindexRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    uri: str
+    mode: str = "vectors_only"
+    wait: bool = True
+    regenerate: bool | None = None
+
+
+async def _do_reindex(service, uri: str, regenerate: bool, ctx: RequestContext):
+    mode = "semantic_and_vectors" if regenerate else "vectors_only"
+    return await service.reindex(uri=uri, mode=mode, wait=True, ctx=ctx)
+
+
 def _build_consolidator(service, ctx: RequestContext):
     """Construct a MemoryConsolidator wired to the live service."""
     from openviking.maintenance import MemoryConsolidator
@@ -91,6 +108,31 @@ def _build_maintenance_manager(service):
     from openviking.maintenance import MemoryMaintenanceManager
 
     return MemoryMaintenanceManager(viking_fs=service.viking_fs)
+
+
+@router.post("/reindex")
+async def reindex(
+    body: ReindexRequest = Body(...),
+    ctx: RequestContext = require_role(Role.ROOT, Role.ADMIN),
+):
+    service = get_service()
+    if callable(getattr(service, "reindex", None)):
+        return JSONResponse(status_code=404, content={"detail": "Not Found"})
+    regenerate = body.regenerate if body.regenerate is not None else body.mode != "vectors_only"
+    mode = "semantic_and_vectors" if regenerate else "vectors_only"
+    execution = await run_operation(
+        operation="maintenance.reindex",
+        telemetry=False,
+        fn=lambda: (
+            _do_reindex(service, body.uri, regenerate, ctx)
+            if body.wait
+            else service.reindex(uri=body.uri, mode=mode, wait=False, ctx=ctx)
+        ),
+    )
+    response = response_from_result(execution.result)
+    if isinstance(response, dict):
+        return Response(status="ok", result=execution.result)
+    return response
 
 
 @router.post("/consolidate")

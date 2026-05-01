@@ -44,7 +44,10 @@ class MemoryTypeRegistry:
 
         from openviking_cli.utils.config import get_openviking_config
 
-        memory_templates_dir = str(resolve_memory_templates_dir())
+        memory_templates_path = resolve_memory_templates_dir()
+        if not memory_templates_path.exists():
+            memory_templates_path = PromptManager._get_bundled_templates_dir() / "memory"
+        memory_templates_dir = str(memory_templates_path)
         config = get_openviking_config()
         custom_dir = config.memory.custom_templates_dir
 

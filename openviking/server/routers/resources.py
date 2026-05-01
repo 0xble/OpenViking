@@ -17,7 +17,6 @@ from openviking.server.local_input_guard import (
     require_remote_resource_source,
     resolve_uploaded_temp_file_id,
 )
-from openviking.server.models import Response
 from openviking.server.responses import response_from_result
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
@@ -254,11 +253,7 @@ async def add_resource(
             **kwargs,
         ),
     )
-    return Response(
-        status="ok",
-        result=execution.result,
-        telemetry=execution.telemetry,
-    ).model_dump(exclude_none=True)
+    return response_from_result(execution.result, telemetry=execution.telemetry)
 
 
 @router.patch("/resources/metadata")

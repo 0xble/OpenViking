@@ -6,12 +6,40 @@
 import asyncio
 import shutil
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import Any, AsyncGenerator, Generator
 
 import pytest
 import pytest_asyncio
 
 from openviking import AsyncOpenViking
+
+resource: Any
+try:
+    import resource as resource
+except ImportError:
+    resource = None
+
+
+def pytest_configure(config):
+    del config
+    if resource is None or not hasattr(resource, "RLIMIT_NOFILE"):
+        return
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (OSError, ValueError):
+        return
+    target = 4096
+    if soft >= target:
+        return
+    if hard == resource.RLIM_INFINITY:
+        new_soft = target
+    else:
+        new_soft = min(target, hard)
+    if new_soft > soft:
+        try:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (new_soft, hard))
+        except (OSError, PermissionError, ValueError):
+            return
 
 
 # ── Workaround: local .so may lack AGFS_Grep symbol (new in latest source) ──

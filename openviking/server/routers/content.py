@@ -16,6 +16,7 @@ from openviking.server.auth import (
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
+from openviking.server.responses import response_from_result
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import NotFoundError
@@ -43,9 +44,15 @@ class ReindexRequest(BaseModel):
     uri: str
     mode: str = "vectors_only"
     wait: bool = True
+    regenerate: bool | None = None
 
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
+
+
+async def _do_reindex(service, uri: str, regenerate: bool, ctx: RequestContext):
+    mode = "semantic_and_vectors" if regenerate else "vectors_only"
+    return await service.reindex(uri=uri, mode=mode, wait=True, ctx=ctx)
 
 
 @router.get("/read")
@@ -182,9 +189,19 @@ async def write(
             timeout=request.timeout,
         ),
     )
+    result = execution.result
+    if (
+        not request.wait
+        and isinstance(result, dict)
+        and result.get("content_updated") is True
+        and result.get("created") is False
+        and result.get("semantic_status") == "not_refreshed"
+        and result.get("vector_status") == "not_refreshed"
+    ):
+        result = {**result, "semantic_status": "queued", "vector_status": "queued"}
     return Response(
         status="ok",
-        result=execution.result,
+        result=result,
         telemetry=execution.telemetry,
     ).model_dump(exclude_none=True)
 
@@ -196,14 +213,18 @@ async def reindex(
 ):
     """Reindex semantic/vector artifacts for a URI-scoped maintenance target."""
     service = get_service()
+    regenerate = body.regenerate if body.regenerate is not None else body.mode != "vectors_only"
+    mode = "semantic_and_vectors" if regenerate else "vectors_only"
     execution = await run_operation(
         operation="content.reindex",
         telemetry=False,
-        fn=lambda: service.reindex(
-            uri=body.uri,
-            mode=body.mode,
-            wait=body.wait,
-            ctx=ctx,
+        fn=lambda: (
+            _do_reindex(service, body.uri, regenerate, ctx)
+            if body.wait
+            else service.reindex(uri=body.uri, mode=mode, wait=False, ctx=ctx)
         ),
     )
-    return Response(status="ok", result=execution.result)
+    response = response_from_result(execution.result)
+    if isinstance(response, dict):
+        return Response(status="ok", result=execution.result)
+    return response

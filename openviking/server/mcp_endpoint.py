@@ -373,10 +373,16 @@ async def health() -> str:
 @asynccontextmanager
 async def mcp_lifespan():
     """Run the MCP session manager. Call this inside the FastAPI lifespan."""
-    async with mcp.session_manager.run():
-        logger.info(
-            "MCP endpoint ready (9 tools: search, read, list, store, add_resource, grep, glob, forget, health)"
-        )
+    try:
+        async with mcp.session_manager.run():
+            logger.info(
+                "MCP endpoint ready (9 tools: search, read, list, store, add_resource, grep, glob, forget, health)"
+            )
+            yield
+    except RuntimeError as exc:
+        if "can only be called once" not in str(exc):
+            raise
+        logger.debug("MCP session manager already started; reusing existing manager")
         yield
 
 

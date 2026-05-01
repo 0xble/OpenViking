@@ -83,6 +83,7 @@ class NewAPIKeyManager:
         root_key: str,
         viking_fs: VikingFS,
         api_key_hashing_enabled: bool = False,
+        encryption_enabled: Optional[bool] = None,
     ):
         """Initialize NewAPIKeyManager.
 
@@ -91,7 +92,12 @@ class NewAPIKeyManager:
             viking_fs: VikingFS client for persistent storage of user keys.
             api_key_hashing_enabled: Whether API key Argon2id hashing is enabled.
                 Default: false - rely on file-level AES encryption for protection.
+            encryption_enabled: Deprecated compatibility alias for older callers
+                that used this constructor argument to enable API key hashing.
         """
+        if encryption_enabled is not None and not api_key_hashing_enabled:
+            api_key_hashing_enabled = encryption_enabled
+
         # Delegate to legacy manager for all core functionality
         self._legacy = LegacyAPIKeyManager(
             root_key, viking_fs, api_key_hashing_enabled=api_key_hashing_enabled

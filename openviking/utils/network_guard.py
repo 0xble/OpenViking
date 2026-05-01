@@ -19,9 +19,11 @@ _LOCAL_HOSTNAMES = {
     "localhost",
     "localhost.localdomain",
 }
-_DNS_INTERCEPT_NETWORKS = (
-    ipaddress.ip_network("198.18.0.0/15"),
-)
+_DNS_INTERCEPT_NETWORKS = (ipaddress.ip_network("198.18.0.0/15"),)
+
+
+class DNSInterceptionError(PermissionDeniedError):
+    """Raised when DNS returns only synthetic interception addresses."""
 
 
 def _get_allowed_code_hosting_domains() -> set[str]:
@@ -114,7 +116,7 @@ def _resolve_host_addresses(host: str) -> set[str]:
             continue
         addresses.add(addr)
     if saw_valid_address and saw_intercept_address and not addresses:
-        raise PermissionDeniedError(
+        raise DNSInterceptionError(
             "HTTP server only accepts public remote resource targets; "
             f"host '{host}' resolves only to DNS interception addresses."
         )
@@ -158,7 +160,10 @@ def ensure_public_remote_target(source: str) -> None:
     if normalized_host in normalized_domains:
         return
 
-    resolved_addresses = _resolve_host_addresses(host)
+    try:
+        resolved_addresses = _resolve_host_addresses(host)
+    except DNSInterceptionError:
+        resolved_addresses = set()
     if not resolved_addresses:
         return
 
