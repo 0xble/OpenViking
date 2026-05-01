@@ -69,7 +69,7 @@ class TestUnlink:
         client, uri = client_with_resource
 
         # Should not raise exception
-        await client.unlink(from_uri=uri, uri="viking://nonexistent/")
+        await client.unlink(from_uri=uri, uri="viking://resources/nonexistent/")
 
 
 class TestRelations:

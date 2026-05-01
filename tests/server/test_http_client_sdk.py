@@ -95,7 +95,7 @@ async def test_sdk_add_resource_raises_processing_error_for_business_error(
     monkeypatch.setattr(svc.resources, "add_resource", fake_add_resource)
 
     with pytest.raises(ProcessingError, match="Parse error: boom"):
-        await client.add_resource(path="https://example.com/bad.md", wait=True)
+        await client.add_resource(path="https://github.com/example/bad.md", wait=True)
 
 
 def test_sdk_maps_conflict_error_envelope():

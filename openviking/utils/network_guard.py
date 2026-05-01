@@ -160,10 +160,7 @@ def ensure_public_remote_target(source: str) -> None:
     if normalized_host in normalized_domains:
         return
 
-    try:
-        resolved_addresses = _resolve_host_addresses(host)
-    except DNSInterceptionError:
-        resolved_addresses = set()
+    resolved_addresses = _resolve_host_addresses(host)
     if not resolved_addresses:
         return
 

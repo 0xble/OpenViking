@@ -7,8 +7,10 @@ to avoid code duplication, while adding new format key generation.
 """
 
 import base64
+import binascii
 import hmac
 import secrets
+import threading
 from typing import Optional, Tuple
 
 from openviking.server.api_keys.legacy import (
@@ -23,6 +25,8 @@ from openviking_cli.session.user_id import validate_account_id, validate_user_id
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+_DUMMY_ARGON2_HASH: Optional[str] = None
+_DUMMY_ARGON2_HASH_LOCK = threading.Lock()
 
 
 def _encode_segment(data: str) -> str:
@@ -102,6 +106,16 @@ class NewAPIKeyManager:
         self._legacy = LegacyAPIKeyManager(
             root_key, viking_fs, api_key_hashing_enabled=api_key_hashing_enabled
         )
+        global _DUMMY_ARGON2_HASH
+        if api_key_hashing_enabled and _DUMMY_ARGON2_HASH is None:
+            with _DUMMY_ARGON2_HASH_LOCK:
+                if _DUMMY_ARGON2_HASH is None:
+                    _DUMMY_ARGON2_HASH = self._legacy._hash_api_key(
+                        "unused-timing-oracle-dummy-secret"
+                    )
+        self._dummy_argon2_hash: Optional[str] = (
+            _DUMMY_ARGON2_HASH if api_key_hashing_enabled else None
+        )
 
     async def load(self) -> None:
         """Load accounts and user keys from VikingFS into memory."""
@@ -130,38 +144,40 @@ class NewAPIKeyManager:
         if is_new_format_key(api_key):
             try:
                 account_id, user_id, _ = parse_api_key(api_key)
+            except (binascii.Error, UnicodeDecodeError, ValueError):
+                raise UnauthenticatedError("Invalid API Key")
 
-                # Verify the user exists in the account using legacy's data
-                account = self._legacy._accounts.get(account_id)
-                if account and user_id in account.users:
-                    user_info = account.users[user_id]
-                    stored_key_or_hash = user_info.get("key", "")
+            account = self._legacy._accounts.get(account_id)
+            spent_argon2 = False
+            if account and user_id in account.users:
+                user_info = account.users[user_id]
+                stored_key_or_hash = user_info.get("key", "")
 
-                    # Verify the secret part matches using legacy's verify method
-                    if stored_key_or_hash:
-                        if user_info.get("key_prefix", "").startswith(
-                            "$argon2"
-                        ) or stored_key_or_hash.startswith("$argon2"):
-                            # Hashed key
-                            if self._legacy._verify_api_key(api_key, stored_key_or_hash):
-                                return ResolvedIdentity(
-                                    role=Role(user_info.get("role", "user")),
-                                    account_id=account_id,
-                                    user_id=user_id,
-                                    namespace_policy=self.get_account_policy(account_id),
-                                )
-                        else:
-                            # Plaintext key
-                            if hmac.compare_digest(api_key, stored_key_or_hash):
-                                return ResolvedIdentity(
-                                    role=Role(user_info.get("role", "user")),
-                                    account_id=account_id,
-                                    user_id=user_id,
-                                    namespace_policy=self.get_account_policy(account_id),
-                                )
-            except Exception:
-                # If parsing fails or verification fails, fall through to try legacy path
-                pass
+                if stored_key_or_hash:
+                    if user_info.get("key_prefix", "").startswith(
+                        "$argon2"
+                    ) or stored_key_or_hash.startswith("$argon2"):
+                        spent_argon2 = True
+                        if self._legacy._verify_api_key(api_key, stored_key_or_hash):
+                            return ResolvedIdentity(
+                                role=Role(user_info.get("role", "user")),
+                                account_id=account_id,
+                                user_id=user_id,
+                                namespace_policy=self.get_account_policy(account_id),
+                            )
+                    else:
+                        if hmac.compare_digest(api_key, stored_key_or_hash):
+                            return ResolvedIdentity(
+                                role=Role(user_info.get("role", "user")),
+                                account_id=account_id,
+                                user_id=user_id,
+                                namespace_policy=self.get_account_policy(account_id),
+                            )
+
+            if not spent_argon2 and self._dummy_argon2_hash is not None:
+                self._legacy._verify_api_key(api_key, self._dummy_argon2_hash)
+
+            raise UnauthenticatedError("Invalid API Key")
 
         # Fall back to legacy resolver for legacy keys
         return self._legacy.resolve(api_key)

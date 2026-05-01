@@ -316,7 +316,7 @@ async def test_add_resource_business_error_uses_error_envelope(
     resp = await client.post(
         "/api/v1/resources",
         json={
-            "path": "https://example.com/bad.md",
+            "path": "https://github.com/example/bad.md",
             "reason": "test resource",
         },
     )

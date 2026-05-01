@@ -47,6 +47,34 @@ async def manager(manager_service):
     return mgr
 
 
+@pytest_asyncio.fixture(scope="function")
+async def manager_hashed(manager_service):
+    """Fresh APIKeyManager with Argon2 API-key hashing enabled."""
+    mgr = APIKeyManager(
+        root_key=ROOT_KEY,
+        viking_fs=manager_service.viking_fs,
+        api_key_hashing_enabled=True,
+    )
+    await mgr.load()
+    return mgr
+
+
+@pytest.fixture
+def verify_api_key_calls(monkeypatch):
+    """Capture LegacyAPIKeyManager Argon2 verification targets."""
+    from openviking.server.api_keys.legacy import LegacyAPIKeyManager
+
+    calls = []
+    original_verify = LegacyAPIKeyManager._verify_api_key
+
+    def spy_verify(self, api_key: str, hashed_key: str) -> bool:
+        calls.append(hashed_key)
+        return original_verify(self, api_key, hashed_key)
+
+    monkeypatch.setattr(LegacyAPIKeyManager, "_verify_api_key", spy_verify)
+    return calls
+
+
 # ---- Root key tests ----
 
 
@@ -730,3 +758,105 @@ def test_new_api_key_manager_public_api_parity_with_legacy():
         f"NewAPIKeyManager is missing public methods present on "
         f"LegacyAPIKeyManager: {sorted(missing)}"
     )
+
+
+async def test_new_format_unknown_account_runs_one_dummy_verify(
+    manager_hashed, verify_api_key_calls
+):
+    """New-format lookup misses should spend one Argon2 verify to avoid timing leaks."""
+    from openviking.server.api_keys import generate_api_key
+
+    with pytest.raises(UnauthenticatedError):
+        manager_hashed.resolve(generate_api_key("missing_account", "missing_user"))
+
+    assert verify_api_key_calls == [manager_hashed._dummy_argon2_hash]
+
+
+async def test_new_format_unknown_user_runs_one_dummy_verify(manager_hashed, verify_api_key_calls):
+    from openviking.server.api_keys import generate_api_key
+
+    account_id = _uid()
+    await manager_hashed.create_account(account_id, "admin_user")
+
+    with pytest.raises(UnauthenticatedError):
+        manager_hashed.resolve(generate_api_key(account_id, "missing_user"))
+
+    assert verify_api_key_calls == [manager_hashed._dummy_argon2_hash]
+
+
+async def test_new_format_miss_skips_dummy_verify_when_hashing_disabled(
+    manager, verify_api_key_calls
+):
+    from openviking.server.api_keys import generate_api_key
+
+    with pytest.raises(UnauthenticatedError):
+        manager.resolve(generate_api_key("missing_account", "missing_user"))
+
+    assert manager._dummy_argon2_hash is None
+    assert verify_api_key_calls == []
+
+
+async def test_new_format_valid_key_does_not_run_dummy_verify(manager_hashed, verify_api_key_calls):
+    account_id = _uid()
+    key = await manager_hashed.create_account(account_id, "admin_user")
+
+    identity = manager_hashed.resolve(key)
+
+    assert identity.account_id == account_id
+    assert identity.user_id == "admin_user"
+    assert len(verify_api_key_calls) == 1
+    assert verify_api_key_calls[0] != manager_hashed._dummy_argon2_hash
+
+
+async def test_new_format_wrong_hashed_secret_does_not_run_dummy_verify(
+    manager_hashed, verify_api_key_calls
+):
+    from openviking.server.api_keys import generate_api_key
+
+    account_id = _uid()
+    await manager_hashed.create_account(account_id, "admin_user")
+
+    with pytest.raises(UnauthenticatedError):
+        manager_hashed.resolve(generate_api_key(account_id, "admin_user"))
+
+    assert len(verify_api_key_calls) == 1
+    assert verify_api_key_calls[0] != manager_hashed._dummy_argon2_hash
+
+
+async def test_new_format_wrong_plaintext_secret_runs_dummy_verify(
+    manager_hashed, verify_api_key_calls
+):
+    from openviking.server.api_keys import generate_api_key
+
+    account_id = _uid()
+    await manager_hashed.create_account(account_id, "plain_user")
+    manager_hashed._legacy._accounts[account_id].users["plain_user"]["key"] = (
+        "literal-plaintext-secret"
+    )
+    manager_hashed._legacy._accounts[account_id].users["plain_user"]["key_prefix"] = "literal-"
+
+    with pytest.raises(UnauthenticatedError):
+        manager_hashed.resolve(generate_api_key(account_id, "plain_user"))
+
+    assert verify_api_key_calls == [manager_hashed._dummy_argon2_hash]
+
+
+async def test_malformed_three_segment_key_does_not_fall_through_to_legacy(
+    manager_hashed, monkeypatch, verify_api_key_calls
+):
+    from openviking.server.api_keys.legacy import LegacyAPIKeyManager
+
+    legacy_resolve_calls = []
+    original_resolve = LegacyAPIKeyManager.resolve
+
+    def spy_resolve(self, api_key: str):
+        legacy_resolve_calls.append(api_key)
+        return original_resolve(self, api_key)
+
+    monkeypatch.setattr(LegacyAPIKeyManager, "resolve", spy_resolve)
+
+    with pytest.raises(UnauthenticatedError):
+        manager_hashed.resolve("_w._w._w")
+
+    assert legacy_resolve_calls == []
+    assert verify_api_key_calls == []

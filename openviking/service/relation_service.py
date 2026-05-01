@@ -11,10 +11,7 @@ from typing import Any, Dict, List, Optional, Union
 from openviking.core.uri_validation import validate_viking_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import InvalidURIError, NotInitializedError
-from openviking_cli.utils import get_logger
-
-logger = get_logger(__name__)
+from openviking_cli.exceptions import NotInitializedError
 
 
 class RelationService:
@@ -70,9 +67,5 @@ class RelationService:
         """
         viking_fs = self._ensure_initialized()
         from_uri = validate_viking_uri(from_uri, field_name="from_uri")
-        try:
-            uri = validate_viking_uri(uri, field_name="to_uri")
-        except InvalidURIError as exc:
-            logger.debug("Ignoring unlink for invalid target URI: %s", exc)
-            return
+        uri = validate_viking_uri(uri, field_name="to_uri")
         await viking_fs.unlink(from_uri, uri, ctx=ctx)
