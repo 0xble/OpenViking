@@ -5,6 +5,7 @@ import { memoryOpenVikingConfigSchema } from "../../config.js";
 import {
   categorizeCommitError,
   createMemoryOpenVikingContextEngine,
+  openClawSessionToOvStorageId,
 } from "../../context-engine.js";
 
 function makeLogger() {
@@ -59,6 +60,7 @@ function makeEngine(commitResult: unknown, opts?: { throwError?: Error }) {
       commitSession: ReturnType<typeof vi.fn>;
     },
     logger,
+    resolveAgentId,
   };
 }
 
@@ -70,7 +72,7 @@ describe("context-engine commitOVSession()", () => {
       memories_extracted: { core: 1 },
     });
 
-    const ok = await engine.commitOVSession("test-session");
+    const ok = await engine.commitOVSession({ sessionId: "test-session" });
     expect(ok).toBe(true);
   });
 
@@ -80,7 +82,7 @@ describe("context-engine commitOVSession()", () => {
       error: "extraction error",
     });
 
-    const ok = await engine.commitOVSession("test-session");
+    const ok = await engine.commitOVSession({ sessionId: "test-session" });
     expect(ok).toBe(false);
   });
 
@@ -90,7 +92,7 @@ describe("context-engine commitOVSession()", () => {
       task_id: "task-timeout",
     });
 
-    const ok = await engine.commitOVSession("test-session");
+    const ok = await engine.commitOVSession({ sessionId: "test-session" });
     expect(ok).toBe(false);
   });
 
@@ -99,7 +101,7 @@ describe("context-engine commitOVSession()", () => {
       throwError: new Error("connection refused"),
     });
 
-    const ok = await engine.commitOVSession("test-session");
+    const ok = await engine.commitOVSession({ sessionId: "test-session" });
     expect(ok).toBe(false);
   });
 
@@ -110,9 +112,26 @@ describe("context-engine commitOVSession()", () => {
       memories_extracted: {},
     });
 
-    await engine.commitOVSession("s1");
+    await engine.commitOVSession({ sessionId: "s1" });
 
     expect(client.commitSession.mock.calls[0][1]).toMatchObject({ wait: true });
+  });
+
+  it("uses sessionKey-derived OV session ID for commitOVSession", async () => {
+    const { engine, client, resolveAgentId } = makeEngine({
+      status: "completed",
+      archived: false,
+      memories_extracted: {},
+    });
+
+    await engine.commitOVSession({
+      sessionId: "plain-session",
+      sessionKey: "agent:main:main",
+    });
+
+    const ovSessionId = openClawSessionToOvStorageId("plain-session", "agent:main:main");
+    expect(client.commitSession.mock.calls[0][0]).toBe(ovSessionId);
+    expect(resolveAgentId).toHaveBeenCalledWith("plain-session", "agent:main:main", ovSessionId);
   });
 
   it("logs memories extracted count", async () => {
@@ -122,7 +141,7 @@ describe("context-engine commitOVSession()", () => {
       memories_extracted: { core: 3, preferences: 1 },
     });
 
-    await engine.commitOVSession("s1");
+    await engine.commitOVSession({ sessionId: "s1" });
 
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining("memories=4"),
@@ -151,7 +170,7 @@ describe("context-engine commitOVSession()", () => {
       resolveAgentId,
     });
 
-    const ok = await engine.commitOVSession("runtime-session", "agent:main:cron:nightly:run:1");
+    const ok = await engine.commitOVSession({ sessionId: "runtime-session", sessionKey: "agent:main:cron:nightly:run:1" });
 
     expect(ok).toBe(false);
     expect(getClient).not.toHaveBeenCalled();
@@ -341,6 +360,43 @@ describe("context-engine compact()", () => {
     expect(commitCallSessionId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
   });
 
+  it("uses sessionKey-derived OV session ID and resolver context when compact receives a non-UUID sessionId", async () => {
+    const { engine, client, resolveAgentId } = makeEngine({
+      status: "completed",
+      archived: false,
+      memories_extracted: {},
+    });
+
+    await engine.compact({
+      sessionId: "plain-session",
+      sessionFile: "",
+      runtimeContext: { sessionKey: "agent:main:main", agentId: "main" },
+    });
+
+    const ovSessionId = openClawSessionToOvStorageId("plain-session", "agent:main:main");
+    expect(client.commitSession.mock.calls[0][0]).toBe(ovSessionId);
+    expect(resolveAgentId).toHaveBeenCalledWith("plain-session", "agent:main:main", ovSessionId);
+  });
+
+  it("prefers top-level sessionKey over runtimeContext sessionKey in compact params", async () => {
+    const { engine, client, resolveAgentId } = makeEngine({
+      status: "completed",
+      archived: false,
+      memories_extracted: {},
+    });
+
+    await engine.compact({
+      sessionId: "plain-session",
+      sessionKey: "agent:top:main",
+      sessionFile: "",
+      runtimeContext: { sessionKey: "agent:runtime:main" },
+    });
+
+    const ovSessionId = openClawSessionToOvStorageId("plain-session", "agent:top:main");
+    expect(client.commitSession.mock.calls[0][0]).toBe(ovSessionId);
+    expect(resolveAgentId).toHaveBeenCalledWith("plain-session", "agent:top:main", ovSessionId);
+  });
+
   it("passes agentId to commitSession", async () => {
     const { engine, client } = makeEngine({
       status: "completed",
@@ -371,6 +427,26 @@ describe("context-engine compact()", () => {
     expect((result.result?.details as { category?: string })?.category).toBe("unknown");
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("commit failed"),
+    );
+  });
+
+  it("returns compacted=false when commit reports the OV session does not exist", async () => {
+    const { engine, client, logger } = makeEngine(null, {
+      throwError: new Error("OpenViking request failed [NOT_FOUND]: Session not found: s-missing"),
+    });
+
+    const result = await engine.compact({
+      sessionId: "s-missing",
+      sessionFile: "",
+      currentTokenCount: 123,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("session_not_found");
+    expect(client.commitSession).toHaveBeenCalledTimes(1);
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("compact commit failed"),
     );
   });
 

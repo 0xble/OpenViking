@@ -79,7 +79,7 @@ const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_PATH: RecallPath = RECALL_PATHS.assemble;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 5000;
-const DEFAULT_RECALL_PREFER_ABSTRACT = true;
+const DEFAULT_RECALL_PREFER_ABSTRACT = false;
 const DEFAULT_RECALL_TOKEN_BUDGET = 8000;
 const DEFAULT_ADAPTIVE_RECALL = true;
 const DEFAULT_RECALL_CACHE_TTL_MS = 600_000;
@@ -381,7 +381,10 @@ export const memoryOpenVikingConfigSchema = {
         50,
         Math.min(10000, Math.floor(toNumber(cfg.recallMaxContentChars, DEFAULT_RECALL_MAX_CONTENT_CHARS))),
       ),
-      recallPreferAbstract: cfg.recallPreferAbstract === true,
+      recallPreferAbstract:
+        typeof cfg.recallPreferAbstract === "boolean"
+          ? cfg.recallPreferAbstract
+          : DEFAULT_RECALL_PREFER_ABSTRACT,
       recallTokenBudget: Math.max(
         100,
         Math.min(50000, Math.floor(toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_TOKEN_BUDGET))),
