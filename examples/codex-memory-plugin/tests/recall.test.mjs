@@ -88,6 +88,31 @@ describe("Codex recall parity helpers", () => {
     assert.match(text, /Slack evidence/)
   })
 
+  it("filters weak resource recall matches", async () => {
+    const client = {
+      async find(_query, targetUri) {
+        assert.equal(targetUri, "viking://resources")
+        return {
+          resources: [
+            { uri: "viking://resources/email/unrelated.json", level: 2, abstract: "Unrelated email", score: 0.34 },
+            { uri: "viking://resources/docs/relevant.md", level: 2, abstract: "Relevant project notes", score: 0.72 },
+          ],
+        }
+      },
+    }
+
+    const result = await searchResourceScope(client, "project notes", {
+      limit: 6,
+      scoreThreshold: 0.4,
+    })
+    const text = buildResourceRecallResponseText("project notes", result)
+
+    assert.equal(result.resources.length, 1)
+    assert.equal(result.resources[0].uri, "viking://resources/docs/relevant.md")
+    assert.match(text, /Relevant project notes/)
+    assert.doesNotMatch(text, /Unrelated email/)
+  })
+
   it("does not treat resource-like prefixes as resource scopes", async () => {
     const client = {
       async find(_query, targetUri) {

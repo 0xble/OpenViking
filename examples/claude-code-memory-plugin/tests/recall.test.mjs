@@ -80,6 +80,29 @@ describe("Claude Code MCP recall parity helpers", () => {
     assert.equal(result.resources[0].context_type, "resource")
   })
 
+  it("filters weak resource recall matches", async () => {
+    const client = {
+      async find(_query, options) {
+        assert.equal(options.targetUri, "viking://resources")
+        return {
+          resources: [
+            { uri: "viking://resources/email/unrelated.json", level: 2, abstract: "Unrelated email", score: 0.34 },
+            { uri: "viking://resources/docs/relevant.md", level: 2, abstract: "Relevant project notes", score: 0.72 },
+          ],
+        }
+      },
+    }
+
+    const result = await searchResourceScope(client, "project notes", {
+      limit: 6,
+      scoreThreshold: 0.4,
+    })
+
+    assert.equal(result.resources.length, 1)
+    assert.equal(result.resources[0].uri, "viking://resources/docs/relevant.md")
+    assert.equal(result.resources[0].abstract, "Relevant project notes")
+  })
+
   it("does not treat resource-like prefixes as resource scopes", async () => {
     const client = {
       async find(_query, options) {

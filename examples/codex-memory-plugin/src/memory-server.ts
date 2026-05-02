@@ -194,6 +194,13 @@ const config = {
     || process.env.OPENVIKING_RECALL_RESOURCES === "true",
 }
 
+const DEFAULT_RESOURCE_SCORE_THRESHOLD = 0.4
+
+function resourceScoreThreshold(explicit: number | undefined): number {
+  if (typeof explicit === "number") return Math.min(1, Math.max(0, explicit))
+  return Math.max(config.scoreThreshold, DEFAULT_RESOURCE_SCORE_THRESHOLD)
+}
+
 class OpenVikingClient {
   private runtimeIdentity: { userId: string; agentId: string } | null = null
 
@@ -438,11 +445,11 @@ server.tool(
     query: z.string().describe("Search query"),
     target_uri: z.string().optional().describe("Resource scope URI, default viking://resources"),
     limit: z.number().optional().describe("Max results, default 6"),
-    score_threshold: z.number().optional().describe("Minimum relevance score 0-1, default 0.01"),
+    score_threshold: z.number().optional().describe("Minimum relevance score 0-1, default 0.4 for resources"),
   },
   async ({ query, target_uri, limit, score_threshold }) => {
     const recallLimit = limit ?? config.recallLimit
-    const threshold = score_threshold ?? config.scoreThreshold
+    const threshold = resourceScoreThreshold(score_threshold)
     const result = await searchResourceScope(client, query, {
       targetUri: target_uri,
       limit: recallLimit,

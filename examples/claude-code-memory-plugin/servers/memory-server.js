@@ -142,6 +142,12 @@ const config = {
     recallReadLineLimit: Math.max(1, Math.floor(num(clientFile.recallReadLineLimit, 120))),
     recallContentMaxChars: Math.max(200, Math.floor(num(clientFile.recallContentMaxChars, 4000))),
 };
+const DEFAULT_RESOURCE_SCORE_THRESHOLD = 0.4;
+function resourceScoreThreshold(explicit) {
+    if (typeof explicit === "number")
+        return Math.min(1, Math.max(0, explicit));
+    return Math.max(config.scoreThreshold, DEFAULT_RESOURCE_SCORE_THRESHOLD);
+}
 // ---------------------------------------------------------------------------
 // OpenViking HTTP Client (ported from openclaw-plugin/client.ts)
 // ---------------------------------------------------------------------------
@@ -648,11 +654,11 @@ server.tool("memory_recall", "Search long-term memories from OpenViking. Use whe
 server.tool("resource_recall", "Search OpenViking resources. Use when you need evidence from indexed documents, files, email, Slack, calendar, Drive, or other viking://resources content.", {
     query: z.string().describe("Search query — describe the resource evidence you want to find"),
     limit: z.number().optional().describe("Max results to return (default: 6)"),
-    score_threshold: z.number().optional().describe("Min relevance score 0-1 (default: 0.01)"),
+    score_threshold: z.number().optional().describe("Min relevance score 0-1 (default: 0.4 for resources)"),
     target_uri: z.string().optional().describe("Resource scope URI, e.g. viking://resources/email"),
 }, async ({ query, limit, score_threshold, target_uri }) => {
     const recallLimit = limit ?? config.recallLimit;
-    const threshold = score_threshold ?? config.scoreThreshold;
+    const threshold = resourceScoreThreshold(score_threshold);
     const candidateLimit = Math.max(recallLimit * 4, 20);
     const searchResult = await searchResourceScope(client, query, {
         targetUri: target_uri,
