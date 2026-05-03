@@ -1,7 +1,7 @@
 """Fork-local version metadata."""
 
-FORK_VERSION_SUFFIX = "+0xble.1.2.3"
-LEGACY_FORK_VERSION_SUFFIX = "-0xble.1.2.3"
+FORK_VERSION_SUFFIX = "+0xble.1.3.0"
+LEGACY_FORK_VERSION_SUFFIX = "-0xble.1.3.0"
 
 
 def apply_fork_version_suffix(version: str) -> str:

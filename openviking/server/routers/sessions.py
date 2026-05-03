@@ -3,6 +3,7 @@
 """Sessions endpoints for OpenViking HTTP Server."""
 
 import logging
+import re
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Path, Query, Request
@@ -14,6 +15,12 @@ from openviking.server.dependencies import get_service
 from openviking.server.identity import AuthMode, RequestContext
 from openviking.server.models import ErrorInfo, Response
 from openviking.server.responses import error_response
+from openviking_cli.exceptions import NotFoundError
+
+_BARE_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_SESSION_ID_PROVIDER_PREFIXES = ("claude-", "codex-", "openclaw-")
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -113,6 +120,11 @@ def _request_auth_mode(request: Request) -> AuthMode:
     return AuthMode.API_KEY
 
 
+def _tolerate_bare_session_id(request: Request) -> bool:
+    config = getattr(request.app.state, "config", None)
+    return bool(config and getattr(config, "tolerate_bare_session_id", False))
+
+
 def _resolve_message_role_id(
     http_request: Request,
     request: AddMessageRequest,
@@ -173,15 +185,51 @@ async def list_sessions(
     return Response(status="ok", result=result)
 
 
+def _bare_session_id_candidates(session_id: str) -> List[str]:
+    """Return prefixed candidates for a bare UUID, in lookup order. Empty if not bare.
+
+    The provider-prefix tuple gates which inputs skip fallback (already-prefixed),
+    while the returned list omits openclaw because openclaw IDs need a scope segment
+    (`openclaw-<scope>-<uuid>`) that cannot be inferred from a bare UUID alone.
+    """
+    if session_id.startswith(_SESSION_ID_PROVIDER_PREFIXES):
+        return []
+    if not _BARE_UUID_RE.match(session_id):
+        return []
+    return [f"claude-{session_id}", f"codex-{session_id}"]
+
+
 @router.get("/{session_id}")
 async def get_session(
+    http_request: Request,
     session_id: str = Path(..., description="Session ID"),
     auto_create: bool = Query(False, description="Create the session if it does not exist"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get session details."""
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
+    try:
+        session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
+    except NotFoundError:
+        # Skip fallback when auto_create=True: a bare UUID would otherwise create a
+        # phantom session under the wrong-provider prefix.
+        if auto_create or not _tolerate_bare_session_id(http_request):
+            raise
+        hits = []
+        for candidate in _bare_session_id_candidates(session_id):
+            try:
+                hits.append(await service.sessions.get(candidate, _ctx, auto_create=False))
+            except NotFoundError:
+                continue
+        if not hits:
+            raise
+        if len(hits) > 1:
+            logger.warning(
+                "Bare session id %r matched multiple providers %s; returning first.",
+                session_id,
+                [s.session_id for s in hits],
+            )
+        session = hits[0]
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
     metadata = await session.get_metadata()

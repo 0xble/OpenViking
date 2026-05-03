@@ -106,6 +106,9 @@ class ServerConfig(BaseModel):
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
     encryption_enabled: bool = False  # Whether file-level AES encryption is enabled
     api_key_hashing_enabled: bool = False  # Whether API key Argon2id hashing is enabled (default: false, rely on file encryption)
+    # When true, GET /sessions/{id} retries bare UUIDs with claude- and codex- prefixes
+    # before returning 404. Off by default to preserve upstream strict-lookup behavior.
+    tolerate_bare_session_id: bool = False
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
 
     model_config = {"extra": "forbid"}
