@@ -639,7 +639,7 @@ function joinSystemPromptSections(sections: Array<string | undefined>): string |
 
 // OpenClaw 4.14+ installContextEngineLoopHook only forwards assembled.messages
 // out of transformContext; systemPromptAddition is discarded. Inject recall as
-// a leading text block on the first user message so the model sees it.
+// a leading text block on the latest user message so the model sees it.
 function injectRecallIntoMessages(
   msgs: AgentMessage[],
   recallSection: string | undefined,
@@ -648,7 +648,7 @@ function injectRecallIntoMessages(
     return msgs;
   }
   const result = [...msgs];
-  const userIdx = result.findIndex((m) => m.role === "user");
+  const userIdx = result.findLastIndex((m) => m.role === "user");
   if (userIdx < 0) {
     return result;
   }
@@ -668,6 +668,25 @@ function injectRecallIntoMessages(
   return result;
 }
 
+function hasAutoRecallBlock(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "user") {
+    return false;
+  }
+  if (typeof message.content === "string") {
+    return /<relevant-memories>/i.test(message.content);
+  }
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  return message.content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const text = (block as Record<string, unknown>).text;
+    return typeof text === "string" && /<relevant-memories>/i.test(text);
+  });
+}
+
 function buildArchiveMemory(
   archiveOverview: string | undefined,
   _preAbstracts: Array<{ archive_id: string; abstract: string }>,
@@ -683,22 +702,6 @@ function buildArchiveMemory(
   }
 
   return { messages, tokens: roughEstimate(messages) };
-}
-
-/** Merge consecutive assistant messages by concatenating their content arrays. */
-export function mergeConsecutiveAssistants(messages: AgentMessage[]): AgentMessage[] {
-  const result: AgentMessage[] = [];
-  for (const msg of messages) {
-    const prev = result[result.length - 1];
-    if (msg.role === "assistant" && prev?.role === "assistant") {
-      const prevContent = Array.isArray(prev.content) ? prev.content : [{ type: "text", text: prev.content }];
-      const currContent = Array.isArray(msg.content) ? msg.content : [{ type: "text", text: msg.content }];
-      prev.content = [...prevContent, ...currContent] as typeof prev.content;
-    } else {
-      result.push({ ...msg });
-    }
-  }
-  return result;
 }
 
 function warnOrInfo(logger: Logger, message: string): void {
@@ -1097,8 +1100,14 @@ export function createMemoryOpenVikingContextEngine(params: {
       const { messages } = assembleParams;
       const tokenBudget = validTokenBudget(assembleParams.tokenBudget) ?? 128_000;
       const sessionKey = extractAssembleSessionKey(assembleParams);
+      const latestMessage = messages.at(-1) as AgentMessage | undefined;
       const latestUserText = extractLatestUserText(messages as unknown[]);
       const recallQuery = prepareRecallQuery(latestUserText);
+      const isMainAssemble =
+        Object.prototype.hasOwnProperty.call(assembleParams, "availableTools") ||
+        Object.prototype.hasOwnProperty.call(assembleParams, "citationsMode") ||
+        Object.prototype.hasOwnProperty.call(assembleParams, "prompt");
+      const isTransformContextAssemble = !isMainAssemble && messages.length > 1;
 
       const originalTokens = roughEstimate(messages);
       const passthroughEstimatedTokens = roughEstimate(messages);
@@ -1131,6 +1140,54 @@ export function createMemoryOpenVikingContextEngine(params: {
           savingPct: 0,
         });
         return { messages, estimatedTokens: originalTokens };
+      }
+
+      if (isTransformContextAssemble) {
+        if (latestMessage?.role !== "user" || !cfg.autoRecall || hasAutoRecallBlock(latestMessage)) {
+          return { messages, estimatedTokens: originalTokens };
+        }
+
+        if (!recallQuery.query || recallQuery.query.length < 5) {
+          return { messages, estimatedTokens: originalTokens };
+        }
+
+        try {
+          if (recallQuery.truncated) {
+            warnOrInfo(
+              logger,
+              `openviking: recall query truncated (chars=${recallQuery.originalChars}->${recallQuery.finalChars})`,
+            );
+          }
+          const client = await withTimeout(
+            getClient(),
+            cfg.timeoutMs,
+            "openviking: context engine client initialization timeout",
+          );
+          const routingRef =
+            assembleParams.sessionId ?? sessionKey ?? OVSessionId;
+          const agentId = resolveAgentId(routingRef, sessionKey, OVSessionId);
+          const recallPrompt = await buildRecallPromptSection({
+            cfg,
+            client,
+            logger,
+            queryText: recallQuery.query,
+            agentId,
+            verboseLog: cfg.logFindRequests ? (message) => warnOrInfo(logger, message) : () => {},
+          });
+
+          if (!recallPrompt.section) {
+            return { messages, estimatedTokens: originalTokens };
+          }
+
+          const withRecall = injectRecallIntoMessages(messages, recallPrompt.section);
+          return {
+            messages: withRecall,
+            estimatedTokens: roughEstimate(withRecall),
+          };
+        } catch (err) {
+          warnOrInfo(logger, `openviking: auto-recall failed: ${String(err)}`);
+          return { messages, estimatedTokens: originalTokens };
+        }
       }
 
       try {

@@ -262,6 +262,10 @@ describe("context-engine assemble()", () => {
       content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
     });
     expect(result.messages[1]).toEqual({
+      role: "user",
+      content: "[Archive Index]\narchive_001: Previously discussed repository setup.",
+    });
+    expect(result.messages[2]).toEqual({
       role: "assistant",
       content: [{ type: "text", text: "Stored answer from OpenViking." }],
     });
@@ -325,6 +329,10 @@ describe("context-engine assemble()", () => {
       content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
     });
     expect(result.messages[1]).toEqual({
+      role: "user",
+      content: "[Archive Index]\narchive_001: Previously discussed repository setup.",
+    });
+    expect(result.messages[2]).toEqual({
       role: "assistant",
       content: [
         { type: "text", text: "I checked the latest context." },
@@ -337,7 +345,7 @@ describe("context-engine assemble()", () => {
         },
       ],
     });
-    expect(result.messages[2]).toEqual({
+    expect(result.messages[3]).toEqual({
       role: "toolResult",
       toolCallId: "tool_123",
       toolName: "read_file",

@@ -860,7 +860,7 @@ describe("Plugin registration", () => {
   it("registers all 9 tools", () => {
     const { api } = setupPlugin();
     contextEnginePlugin.register(api as any);
-    expect(api.registerTool).toHaveBeenCalledTimes(9);
+    expect(api.registerTool).toHaveBeenCalledTimes(10);
   });
 
   it("registers import and search commands", () => {

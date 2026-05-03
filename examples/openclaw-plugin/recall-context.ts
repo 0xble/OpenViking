@@ -293,6 +293,7 @@ export async function buildRecallPromptSection(
         return {
           section:
             "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
+            "Source: openviking-auto-recall\n" +
             `${lines.join("\n")}\n` +
             "</relevant-memories>",
           estimatedTokens,
