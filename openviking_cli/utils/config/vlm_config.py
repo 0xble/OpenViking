@@ -287,6 +287,7 @@ class VLMConfig(BaseModel):
         prompt: str = "",
         thinking: Optional[bool] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion asynchronously."""
@@ -295,6 +296,7 @@ class VLMConfig(BaseModel):
                 prompt=prompt,
                 thinking=self.thinking if thinking is None else thinking,
                 tools=tools,
+                tool_choice=tool_choice,
                 messages=messages,
             )
         except TypeError as exc:

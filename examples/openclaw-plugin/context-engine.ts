@@ -601,40 +601,29 @@ function buildSystemPromptAddition(): string {
   return [
     "## Session Context Guide",
     "",
-    "Your conversation history may include:",
+    "Your conversation history includes two layers:",
     "",
-    "1. **[Session History Summary]** — A compressed summary of all prior",
-    "   conversation sessions. Use it to understand background and continuity.",
-    "   It is lossy: specific details (commands, file paths, code, config",
-    "   values) may have been compressed away. It may be omitted when the",
-    "   token budget is tight.",
+    "1. **[Session History Summary]** — A compressed summary of all prior turns",
+    "   in this session. It is organized into structured sections (Key Facts,",
+    "   Timeline, People, etc.). Use it for background and continuity.",
+    "   The summary is lossy: specific details (exact dates, numbers, names,",
+    "   small events) may have been compressed away.",
     "",
-    "2. **[Archive Index]** — A list of archive entries in chronological order",
-    "   (archive_001 is the oldest, higher numbers are more recent). Most",
-    "   lines summarize one archive; the latest archive may appear as an ID",
-    "   pointer only.",
-    "",
-    "3. **Active messages** — The current, uncompressed conversation.",
-    "",
-    "**When you need precise details from a prior session:**",
-    "",
-    "1. Review [Archive Index] to identify which archive likely contains",
-    "   the information you need.",
-    "2. Call `ov_archive_expand` with that archive ID to retrieve the",
-    "   archived conversation content.",
-    "3. If multiple archives look relevant, try the most recent one first.",
-    "4. Answer using the retrieved content together with active messages.",
+    "2. **Active messages** — The most recent uncompressed turns.",
     "",
     "**Rules:**",
-    "- If active messages conflict with archive content, trust active",
-    "  messages as the newer source of truth.",
-    "- Only expand an archive when the existing context lacks the specific detail needed.",
-    "- If [Session History Summary] is absent, use [Archive Index] and active",
-    "  messages to decide whether to expand an archive.",
-    "- Do not fabricate details from summaries. When uncertain, expand first",
-    "  or state that the information comes from a compressed summary.",
-    "- After expanding, cite the archive ID in your answer",
-    '  (e.g. "Based on archive_003, ...").',
+    "- When active messages conflict with the Summary, trust active messages",
+    "  as the newer source of truth.",
+    "- Do not fabricate details the Summary does not state explicitly.",
+    "- **CRITICAL: Before answering 'no information' or 'not mentioned',",
+    "  you MUST carefully re-read EVERY section of the [Session History Summary].",
+    "  The answer may be expressed with different wording than the question.",
+    "  Look for synonyms, related facts, and indirect references.**",
+    "- If the Summary mentions a topic but lacks the specific detail asked,",
+    "  use the `ov_archive_search` tool to grep the original archived messages",
+    "  for the exact detail. Try 2-3 different keywords extracted from the question.",
+    "- Only conclude information is unavailable AFTER both checking the Summary",
+    "  thoroughly AND searching the archives with at least 2 keyword variations.",
   ].join("\n");
 }
 
@@ -675,6 +664,39 @@ function injectRecallIntoMessages(
         ...(content as Array<Record<string, unknown>>),
       ],
     };
+  }
+  return result;
+}
+
+function buildArchiveMemory(
+  archiveOverview: string | undefined,
+  _preAbstracts: Array<{ archive_id: string; abstract: string }>,
+  _budget: number,
+): { messages: AgentMessage[]; tokens: number } {
+  const messages: AgentMessage[] = [];
+
+  if (archiveOverview) {
+    messages.push({
+      role: "user",
+      content: `[Session History Summary]\n${archiveOverview}`,
+    });
+  }
+
+  return { messages, tokens: roughEstimate(messages) };
+}
+
+/** Merge consecutive assistant messages by concatenating their content arrays. */
+export function mergeConsecutiveAssistants(messages: AgentMessage[]): AgentMessage[] {
+  const result: AgentMessage[] = [];
+  for (const msg of messages) {
+    const prev = result[result.length - 1];
+    if (msg.role === "assistant" && prev?.role === "assistant") {
+      const prevContent = Array.isArray(prev.content) ? prev.content : [{ type: "text", text: prev.content }];
+      const currContent = Array.isArray(msg.content) ? msg.content : [{ type: "text", text: msg.content }];
+      prev.content = [...prevContent, ...currContent] as typeof prev.content;
+    } else {
+      result.push({ ...msg });
+    }
   }
   return result;
 }
@@ -974,7 +996,11 @@ export function createMemoryOpenVikingContextEngine(params: {
         ovSessionId: ovId,
       });
       const agentId = resolveAgentId(sessionId, sessionKey, ovId);
-      const commitResult = await client.commitSession(ovId, { wait: true, agentId });
+      const commitResult = await client.commitSession(ovId, {
+        wait: true,
+        agentId,
+        keepRecentCount: 0,
+      });
       const memCount = totalExtractedMemories(commitResult.memories_extracted);
       if (commitResult.status === "failed") {
         warnOrInfo(logger, `openviking: commit Phase 2 failed for session=${sessionId}: ${commitResult.error ?? "unknown"}`);
@@ -1495,7 +1521,11 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         const commitResult = await withTimeout(
-          client.commitSession(OVSessionId, { wait: false, agentId }),
+          client.commitSession(OVSessionId, {
+            wait: false,
+            agentId,
+            keepRecentCount: cfg.commitKeepRecentCount,
+          }),
           captureTimeoutMs,
           "openviking: afterTurn commitSession timeout",
         );
@@ -1597,7 +1627,11 @@ export function createMemoryOpenVikingContextEngine(params: {
         );
         let commitResult: Awaited<ReturnType<typeof client.commitSession>>;
         try {
-          commitResult = await client.commitSession(OVSessionId, { wait: true, agentId });
+          commitResult = await client.commitSession(OVSessionId, {
+            wait: true,
+            agentId,
+            keepRecentCount: 0,
+          });
         } catch (commitErr) {
           if (!isSessionNotFoundError(commitErr)) {
             throw commitErr;
@@ -1631,7 +1665,11 @@ export function createMemoryOpenVikingContextEngine(params: {
             [{ type: "text", text: DORMANT_SESSION_SEED_TEXT }],
             agentId,
           );
-          commitResult = await client.commitSession(OVSessionId, { wait: true, agentId });
+          commitResult = await client.commitSession(OVSessionId, {
+            wait: true,
+            agentId,
+            keepRecentCount: 0,
+          });
         }
         const memCount = totalExtractedMemories(commitResult.memories_extracted);
 
