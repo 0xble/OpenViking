@@ -1,5 +1,9 @@
 from build_support.versioning import resolve_openviking_version
-from openviking._fork_version import FORK_VERSION_SUFFIX, apply_fork_version_suffix
+from openviking._fork_version import (
+    FORK_VERSION_SUFFIX,
+    LEGACY_FORK_VERSION_SUFFIX,
+    apply_fork_version_suffix,
+)
 
 
 def test_apply_fork_version_suffix_is_idempotent():
@@ -15,6 +19,6 @@ def test_resolve_openviking_version_applies_suffix_to_env_version():
 
 
 def test_apply_fork_version_suffix_normalizes_legacy_hyphen_suffix():
-    version = apply_fork_version_suffix("0.3.13-0xble.1.2.3")
+    version = apply_fork_version_suffix(f"0.3.13{LEGACY_FORK_VERSION_SUFFIX}")
 
     assert version == f"0.3.13{FORK_VERSION_SUFFIX}"
