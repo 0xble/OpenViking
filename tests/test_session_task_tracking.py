@@ -77,7 +77,7 @@ def _make_tracked_commit(behavior="instant", result_overrides=None, gate=None, s
         started: asyncio.Event to set when background task starts (for "gated")
     """
 
-    async def mock_commit(_sid, _ctx):
+    async def mock_commit(_sid, _ctx, keep_recent_count=0):
         tracker = get_task_tracker()
         task = tracker.create(
             "session_commit",

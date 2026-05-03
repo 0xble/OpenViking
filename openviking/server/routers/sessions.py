@@ -229,7 +229,7 @@ async def get_session(
                 session_id,
                 [s.session_id for s in hits],
             )
-    session = hits[0]
+        session = hits[0]
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
     metadata = await session.get_metadata()
