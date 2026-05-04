@@ -343,6 +343,7 @@ class ResourceProcessor:
                             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
                             temp_uris=[temp_uri_for_summarize],
                             is_code_repo=is_code_repo,
+                            instruction=effective_instruction,
                             **kwargs,
                         )
                 except Exception as e:

@@ -22,6 +22,11 @@ variables:
     description: "Language code for output (e.g., 'en', 'zh-CN', 'ja', 'ko', 'ru', 'ar')"
     required: true
 
+  - name: "instruction"
+    type: "string"
+    description: "Caller guidance for how to summarize the file"
+    default: ""
+
 template: |
   Output Language: {{ output_language }}
 
@@ -33,10 +38,16 @@ template: |
   【File Content】
   {{ content }}
 
+  【Processing Guidance】
+  {{ instruction }}
+
   Output requirements:
   - Length: 50-150 words
-  - Explain what this file is, what it covers, and what it's used for
-  - Include core keywords for understanding
+  - Explain the concrete facts, topics, entities, dates, and decisions present in the file
+  - For chat logs, emails, notes, records, or other user-context resources, summarize what happened and who was involved; do not describe the export format unless the format is the point
+  - Include core searchable keywords from the actual content
+  - Treat processing guidance as summarization guidance, not as file content
+  - Avoid generic audience/use-case phrasing such as "ideal for anyone" or "centralized archive" unless the source itself says that
   - Output plain text directly, no markdown format
 
 llm_config:

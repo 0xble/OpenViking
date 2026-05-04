@@ -22,6 +22,11 @@ variables:
     description: "Language code for output (e.g., 'en', 'zh-CN', 'ja', 'ko', 'ru', 'ar')"
     required: true
 
+  - name: "instruction"
+    type: "string"
+    description: "Caller guidance for how to summarize the code"
+    default: ""
+
 template: |
   Output Language: {{ output_language }}
 
@@ -33,6 +38,9 @@ template: |
   【File Content】
   {{ content }}
 
+  【Processing Guidance】
+  {{ instruction }}
+
   Output requirements:
   - Length: 80-200 words
   - Focus on the main purpose and functionality of this code file
@@ -41,6 +49,7 @@ template: |
   - Note the programming language and any language-specific patterns
   - Describe the overall architecture role of this file in the project
   - Include relevant technical keywords for semantic search
+  - Treat processing guidance as summarization guidance, not as code content
   - Output plain text directly, no markdown format
 
   Structure your summary with:

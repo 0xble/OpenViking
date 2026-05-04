@@ -27,6 +27,11 @@ variables:
     description: "Language code for output (e.g., 'en', 'zh-CN', 'ja', 'ko', 'ru', 'ar')"
     required: true
 
+  - name: "instruction"
+    type: "string"
+    description: "Caller guidance for how to shape the directory overview"
+    default: ""
+
 template: |
   Output Language: {{ output_language }}
 
@@ -45,10 +50,20 @@ template: |
   [Subdirectories and Their Summaries]
   {{ children_abstracts }}
 
+  [Processing Guidance]
+  {{ instruction }}
+
   Relationship rules:
   - Treat child directories as parts of the same repository unless the summaries clearly show they are independent projects.
   - Do not describe every child directory as an independent project by default.
   - When the summaries suggest a code repository, explain how subdirectories relate to the whole repo, such as services, libraries, apps, modules, or support folders.
+  - Treat processing guidance as output-shaping guidance, not as directory content.
+  - Prefer the caller's intended audience and source context when it conflicts with a generic dataset or repository framing.
+  - For chat logs, emails, notes, records, and other user-context resources, lead with the concrete people, topics, dates, decisions, and recent facts present in the summaries.
+  - Do not describe user-context resources as a dataset, repository, archive system, or tool for generic users unless the source itself is about those things.
+  - Avoid boilerplate audience claims such as "ideal for anyone looking to..." and avoid explaining the storage format when the content is more important.
+  - If processing guidance says the source is personal conversation, email, notes, or memory context, the brief description must include at least two concrete topics, events, dates, decisions, or named people from the summaries.
+  - For personal conversation context, avoid generic storage words in the brief description such as archive, repository, collection, record, database, chronological, indexed, or searchable unless needed for a specific factual point.
 
   Output in Markdown format, strictly following this structure:
 
@@ -56,9 +71,10 @@ template: |
 
   2. **Brief Description** (plain text paragraph, 50-150 words):
      - Immediately following the title, without any H2 heading
-     - Explain what this is, what it's about, what it covers
-     - Include core keywords for easy searching
-     - Who it's suitable for
+     - Explain what this content is about using concrete source facts
+     - Include core searchable keywords from the actual content
+     - Mention the likely audience only when it is materially useful and specific
+     - For user-context resources, this paragraph should read like a content summary, not a product description
 
   3. **Quick Navigation** (H2): Decision Tree style
      - Guide with "What do you want to learn?" or "What do you want to do?"

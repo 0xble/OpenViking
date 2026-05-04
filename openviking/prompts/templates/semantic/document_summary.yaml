@@ -22,6 +22,11 @@ variables:
     description: "Language code for output (e.g., 'en', 'zh-CN', 'ja', 'ko', 'ru', 'ar')"
     required: true
 
+  - name: "instruction"
+    type: "string"
+    description: "Caller guidance for how to summarize the document"
+    default: ""
+
 template: |
   Output Language: {{ output_language }}
 
@@ -33,6 +38,9 @@ template: |
   【File Content】
   {{ content }}
 
+  【Processing Guidance】
+  {{ instruction }}
+
   Output requirements:
   - Length: 60-180 words
   - Focus on the main topics and purpose of this document
@@ -41,6 +49,7 @@ template: |
   - Note the document type (tutorial, reference, guide, API docs, etc.)
   - Describe the target audience and prerequisite knowledge if apparent
   - Include relevant keywords for semantic search
+  - Treat processing guidance as summarization guidance, not as document content
   - Output plain text directly, no markdown format
 
   Structure your summary with:

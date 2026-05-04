@@ -58,12 +58,18 @@ class _FakeVikingFS:
 class _FakeProcessor:
     def __init__(self):
         self.overview_calls = 0
+        self.file_instructions = []
+        self.overview_instructions = []
 
-    async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
+    async def _generate_single_file_summary(
+        self, file_path, llm_sem=None, ctx=None, instruction=""
+    ):
+        self.file_instructions.append(instruction)
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
-    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
+    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts, instruction=""):
         self.overview_calls += 1
+        self.overview_instructions.append(instruction)
         return "fresh-overview"
 
     def _extract_abstract_from_overview(self, overview):
@@ -84,7 +90,7 @@ class _DummyTracker:
         return None
 
 
-def _make_executor(monkeypatch, fake_fs, processor):
+def _make_executor(monkeypatch, fake_fs, processor, instruction=""):
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
     monkeypatch.setattr(
         "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
@@ -96,6 +102,7 @@ def _make_executor(monkeypatch, fake_fs, processor):
         context_type="resource",
         max_concurrent_llm=2,
         ctx=ctx,
+        instruction=instruction,
     )
 
 
@@ -137,6 +144,26 @@ def test_compute_overview_input_hash_changes_on_input_change(monkeypatch):
     )
     assert base != mutated_files
     assert base != mutated_children
+
+
+def test_compute_overview_input_hash_changes_on_instruction_change(monkeypatch):
+    _seed_prompt_sha(monkeypatch, "stub-prompt-sha")
+    fake_fs = _FakeVikingFS({})
+    processor = _FakeProcessor()
+    base = _make_executor(monkeypatch, fake_fs, processor)._compute_overview_input_hash(
+        [{"name": "a.md", "summary": "alpha"}],
+        [],
+    )
+    instructed = _make_executor(
+        monkeypatch,
+        fake_fs,
+        processor,
+        instruction="Prefer personal conversation context.",
+    )._compute_overview_input_hash(
+        [{"name": "a.md", "summary": "alpha"}],
+        [],
+    )
+    assert base != instructed
 
 
 def test_compute_overview_input_hash_invalidates_on_prompt_change(monkeypatch):
@@ -236,6 +263,27 @@ async def test_overview_task_writes_hash_after_fresh_render(monkeypatch):
     assert f"{root_uri}/.abstract.md" in written_paths
     assert f"{root_uri}/{OVERVIEW_HASH_FILENAME}" in written_paths
     assert processor.overview_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_instruction_passed_to_file_and_overview_generation(monkeypatch):
+    _mock_transaction_layer(monkeypatch)
+    _seed_prompt_sha(monkeypatch, "stub-prompt-sha")
+    root_uri = "viking://resources/instruction-test"
+    tree = {
+        root_uri: [
+            {"name": "doc.md", "isDir": False},
+        ],
+    }
+    fake_fs = _FakeVikingFS(tree)
+    processor = _FakeProcessor()
+    instruction = "Prefer personal conversation context."
+    executor = _make_executor(monkeypatch, fake_fs, processor, instruction=instruction)
+
+    await executor.run(root_uri)
+
+    assert processor.file_instructions == [instruction]
+    assert processor.overview_instructions == [instruction]
 
 
 @pytest.mark.asyncio

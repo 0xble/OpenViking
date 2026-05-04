@@ -49,11 +49,13 @@ class _FakeProcessor:
         self.vectorized_files = []
         self.overview_inputs = []
 
-    async def _generate_single_file_summary(self, file_path, llm_sem=None, ctx=None):
+    async def _generate_single_file_summary(
+        self, file_path, llm_sem=None, ctx=None, instruction=""
+    ):
         self.summarized_files.append(file_path)
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
-    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
+    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts, instruction=""):
         self.overview_inputs.append((dir_uri, file_summaries, children_abstracts))
         return "overview"
 

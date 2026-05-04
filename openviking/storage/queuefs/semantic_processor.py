@@ -376,6 +376,7 @@ class SemanticProcessor(DequeueHandlerBase):
                             recursive=msg.recursive,
                             lifecycle_lock_handle_id=msg.lifecycle_lock_handle_id,
                             is_code_repo=msg.is_code_repo,
+                            instruction=msg.instruction,
                             changes=msg.changes,
                         )
                         self._dag_executor = executor
@@ -934,6 +935,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_name: str,
         llm_sem: asyncio.Semaphore,
         ctx: Optional[RequestContext] = None,
+        instruction: str = "",
     ) -> Dict[str, str]:
         """Generate summary for a single text file (code, documentation, or other text)."""
         viking_fs = get_viking_fs()
@@ -988,6 +990,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 "file_name": file_name,
                                 "skeleton": skeleton_text,
                                 "output_language": output_language,
+                                "instruction": instruction,
                             },
                         )
                         async with llm_sem:
@@ -1002,7 +1005,12 @@ class SemanticProcessor(DequeueHandlerBase):
             # "llm" mode or fallback when skeleton is None/empty
             prompt = render_prompt(
                 "semantic.code_summary",
-                {"file_name": file_name, "content": content, "output_language": output_language},
+                {
+                    "file_name": file_name,
+                    "content": content,
+                    "output_language": output_language,
+                    "instruction": instruction,
+                },
             )
             async with llm_sem:
                 with bind_telemetry_stage("resource_summarize"):
@@ -1016,7 +1024,12 @@ class SemanticProcessor(DequeueHandlerBase):
 
         prompt = render_prompt(
             prompt_id,
-            {"file_name": file_name, "content": content, "output_language": output_language},
+            {
+                "file_name": file_name,
+                "content": content,
+                "output_language": output_language,
+                "instruction": instruction,
+            },
         )
 
         async with llm_sem:
@@ -1029,6 +1042,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_path: str,
         llm_sem: Optional[asyncio.Semaphore] = None,
         ctx: Optional[RequestContext] = None,
+        instruction: str = "",
     ) -> Dict[str, str]:
         """Generate summary for a single file.
 
@@ -1048,7 +1062,13 @@ class SemanticProcessor(DequeueHandlerBase):
         elif media_type == "video":
             return await generate_video_summary(file_path, file_name, llm_sem, ctx=ctx)
         else:
-            return await self._generate_text_summary(file_path, file_name, llm_sem, ctx=ctx)
+            return await self._generate_text_summary(
+                file_path,
+                file_name,
+                llm_sem,
+                ctx=ctx,
+                instruction=instruction,
+            )
 
     def _extract_abstract_from_overview(self, overview_content: str) -> str:
         """Extract abstract from overview.md."""
@@ -1141,6 +1161,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_summaries: List[Dict[str, str]],
         children_abstracts: List[Dict[str, str]],
         llm_sem: Optional[asyncio.Semaphore] = None,
+        instruction: str = "",
     ) -> str:
         """Generate directory's .overview.md (L1).
 
@@ -1204,6 +1225,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 file_index_map,
                 llm_sem=llm_sem,
                 output_language=output_language,
+                instruction=instruction,
             )
         elif over_budget:
             # Few items but long summaries -> truncate summaries to fit budget.
@@ -1232,6 +1254,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 children_abstracts_str,
                 file_index_map,
                 output_language=output_language,
+                instruction=instruction,
             )
         else:
             overview = await self._single_generate_overview(
@@ -1240,6 +1263,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 children_abstracts_str,
                 file_index_map,
                 output_language=output_language,
+                instruction=instruction,
             )
 
         return overview
@@ -1251,6 +1275,7 @@ class SemanticProcessor(DequeueHandlerBase):
         children_abstracts_str: str,
         file_index_map: Dict[int, str],
         output_language: str = "en",
+        instruction: str = "",
     ) -> str:
         """Generate overview from a single prompt (small directories)."""
         import re
@@ -1265,6 +1290,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     "file_summaries": file_summaries_str,
                     "children_abstracts": children_abstracts_str,
                     "output_language": output_language,
+                    "instruction": instruction,
                 },
             )
 
@@ -1295,6 +1321,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_index_map: Dict[int, str],
         llm_sem: Optional[asyncio.Semaphore] = None,
         output_language: str = "en",
+        instruction: str = "",
     ) -> str:
         """Generate overview by batching files/child directories and merging.
 
@@ -1350,6 +1377,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     "file_summaries": batch_str,
                     "children_abstracts": children_str,
                     "output_language": output_language,
+                    "instruction": instruction,
                 },
             )
             batch_prompts.append((batch_idx, prompt, batch_index_map))
@@ -1397,6 +1425,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     "file_summaries": combined,
                     "children_abstracts": "None",
                     "output_language": output_language,
+                    "instruction": instruction,
                 },
             )
             with bind_telemetry_stage("resource_summarize"):

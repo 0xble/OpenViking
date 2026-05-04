@@ -22,6 +22,11 @@ variables:
     description: "Language code for output (e.g., 'en', 'zh-CN', 'ja', 'ko', 'ru', 'ar')"
     required: true
 
+  - name: "instruction"
+    type: "string"
+    description: "Caller guidance for how to summarize the code"
+    default: ""
+
 template: |
   Output Language: {{ output_language }}
 
@@ -33,12 +38,16 @@ template: |
   【Code Structure】
   {{ skeleton }}
 
+  【Processing Guidance】
+  {{ instruction }}
+
   Output requirements:
   - Length: 80-200 words
   - Focus on the main purpose and functionality inferred from the structure
   - Highlight key classes, functions, and their relationships
   - Note important dependencies shown in imports
   - Include relevant technical keywords for semantic search
+  - Treat processing guidance as summarization guidance, not as code content
   - Output plain text directly, no markdown format
 
 llm_config:

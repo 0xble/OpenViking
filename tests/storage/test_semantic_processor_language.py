@@ -139,6 +139,28 @@ class TestOverviewGenerationFlow:
             in prompt
         )
 
+    def test_overview_generation_prompt_steers_user_context_to_concrete_facts(self):
+        prompt = render_prompt(
+            "semantic.overview_generation",
+            {
+                "dir_name": "imessages",
+                "file_summaries": (
+                    "[1] messages.json: Brian and Mahin discussed car cleaners and dinner."
+                ),
+                "children_abstracts": "",
+                "output_language": "en",
+                "instruction": "Summarize this as personal iMessage conversation context.",
+            },
+        )
+
+        assert "For chat logs, emails, notes, records, and other user-context resources" in prompt
+        assert "lead with the concrete people, topics, dates, decisions, and recent facts" in prompt
+        assert "Do not describe user-context resources as a dataset" in prompt
+        assert "Avoid boilerplate audience claims" in prompt
+        assert "the brief description must include at least two concrete topics" in prompt
+        assert "this paragraph should read like a content summary" in prompt
+        assert "Summarize this as personal iMessage conversation context." in prompt
+
 
 class LanguageAwareMockVLM:
     """语言感知的 MockVLM，根据 prompt 中的 Output Language 返回对应语言的响应。"""

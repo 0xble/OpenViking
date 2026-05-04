@@ -114,6 +114,7 @@ class SemanticDagExecutor:
         recursive: bool = True,
         lifecycle_lock_handle_id: str = "",
         is_code_repo: bool = False,
+        instruction: str = "",
         changes: Optional[Dict[str, List[str]]] = None,
     ):
         self._processor = processor
@@ -127,6 +128,7 @@ class SemanticDagExecutor:
         self._recursive = recursive
         self._lifecycle_lock_handle_id = lifecycle_lock_handle_id
         self._is_code_repo = is_code_repo
+        self._instruction = instruction
         self._changes = changes or {}
         self._changed_paths = {
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
@@ -535,7 +537,10 @@ class SemanticDagExecutor:
                     summary_dict = {"name": file_name, "summary": ""}
                 else:
                     summary_dict = await self._processor._generate_single_file_summary(
-                        file_path, llm_sem=self._llm_sem, ctx=self._ctx
+                        file_path,
+                        llm_sem=self._llm_sem,
+                        ctx=self._ctx,
+                        instruction=self._instruction,
                     )
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
@@ -660,6 +665,7 @@ class SemanticDagExecutor:
             "prompt_sha": prompt_sha,
             "model": model,
             "output_language_override": override,
+            "instruction": self._instruction,
             "files": file_summaries,
             "children": children_abstracts,
         }
@@ -737,7 +743,10 @@ class SemanticDagExecutor:
                 else:
                     async with self._llm_sem:
                         overview = await self._processor._generate_overview(
-                            dir_uri, file_summaries, children_abstracts
+                            dir_uri,
+                            file_summaries,
+                            children_abstracts,
+                            instruction=self._instruction,
                         )
                     abstract = self._processor._extract_abstract_from_overview(overview)
                     overview, abstract = self._processor._enforce_size_limits(overview, abstract)
