@@ -4,9 +4,15 @@
 URI generation and validation utilities.
 """
 
+from __future__ import annotations
+
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple
+
+if TYPE_CHECKING:
+    from openviking.session.memory.memory_isolation_handler import MemoryIsolationHandler
+    from openviking.session.memory.memory_updater import ExtractContext
 
 import jinja2
 
@@ -16,6 +22,24 @@ from openviking.session.memory.utils.model import model_to_dict
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def supplement_operation_uris(
+    operations: "ResolvedOperations",
+    registry: MemoryTypeRegistry,
+    extract_context: "ExtractContext" = None,
+    isolation_handler: "MemoryIsolationHandler" = None,
+):
+    """Populate `operation.uris` for each upsert op using the isolation handler."""
+    logger.info(f"[supplement_operation_uris] isolation_handler: {isolation_handler}")
+    for operation in operations.upsert_operations:
+        memory_type_schema = registry.get(operation.memory_type)
+        uris = isolation_handler.calculate_memory_uris(
+            memory_type_schema=memory_type_schema,
+            operation=operation,
+            extract_context=extract_context,
+        )
+        operation.uris = uris
 
 
 def _render_jinja_template(template: str, context: Dict[str, Any]) -> str:
