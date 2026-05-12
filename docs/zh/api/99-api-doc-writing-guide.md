@@ -10,7 +10,7 @@ API 文档按模块组织，每个模块一个文件，使用两位数字序号�
 
 每个 API 模块文档应遵循以下结构：
 
-```markdown
+````markdown
 # 模块名称
 
 [简短介绍，说明本模块的主要功能和用途]
@@ -90,7 +90,7 @@ JSON 响应示例
 ## 相关文档
 
 - [文档标题](相对路径) - 简短说明
-```
+````
 
 ## 结构详解
 
@@ -129,7 +129,7 @@ JSON 响应示例
 
 ## 示例：完整接口文档
 
-```markdown
+````markdown
 ### add_resource()
 
 #### 1. API 实现介绍
@@ -223,7 +223,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
 ```
 
 ---
-```
+````
 
 ## 文档维护清单
 

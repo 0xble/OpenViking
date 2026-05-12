@@ -95,12 +95,12 @@ async def test_overview_missing_uri_returns_not_found(client):
 
 
 async def test_reindex_missing_uri(client):
-    """Test reindex without uri field returns 422."""
+    """Test reindex without uri field returns structured INVALID_ARGUMENT."""
     resp = await client.post(
         "/api/v1/content/reindex",
         json={"mode": "vectors_only"},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 400
 
 
 async def test_reindex_endpoint_registered(client):
@@ -113,7 +113,7 @@ async def test_reindex_request_validation(client):
     """Test reindex validates the request body schema."""
     # Empty body — uri is required
     resp = await client.post("/api/v1/content/reindex", json={})
-    assert resp.status_code == 422
+    assert resp.status_code == 400
 
     # Invalid mode should not be accepted by the endpoint
     resp = await client.post(

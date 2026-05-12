@@ -4,8 +4,6 @@
 """SDK tests using AsyncHTTPClient against a real uvicorn server."""
 
 import asyncio
-import io
-import zipfile
 
 import httpx
 import pytest
@@ -13,7 +11,8 @@ import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.exceptions import ConflictError, FailedPreconditionError, ProcessingError
-from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_ROOT_API_KEY, TEST_TMP_DIR
+from tests.server.conftest import SAMPLE_MD_CONTENT, SDK_ROOT_API_KEY, TEST_TMP_DIR
+from tests.server.ovpack_test_helpers import build_ovpack_bytes
 
 
 @pytest_asyncio.fixture()
@@ -22,12 +21,9 @@ async def http_client(running_server):
     port, svc = running_server
     client = AsyncHTTPClient(
         url=f"http://127.0.0.1:{port}",
-        api_key=TEST_ROOT_API_KEY,
-        account=svc.user.account_id,
-        user=svc.user.user_id,
-        agent_id=svc.user.agent_id,
-        timeout=120.0,
-        extra_headers={},
+        api_key=SDK_ROOT_API_KEY,
+        account="default",
+        user="sdk_test_user",
     )
     await client.initialize()
     yield client, svc
@@ -55,29 +51,11 @@ async def test_sdk_add_resource(http_client):
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(SAMPLE_MD_CONTENT)
 
-    metadata = {"source": {"kind": "sdk", "etag": "v1"}}
-    result = await client.add_resource(
-        path=str(f),
-        reason="sdk test",
-        wait=True,
-        metadata=metadata,
-    )
+    result = await client.add_resource(path=str(f), reason="sdk test", wait=True)
     assert "usage" not in result
     assert "telemetry" not in result
     assert "root_uri" in result
     assert result["root_uri"].startswith("viking://")
-
-    stat = await client.stat(result["root_uri"])
-    assert stat["metadata"] == metadata
-
-    patched = await client.patch_resource_metadata(
-        result["root_uri"],
-        {"source": {"etag": "v2"}, "status": "active"},
-    )
-    assert patched["metadata"] == {
-        "source": {"kind": "sdk", "etag": "v2"},
-        "status": "active",
-    }
 
 
 async def test_sdk_add_resource_raises_processing_error_for_business_error(
@@ -95,7 +73,7 @@ async def test_sdk_add_resource_raises_processing_error_for_business_error(
     monkeypatch.setattr(svc.resources, "add_resource", fake_add_resource)
 
     with pytest.raises(ProcessingError, match="Parse error: boom"):
-        await client.add_resource(path="https://github.com/example/bad.md", wait=True)
+        await client.add_resource(path="https://example.com/bad.md", wait=True)
 
 
 def test_sdk_maps_conflict_error_envelope():
@@ -138,25 +116,16 @@ description: SDK localhost upload test
     assert result["uri"].startswith("viking://agent/default/skills/")
 
 
-def _build_ovpack_bytes() -> bytes:
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as zf:
-        zf.writestr("pkg/_._meta.json", '{"uri": "viking://resources/pkg"}')
-        zf.writestr("pkg/content.md", "# Demo\n")
-    return buffer.getvalue()
-
-
 async def test_sdk_import_ovpack_from_local_file(http_client):
     client, _ = http_client
     f = TEST_TMP_DIR / "sdk_import.ovpack"
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_bytes(_build_ovpack_bytes())
+    f.write_bytes(build_ovpack_bytes())
 
     uri = await client.import_ovpack(
         str(f),
         parent="viking://resources/imported/",
-        force=True,
-        vectorize=False,
+        on_conflict="overwrite",
     )
     assert uri.startswith("viking://resources/imported/")
 
@@ -262,18 +231,11 @@ async def test_sdk_commit_raises_failed_precondition_after_failed_archive(http_c
     session_info = await client.create_session()
     session_id = session_info["session_id"]
 
-    async def failing_summary(*args, **kwargs):
+    async def failing_extract(*args, **kwargs):
         del args, kwargs
-        raise RuntimeError("synthetic summary failure")
+        raise RuntimeError("synthetic extraction failure")
 
-    original_session = svc.sessions.session
-
-    def session_with_failing_summary(*args, **kwargs):
-        session = original_session(*args, **kwargs)
-        session._generate_archive_summary_async = failing_summary
-        return session
-
-    svc.sessions.session = session_with_failing_summary
+    svc.session_compressor.extract_long_term_memories = failing_extract
 
     await client.add_message(session_id, "user", "First round")
     commit_result = await client.commit_session(session_id)

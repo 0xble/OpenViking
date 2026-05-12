@@ -7,8 +7,6 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 """
 
 from typing import Any, Dict, List, Optional
-
-from openviking.core.directories import get_context_type_for_uri
 from openviking.core.uri_validation import validate_optional_viking_uri, validate_viking_uri
 from openviking.privacy import (
     UserPrivacyConfigService,
@@ -139,7 +137,7 @@ class FSService:
             uri=directory_uri,
             abstract=abstract,
             overview="",
-            context_type=get_context_type_for_uri(directory_uri),
+            context_type=context_type_for_uri(directory_uri),
             ctx=ctx,
         )
 
@@ -156,11 +154,11 @@ class FSService:
         directory_uri = VikingURI(abstract_uri).parent.uri
         return directory_uri, abstract_uri
 
-    async def rm(self, uri: str, ctx: RequestContext, recursive: bool = False) -> None:
+    async def rm(self, uri: str, ctx: RequestContext, recursive: bool = False) -> Optional[Dict[str, Any]]:
         """Remove resource."""
         uri = validate_viking_uri(uri)
         viking_fs = self._ensure_initialized()
-        await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
+        return await viking_fs.rm(uri, recursive=recursive, ctx=ctx)
 
     async def mv(self, from_uri: str, to_uri: str, ctx: RequestContext) -> None:
         """Move resource."""

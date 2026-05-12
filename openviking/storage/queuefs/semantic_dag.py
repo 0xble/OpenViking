@@ -116,6 +116,7 @@ class SemanticDagExecutor:
         is_code_repo: bool = False,
         instruction: str = "",
         changes: Optional[Dict[str, List[str]]] = None,
+        skip_vectorization: bool = False,
     ):
         self._processor = processor
         self._context_type = context_type
@@ -130,6 +131,7 @@ class SemanticDagExecutor:
         self._is_code_repo = is_code_repo
         self._instruction = instruction
         self._changes = changes or {}
+        self._skip_vectorization = skip_vectorization
         self._changed_paths = {
             path for key in ("added", "modified", "deleted") for path in self._changes.get(key, [])
         }
@@ -821,6 +823,12 @@ class SemanticDagExecutor:
 
     async def _add_vectorize_task(self, task: VectorizeTask) -> None:
         """Add a vectorize task to the pending list."""
+        if self._skip_vectorization:
+            logger.info(
+                "Skipping vectorization task for %s (requested via SemanticMsg)",
+                task.uri,
+            )
+            return
         async with self._vectorize_lock:
             self._pending_vectorize_tasks.append(task)
             if task.task_type == "file":

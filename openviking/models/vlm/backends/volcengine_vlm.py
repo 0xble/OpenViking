@@ -5,22 +5,21 @@
 import base64
 import hashlib
 import json
-import logging
 import re
 import time
 from collections import OrderedDict
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional, Union
-
 from openviking.telemetry import tracer
 from openviking.utils.model_retry import retry_async, retry_sync
 from openviking_cli.utils.async_utils import run_async
+from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class _ResponseIDCache:
@@ -187,7 +186,8 @@ class VolcEngineVLM(OpenAIVLM):
         """Build response from Chat Completions response. Returns str or VLMResponse based on has_tools."""
         choice = response.choices[0]
         message = choice.message
-        tracer.info(f"message.content={message.content}")
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            tracer.info(f"message.tool_calls={message.tool_calls}")
         if has_tools:
             usage = {}
             if hasattr(response, "usage") and response.usage:
@@ -252,8 +252,8 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -294,14 +294,18 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
         # 用 tracer.info 打印请求
         tracer.info(f"request: {json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
+        if tools:
+            tracer.info(
+                f"tools: {json.dumps([t['function']['name'] for t in tools], ensure_ascii=False)}"
+            )
 
         client = self.get_async_client()
 
@@ -313,7 +317,10 @@ class VolcEngineVLM(OpenAIVLM):
             result = self._build_vlm_response(response, has_tools=bool(tools))
             if tools:
                 return result
-            return self._clean_response(str(result))
+            content = self._clean_response(str(result))
+            if content:
+                tracer.info(f"message.content={content}")
+            return content
 
         return await retry_async(
             _do_call,
@@ -461,8 +468,8 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
@@ -511,8 +518,8 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_tokens"] = max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"

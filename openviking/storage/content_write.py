@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
+from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext
@@ -66,7 +67,7 @@ class ContentWriteCoordinator:
                 ctx=ctx,
             )
 
-        context_type = self._context_type_for_uri(normalized_uri)
+        context_type = context_type_for_uri(normalized_uri)
 
         existing_stat = await self._safe_stat(
             normalized_uri,
@@ -158,11 +159,11 @@ class ContentWriteCoordinator:
         mode: str,
         ctx: RequestContext,
     ) -> None:
-        if mode == "replace" and self._context_type_for_uri(uri) == "memory":
+        if mode == "replace" and context_type_for_uri(uri) == "memory":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            _, metadata = deserialize_full(existing_raw)
-            if metadata:
-                metadata_with_content = metadata.copy()
+            existing = deserialize_full(existing_raw)
+            if existing.memory_fields:
+                metadata_with_content = existing.memory_fields.copy()
                 metadata_with_content["content"] = content
                 content = serialize_with_metadata(metadata_with_content)
             await self._viking_fs.write_file(uri, content, ctx=ctx)
@@ -170,7 +171,9 @@ class ContentWriteCoordinator:
 
         if mode == "append":
             existing_raw = await self._viking_fs.read_file(uri, ctx=ctx)
-            existing_content, metadata = deserialize_full(existing_raw)
+            existing = deserialize_full(existing_raw)
+            existing_content = existing.plain_content
+            metadata = existing.memory_fields
             updated_content = existing_content + content
             if metadata:
                 metadata_with_content = metadata.copy()
@@ -211,8 +214,12 @@ class ContentWriteCoordinator:
                 )
             root_uri = VikingURI.build(*parts[: memories_idx + 2])
         elif parts[0] == "agent":
-            if len(parts) >= 3 and parts[1] == "skills":
-                root_uri = VikingURI.build(*parts[:3])
+            try:
+                skills_idx = parts.index("skills")
+            except ValueError:
+                skills_idx = -1
+            if skills_idx >= 0 and len(parts) > skills_idx + 1:
+                root_uri = VikingURI.build(*parts[: skills_idx + 2])
             else:
                 try:
                     memories_idx = parts.index("memories")
@@ -237,13 +244,6 @@ class ContentWriteCoordinator:
                 raise InvalidArgumentError(f"could not resolve write root for {uri}")
             root_uri = parent.uri
         return root_uri
-
-    def _context_type_for_uri(self, uri: str) -> str:
-        if "/memories/" in uri:
-            return "memory"
-        if "/skills/" in uri or uri.startswith("viking://agent/skills/"):
-            return "skill"
-        return "resource"
 
     async def _resolve_memory_root_uri(self, uri: str) -> str:
         parsed = VikingURI(uri)
@@ -313,7 +313,7 @@ class ContentWriteCoordinator:
         if not stat.get("not_found"):
             raise AlreadyExistsError(uri, "file")
 
-        context_type = self._context_type_for_uri(uri)
+        context_type = context_type_for_uri(uri)
         root_uri = (
             await self._resolve_memory_root_uri(uri)
             if context_type == "memory"

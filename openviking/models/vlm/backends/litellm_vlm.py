@@ -4,7 +4,6 @@
 
 import base64
 import json
-import logging
 import os
 import time
 from pathlib import Path
@@ -18,10 +17,11 @@ from litellm import acompletion, completion
 
 from openviking.telemetry import tracer
 from openviking.utils.model_retry import retry_async, retry_sync
+from openviking_cli.utils import get_logger
 
 from ..base import ToolCall, VLMBase, VLMResponse
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _is_google_generate_language_endpoint(api_base: str) -> bool:
@@ -226,8 +226,8 @@ class LiteLLMVLMProvider(VLMBase):
             "temperature": self.temperature,
             "timeout": self.timeout,
         }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
+        max_tokens = self.max_tokens or 32768
+        kwargs["max_tokens"] = max_tokens
 
         if self.api_key:
             kwargs["api_key"] = self.api_key
@@ -240,6 +240,8 @@ class LiteLLMVLMProvider(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+        if self.extra_request_body:
+            kwargs["extra_body"] = dict(self.extra_request_body)
 
         # Only send enable_thinking to DashScope-compatible providers
         provider = self._detected_provider or detect_provider_by_model(model)

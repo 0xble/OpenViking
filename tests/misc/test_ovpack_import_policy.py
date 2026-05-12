@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.local_fs import import_ovpack
+from openviking.storage.ovpack.operations import import_ovpack
 from openviking_cli.exceptions import InvalidArgumentError, NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 

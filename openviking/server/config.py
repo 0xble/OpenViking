@@ -95,6 +95,16 @@ class ObservabilityConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class TempUploadConfig(BaseModel):
+    """Temporary upload configuration."""
+
+    default_mode: str = "local"
+    shared_max_size_bytes: int = 512 * 1024 * 1024
+    shared_prefix: str = "viking://upload"
+
+    model_config = {"extra": "forbid"}
+
+
 class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 1933
@@ -110,6 +120,7 @@ class ServerConfig(BaseModel):
     # before returning 404. Off by default to preserve upstream strict-lookup behavior.
     tolerate_bare_session_id: bool = False
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    temp_upload: TempUploadConfig = Field(default_factory=TempUploadConfig)
 
     model_config = {"extra": "forbid"}
 
