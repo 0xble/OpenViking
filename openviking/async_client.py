@@ -230,20 +230,6 @@ class AsyncOpenViking:
             wait=wait,
         )
 
-    async def reindex(
-        self,
-        uri: str,
-        mode: str = "vectors_only",
-        wait: bool = True,
-    ) -> Dict[str, Any]:
-        """Reindex semantic/vector artifacts for a URI."""
-        await self._ensure_initialized()
-        return await self._client.reindex(
-            uri=uri,
-            mode=mode,
-            wait=wait,
-        )
-
     # ============= Resource methods =============
 
     async def add_resource(

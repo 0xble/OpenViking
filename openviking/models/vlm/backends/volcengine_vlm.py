@@ -11,10 +11,11 @@ from collections import OrderedDict
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional, Union
+
 from openviking.telemetry import tracer
 from openviking.utils.model_retry import retry_async, retry_sync
-from openviking_cli.utils.async_utils import run_async
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.async_utils import run_async
 
 from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM

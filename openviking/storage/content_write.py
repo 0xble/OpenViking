@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-from openviking.core.namespace import NamespaceShapeError, canonicalize_uri, context_type_for_uri
+from openviking.core.namespace import context_type_for_uri
 from openviking.resource.watch_storage import is_watch_task_control_uri
 from openviking.server.error_mapping import is_not_found_error
 from openviking.server.identity import RequestContext

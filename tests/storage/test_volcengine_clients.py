@@ -8,8 +8,8 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
 from openviking.storage.vectordb.collection.volcengine_collection import VolcengineCollection
 from openviking.storage.vectordb_adapters.volcengine_adapter import VolcengineCollectionAdapter
 from openviking_cli.utils.config.vectordb_config import (
-    VolcengineConfig,
     VectorDBBackendConfig,
+    VolcengineConfig,
 )
 
 

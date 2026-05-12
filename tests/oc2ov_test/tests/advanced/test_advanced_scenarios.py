@@ -3,8 +3,8 @@
 测试目标：验证复杂记忆场景
 """
 
+
 from tests.base_cli_test import BaseOpenClawCLITest
-from utils.test_utils import TestData
 
 
 class TestComplexScenarioMultiUsers(BaseOpenClawCLITest):

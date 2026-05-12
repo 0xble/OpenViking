@@ -26,13 +26,10 @@ Run
 from __future__ import annotations
 
 import logging
+import os
 import shutil
-
-from openviking.telemetry import tracer
-from openviking.telemetry.tracer import init_tracer_from_config
 import time
 import uuid
-import os
 from pathlib import Path
 from typing import Dict, Iterator, List, Tuple
 
@@ -43,6 +40,8 @@ from openviking.core.namespace import to_agent_space
 from openviking.server.identity import AccountNamespacePolicy
 from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
 from openviking.session.memory.utils.content import deserialize_metadata
+from openviking.telemetry import tracer
+from openviking.telemetry.tracer import init_tracer_from_config
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 from openviking_cli.utils.config import OpenVikingConfigSingleton, get_openviking_config

@@ -3,8 +3,9 @@
 演示：Session ID 管理、智能等待、重试机制、测试数据管理
 """
 
-from tests.base_cli_test import BaseOpenClawCLITest
 from utils.test_utils import TestData
+
+from tests.base_cli_test import BaseOpenClawCLITest
 
 
 class TestEnhancedFeatures(BaseOpenClawCLITest):

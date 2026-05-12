@@ -7,14 +7,16 @@ Verifies that memory_diff.json is correctly written to the archive directory
 containing adds, updates, and deletes.
 """
 
-import json
-from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from openviking.session.compressor_v2 import SessionCompressorV2
-from openviking.session.memory.dataclass import MemoryFileContent, ResolvedOperation, ResolvedOperations
+from openviking.session.memory.dataclass import (
+    MemoryFileContent,
+    ResolvedOperation,
+    ResolvedOperations,
+)
 from openviking.session.memory.memory_updater import MemoryUpdateResult
 from openviking.storage.viking_fs import VikingFS
 

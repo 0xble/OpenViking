@@ -757,8 +757,8 @@ class Session:
         task = tracker.create(
             "session_commit",
             resource_id=self.session_id,
-            owner_account_id=self.ctx.account_id,
-            owner_user_id=self.ctx.user.user_id,
+            account_id=self.ctx.account_id,
+            user_id=self.ctx.user.user_id,
         )
 
         asyncio.create_task(
@@ -890,8 +890,8 @@ class Session:
                 memory_task = tracker.create(
                     "session_memory_extract",
                     resource_id=self.session_id,
-                    owner_account_id=self.ctx.account_id,
-                    owner_user_id=self.ctx.user.user_id,
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
                 )
                 memory_task_id = memory_task.task_id
 

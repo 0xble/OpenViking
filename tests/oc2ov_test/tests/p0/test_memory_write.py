@@ -3,8 +3,8 @@ P0 - 记忆结构化写入验证测试
 测试目标：验证OpenViking能正确接收、存储OpenClaw传入的用户信息
 """
 
+
 from tests.base_cli_test import BaseOpenClawCLITest
-from utils.test_utils import TestData
 
 
 class TestMemoryWriteGroupA(BaseOpenClawCLITest):

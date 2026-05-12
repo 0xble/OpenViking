@@ -10,7 +10,7 @@ with metadata stored in HTML comments at the end of the file.
 import json
 import re
 from datetime import datetime
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 from openviking.session.memory.dataclass import MemoryFileContent
 from openviking.utils.time_utils import parse_iso_datetime

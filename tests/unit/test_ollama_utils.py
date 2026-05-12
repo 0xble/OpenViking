@@ -5,17 +5,13 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openviking_cli.utils.ollama import (
     OllamaStartResult,
-    check_ollama_running,
     detect_ollama_in_config,
     ensure_ollama_for_server,
     parse_ollama_url,
     start_ollama,
 )
-
 
 # ---------------------------------------------------------------------------
 # parse_ollama_url

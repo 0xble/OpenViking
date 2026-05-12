@@ -72,6 +72,7 @@ class ReindexExecutor:
         "global_namespace": {"vectors_only", "semantic_and_vectors"},
         "agent_namespace": {"vectors_only", "semantic_and_vectors"},
         "user_namespace": {"vectors_only", "semantic_and_vectors"},
+        "skill_namespace": {"vectors_only", "semantic_and_vectors"},
         "resource": {"vectors_only", "semantic_and_vectors"},
         "skill": {"vectors_only", "semantic_and_vectors"},
         "memory": {"vectors_only", "semantic_and_vectors"},
@@ -94,8 +95,8 @@ class ReindexExecutor:
             if tracker.has_running(
                 REINDEX_TASK_TYPE,
                 uri,
-                owner_account_id=ctx.account_id,
-                owner_user_id=ctx.user.user_id,
+                account_id=ctx.account_id,
+                user_id=ctx.user.user_id,
             ):
                 raise OpenVikingError(
                     f"URI {uri} already has a reindex in progress",
@@ -113,8 +114,8 @@ class ReindexExecutor:
         task = tracker.create_if_no_running(
             REINDEX_TASK_TYPE,
             uri,
-            owner_account_id=ctx.account_id,
-            owner_user_id=ctx.user.user_id,
+            account_id=ctx.account_id,
+            user_id=ctx.user.user_id,
         )
         if task is None:
             raise OpenVikingError(
@@ -157,12 +158,22 @@ class ReindexExecutor:
             return "user_namespace"
         if normalized_uri == "viking://agent":
             return "agent_namespace"
+        if normalized_uri == "viking://resources":
+            return "resource"
         if len(parts) >= 3 and parts[0] == "user" and parts[2] == "memories":
             return "memory"
         if len(parts) >= 3 and parts[0] == "agent" and parts[2] == "memories":
             return "memory"
-        if len(parts) >= 3 and parts[0] == "agent" and parts[2] == "skills":
+        if len(parts) == 3 and parts[0] == "agent" and parts[2] == "skills":
+            return "skill_namespace"
+        if len(parts) == 4 and parts[0] == "agent" and parts[2] == "skills":
             return "skill"
+        if len(parts) >= 5 and parts[0] == "agent" and parts[2] == "skills":
+            raise OpenVikingError(
+                f"Unsupported reindex URI: {uri}",
+                code="UNSUPPORTED_URI",
+                details={"uri": uri},
+            )
         if normalized_uri.startswith("viking://user/"):
             remainder = normalized_uri[len("viking://user/") :]
             if remainder and "/" not in remainder:
@@ -278,6 +289,13 @@ class ReindexExecutor:
                     )
                 elif object_type == "user_namespace":
                     await self._reindex_user_namespace(
+                        uri=uri,
+                        mode=mode,
+                        counters=counters,
+                        ctx=ctx,
+                    )
+                elif object_type == "skill_namespace":
+                    await self._reindex_skill_namespace(
                         uri=uri,
                         mode=mode,
                         counters=counters,
@@ -462,8 +480,32 @@ class ReindexExecutor:
         ctx: RequestContext,
     ) -> None:
         viking_fs = get_viking_fs()
+        # Single-file reindex: skip the tree walk and operate directly on the file.
         try:
-            entries = await viking_fs.tree(uri, output="original", show_all_hidden=True, ctx=ctx)
+            stat = await viking_fs.stat(uri, ctx=ctx)
+        except Exception:
+            stat = None
+        if stat is not None and not stat.get("isDir", stat.get("is_dir", False)):
+            parent_uri = VikingURI(uri.split("#", 1)[0]).parent
+            parent = parent_uri.uri if parent_uri is not None else uri
+            await self._reindex_resource_vectors_from_entries(
+                root_uri=parent,
+                directories=[],
+                files=[uri],
+                counters=counters,
+                ctx=ctx,
+            )
+            return
+
+        try:
+            entries = await viking_fs.tree(
+                uri,
+                output="original",
+                show_all_hidden=True,
+                node_limit=None,
+                level_limit=None,
+                ctx=ctx,
+            )
         except Exception as exc:
             raise NotFoundError(uri, "resource") from exc
 
@@ -612,6 +654,7 @@ class ReindexExecutor:
         memory_roots: list[str] = []
         resource_directories: list[str] = []
         resource_files: list[str] = []
+        resources_prefix = f"{target_root}/resources/"
 
         for entry in entries:
             entry_uri = entry.get("uri")
@@ -624,6 +667,12 @@ class ReindexExecutor:
             if entry.get("isDir"):
                 resource_directories.append(entry_uri)
             elif not self._is_hidden_meta_file(entry_uri):
+                if mode == "semantic_and_vectors" and not entry_uri.startswith(resources_prefix):
+                    counters.unsupported_records += 1
+                    counters.warnings.append(
+                        f"Skipping uncovered root file in semantic_and_vectors mode: {entry_uri}"
+                    )
+                    continue
                 resource_files.append(entry_uri)
 
         for memory_root in sorted(set(memory_roots)):
@@ -650,6 +699,46 @@ class ReindexExecutor:
             counters=counters,
             ctx=ctx,
         )
+
+    async def _reindex_skill_namespace(
+        self,
+        *,
+        uri: str,
+        mode: str,
+        counters: _ReindexCounters,
+        ctx: RequestContext,
+    ) -> None:
+        """Reindex every skill directly under a viking://agent/<agent>/skills root."""
+        normalized_uri = uri.rstrip("/")
+        target_root = normalized_uri if normalized_uri else uri
+        viking_fs = get_viking_fs()
+        try:
+            entries = await viking_fs.tree(
+                target_root,
+                output="original",
+                show_all_hidden=True,
+                node_limit=None,
+                level_limit=None,
+                ctx=ctx,
+            )
+        except Exception as exc:
+            raise NotFoundError(uri, "resource") from exc
+
+        skill_roots: list[str] = []
+        for entry in entries:
+            entry_uri = entry.get("uri")
+            if not entry_uri or not entry.get("isDir"):
+                continue
+            if not entry_uri.startswith(f"{target_root}/"):
+                continue
+            remainder = entry_uri[len(target_root) + 1 :]
+            if not remainder or "/" in remainder:
+                continue
+            skill_roots.append(entry_uri)
+
+        skill_mode = "semantic_and_vectors" if mode == "semantic_and_vectors" else "vectors_only"
+        for skill_root in sorted(set(skill_roots)):
+            await self._reindex_skill(uri=skill_root, mode=skill_mode, counters=counters, ctx=ctx)
 
     async def _reindex_agent_namespace(
         self,
@@ -772,7 +861,9 @@ class ReindexExecutor:
                 continue
             if entry.get("isDir"):
                 resource_directories.append(entry_uri)
-            elif not self._is_hidden_meta_file(entry_uri):
+            elif entry_uri.startswith("viking://resources/") and not self._is_hidden_meta_file(
+                entry_uri
+            ):
                 resource_files.append(entry_uri)
 
         for user_root in sorted(set(user_roots)):
@@ -1156,12 +1247,12 @@ class ReindexExecutor:
         ctx: RequestContext,
     ) -> str:
         text_source = getattr(get_openviking_config().embedding, "text_source", "summary_first")
-        content = await self._safe_read_text(uri, ctx=ctx)
-        existing = await self._fetch_existing_record(uri=uri, level=2, ctx=ctx)
-        fallback = self._record_abstract(existing)
         content_type = get_resource_content_type(uri.rsplit("/", 1)[-1])
 
         if content_type == ResourceContentType.TEXT:
+            content = await self._safe_read_text(uri, ctx=ctx)
+            existing = await self._fetch_existing_record(uri=uri, level=2, ctx=ctx)
+            fallback = self._record_abstract(existing)
             if text_source in {"summary_first", "summary_only"} and summary:
                 return summary
             if content:
@@ -1170,11 +1261,12 @@ class ReindexExecutor:
                 return summary
             return fallback
 
+        # Non-text resource: never decode raw bytes for vector text.
         if summary:
             return summary
-        if content:
-            return self._truncate_embedding_text(content)
-        return fallback
+        existing = await self._fetch_existing_record(uri=uri, level=2, ctx=ctx)
+        fallback = self._record_abstract(existing)
+        return fallback or ""
 
     async def _upsert_context(
         self,

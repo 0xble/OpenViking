@@ -126,7 +126,6 @@ def _tolerate_bare_session_id(request: Request) -> bool:
 
 
 def _resolve_message_role_id(
-    http_request: Request,
     request: AddMessageRequest,
     ctx: RequestContext,
 ) -> Optional[str]:
@@ -359,7 +358,6 @@ async def extract_session(
 @router.post("/{session_id}/messages")
 async def add_message(
     request: AddMessageRequest,
-    http_request: Request,
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
@@ -380,7 +378,7 @@ async def add_message(
     """
     service = get_service()
     session = await service.sessions.get(session_id, _ctx, auto_create=True)
-    role_id = _resolve_message_role_id(http_request, request, _ctx)
+    role_id = _resolve_message_role_id(request, _ctx)
 
     if request.parts is not None:
         parts = [part_from_dict(p) for p in request.parts]

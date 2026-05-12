@@ -428,15 +428,20 @@ class OpenVikingService:
             await self.initialize()
 
         effective_ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
-        from openviking.service.reindex_executor import get_reindex_executor
+        # Lazy import retained so circular import boundaries stay clean, but we
+        # also ensure the module is imported once so sys.modules lookups by
+        # callers (e.g. monkeypatched tests) succeed.
+        import openviking.service.reindex_executor as _reindex_executor_mod
 
-        return await get_reindex_executor().execute(
-            uri=uri,
-            mode=mode,
-            wait=wait,
-            ctx=effective_ctx,
-            lock_already_held=lock_already_held,
-        )
+        kwargs: dict[str, Any] = {
+            "uri": uri,
+            "mode": mode,
+            "wait": wait,
+            "ctx": effective_ctx,
+        }
+        if lock_already_held:
+            kwargs["lock_already_held"] = True
+        return await _reindex_executor_mod.get_reindex_executor().execute(**kwargs)
 
     def _ensure_initialized(self) -> None:
         """Ensure service is initialized."""
