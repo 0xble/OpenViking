@@ -492,6 +492,16 @@ async def mcp_lifespan():
         yield
 
 
+def reset_mcp_session_manager() -> None:
+    """Drop the lazily-created session manager so a new FastAPI lifespan can run it again.
+
+    The MCP StreamableHTTPSessionManager.run() can only be called once per instance.
+    Tests that spin up multiple uvicorn servers in the same process must clear the
+    cached manager between runs.
+    """
+    mcp._session_manager = None
+
+
 def create_mcp_app() -> ASGIApp:
     """Create the MCP ASGI app with identity middleware.
 

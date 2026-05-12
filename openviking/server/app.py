@@ -408,6 +408,7 @@ def create_app(
                 "value_error",
                 "literal_error",
                 "extra_forbidden",
+                "model_attributes_type",
             }
             else 422
         )

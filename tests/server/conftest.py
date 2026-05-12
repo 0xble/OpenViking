@@ -371,6 +371,9 @@ async def running_server(temp_dir: Path, monkeypatch):
     thread.join(timeout=5)
     await svc.close()
     await AsyncOpenViking.reset()
+    from openviking.server.mcp_endpoint import reset_mcp_session_manager
+
+    reset_mcp_session_manager()
 
 
 @pytest_asyncio.fixture(scope="function")
