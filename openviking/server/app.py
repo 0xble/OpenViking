@@ -405,7 +405,13 @@ def create_app(
             400
             if has_empty_body
             or error_types
-            & {"json_invalid", "model_attributes_type", "value_error", "literal_error"}
+            & {
+                "json_invalid",
+                "model_attributes_type",
+                "value_error",
+                "literal_error",
+                "extra_forbidden",
+            }
             else 422
         )
         return JSONResponse(
