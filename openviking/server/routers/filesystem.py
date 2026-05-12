@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """Filesystem endpoints for OpenViking HTTP Server."""
 
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
@@ -14,7 +14,7 @@ from openviking.server.dependencies import get_service
 from openviking.server.error_mapping import map_exception
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
-from openviking_cli.exceptions import NotFoundError
+from openviking_cli.exceptions import InvalidURIError, NotFoundError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])
 
@@ -116,6 +116,8 @@ async def stat(
             raise NotFoundError(uri, "file")
         raise
     except Exception as exc:
+        if isinstance(exc, InvalidURIError) and "Invalid scope" in exc.details.get("reason", ""):
+            raise NotFoundError(uri, "file") from exc
         mapped = map_exception(exc, resource=uri)
         if mapped is not None:
             raise mapped from exc
@@ -127,6 +129,13 @@ class MkdirRequest(BaseModel):
 
     uri: str
     description: Optional[str] = None
+
+
+class MetadataRequest(BaseModel):
+    """Request model for resource metadata writes."""
+
+    uri: str
+    metadata: dict[str, Any]
 
 
 @router.post("/mkdir")
@@ -147,6 +156,31 @@ async def mkdir(
             raise NotFoundError(uri, "file")
         raise
     return Response(status="ok", result={"uri": uri})
+
+
+@router.patch("/metadata")
+async def patch_metadata(
+    request: MetadataRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Patch opaque metadata for a resource root."""
+    service = get_service()
+    uri = resolve_path_variables(request.uri)
+    try:
+        result = await service.fs.patch_metadata(uri, request.metadata, ctx=_ctx)
+    except AGFSNotFoundError:
+        raise NotFoundError(uri, "file")
+    except AGFSClientError as e:
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
+            raise NotFoundError(uri, "file")
+        raise
+    except Exception as exc:
+        mapped = map_exception(exc, resource=uri)
+        if mapped is not None:
+            raise mapped from exc
+        raise
+    return Response(status="ok", result=result)
 
 
 @router.delete("")

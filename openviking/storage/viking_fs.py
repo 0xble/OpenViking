@@ -941,12 +941,12 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
 
         async def _walk(current_path: str, current_rel: str, current_depth: int):
-            if len(all_entries) >= node_limit:
+            if node_limit is not None and len(all_entries) >= node_limit:
                 return
             if level_limit is not None and current_depth >= level_limit:
                 return
             for entry in self._ls_entries(current_path):
-                if len(all_entries) >= node_limit:
+                if node_limit is not None and len(all_entries) >= node_limit:
                     break
                 name = entry.get("name", "")
                 if name in [".", ".."]:
@@ -984,12 +984,12 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
 
         async def _walk(current_path: str, current_rel: str, current_depth: int):
-            if len(all_entries) >= node_limit:
+            if node_limit is not None and len(all_entries) >= node_limit:
                 return
             if level_limit is not None and current_depth >= level_limit:
                 return
             for entry in self._ls_entries(current_path):
-                if len(all_entries) >= node_limit:
+                if node_limit is not None and len(all_entries) >= node_limit:
                     break
                 name = entry.get("name", "")
                 if name in [".", ".."]:

@@ -394,20 +394,17 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(request: Request, exc: RequestValidationError):
         errors = [_normalize_validation_error(error) for error in exc.errors()]
-        # Differentiate 400 (malformed body / value error) from 422 (well-formed
-        # body but missing/typed-wrong fields) so clients can react appropriately.
+        # 400 Bad Request: missing required fields, malformed JSON, value/literal errors.
+        # 422 Unprocessable Entity: well-formed JSON with type mismatches or extra
+        # forbidden fields.
         error_types = {str(error.get("type", "")) for error in errors}
-        has_empty_body = any(
-            tuple(error.get("loc", ())) == ("body",) and error.get("type") == "missing"
-            for error in errors
-        )
+        has_missing = any(error.get("type") == "missing" for error in errors)
         status_code = (
             400
-            if has_empty_body
+            if has_missing
             or error_types
             & {
                 "json_invalid",
-                "model_attributes_type",
                 "value_error",
                 "literal_error",
                 "extra_forbidden",

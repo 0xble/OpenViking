@@ -125,7 +125,9 @@ async def test_write_without_wait_is_immediately_readable(client_with_resource):
 @pytest.mark.asyncio
 async def test_write_missing_uri_validation(client):
     resp = await client.post("/api/v1/content/write", json={"content": "missing uri"})
-    assert resp.status_code == 422
+    # Missing required fields return 400 per upstream PR #1592 convention
+    # (see test_reindex_missing_uri); 422 is reserved for type mismatches.
+    assert resp.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -143,7 +145,9 @@ async def test_write_rejects_removed_semantic_flags(client_with_resource):
         },
     )
 
-    assert resp.status_code == 422
+    # extra_forbidden returns 400 INVALID_ARGUMENT per the convention shared with
+    # legacy_temp_path_field / import_ovpack_rejects_removed_fields tests.
+    assert resp.status_code == 400
 
 
 # --- Memory creation via /content/write ---

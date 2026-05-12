@@ -123,7 +123,7 @@ async def test_import_ovpack_accepts_temp_uploaded_file(
     root_client: httpx.AsyncClient,
     upload_temp_dir,
 ):
-    _allow_admin_api_in_dev_mode(client)
+    # root_client already wires a real APIKeyManager; do not overwrite it.
     ovpack_file = upload_temp_dir / "demo.ovpack"
     ovpack_file.write_bytes(build_ovpack_bytes())
 

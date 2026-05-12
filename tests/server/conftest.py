@@ -241,9 +241,13 @@ async def service(temp_dir: Path, monkeypatch):
     )
     await svc.initialize()
     svc.viking_fs.query_embedder = fake_embedder_cls()
-    yield svc
-    await svc.close()
-    reset_lock_manager()
+    bound_token = svc.viking_fs._bound_ctx.set(RequestContext(user=svc.user, role=Role.ROOT))
+    try:
+        yield svc
+    finally:
+        svc.viking_fs._bound_ctx.reset(bound_token)
+        await svc.close()
+        reset_lock_manager()
 
 
 @pytest_asyncio.fixture(scope="function")

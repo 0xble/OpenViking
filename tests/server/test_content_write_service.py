@@ -73,7 +73,7 @@ async def test_memory_replace_preserves_metadata(service):
         "fields": {"topic": "theme"},
     }
     full_content = serialize_with_metadata({**metadata, "content": "Original preference"})
-    _, expected_metadata = deserialize_full(full_content)
+    expected_metadata = deserialize_full(full_content).memory_fields
     await service.viking_fs.write_file(memory_uri, full_content, ctx=ctx)
 
     await service.fs.write(
@@ -84,10 +84,10 @@ async def test_memory_replace_preserves_metadata(service):
     )
 
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
-    stored_content, stored_metadata = deserialize_full(stored)
+    stored_result = deserialize_full(stored)
 
-    assert stored_content == "Updated preference"
-    assert stored_metadata == expected_metadata
+    assert stored_result.plain_content == "Updated preference"
+    assert stored_result.memory_fields == expected_metadata
 
 
 @pytest.mark.asyncio
@@ -101,7 +101,7 @@ async def test_memory_append_preserves_metadata(service):
         "fields": {"topic": "theme"},
     }
     full_content = serialize_with_metadata({**metadata, "content": "Original preference"})
-    _, expected_metadata = deserialize_full(full_content)
+    expected_metadata = deserialize_full(full_content).memory_fields
     await service.viking_fs.write_file(memory_uri, full_content, ctx=ctx)
 
     await service.fs.write(
@@ -112,10 +112,10 @@ async def test_memory_append_preserves_metadata(service):
     )
 
     stored = await service.viking_fs.read_file(memory_uri, ctx=ctx)
-    stored_content, stored_metadata = deserialize_full(stored)
+    stored_result = deserialize_full(stored)
 
-    assert stored_content == "Original preference\nUpdated preference"
-    assert stored_metadata == expected_metadata
+    assert stored_result.plain_content == "Original preference\nUpdated preference"
+    assert stored_result.memory_fields == expected_metadata
 
 
 class _FakeVikingFS:

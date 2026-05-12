@@ -9,7 +9,7 @@ Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 import math
 import os
 from datetime import datetime, timezone
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
 from openviking.core.directories import get_context_type_for_uri
@@ -24,6 +24,26 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 _EMBEDDING_TRUNCATION_SUFFIX = "\n...(truncated for embedding)"
+
+_PORTABLE_SCALAR_FIELDS = frozenset(
+    {
+        "type",
+        "level",
+        "name",
+        "description",
+        "tags",
+        "abstract",
+    }
+)
+
+
+def _apply_scalar_overrides(embedding_msg, overrides: Optional[Dict[str, Any]]) -> None:
+    if not embedding_msg or not overrides:
+        return
+    for field in _PORTABLE_SCALAR_FIELDS:
+        value = overrides.get(field)
+        if value is not None:
+            embedding_msg.context_data[field] = value
 
 
 def _estimate_embedding_input_tokens(text: str) -> int:
@@ -337,6 +357,7 @@ async def vectorize_file(
     semantic_msg_id: Optional[str] = None,
     use_summary: bool = False,
     preserve_existing_created_at: bool = False,
+    scalar_override: Optional[Dict[str, Any]] = None,
 ) -> None:
     """
     Vectorize a single file.
@@ -438,6 +459,7 @@ async def vectorize_file(
             return
 
         embedding_msg.semantic_msg_id = semantic_msg_id
+        _apply_scalar_overrides(embedding_msg, scalar_override)
         await embedding_queue.enqueue(embedding_msg)
         enqueued = True
         logger.debug(f"Enqueued file for vectorization: {file_path}")
