@@ -424,10 +424,8 @@ async def get_request_context(
                     "ROOT requests to tenant-scoped APIs must include X-OpenViking-Account "
                     "and X-OpenViking-User headers. Use a user key for regular data access."
                 )
-    if (
-        auth_mode == AuthMode.API_KEY
-        and _root_request_requires_explicit_tenant(path)
-        and _is_default_namespace(identity.account_id, identity.user_id)
+    if _root_request_requires_explicit_tenant(path) and _is_default_namespace(
+        identity.account_id, identity.user_id
     ):
         raise InvalidArgumentError(
             "The literal default OpenViking namespace is disabled for tenant-scoped APIs. "

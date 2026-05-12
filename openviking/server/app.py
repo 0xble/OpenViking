@@ -160,28 +160,12 @@ def create_app(
 
     validate_server_config(config)
 
-    async def _deferred_init(service, app, config):
-        """Run heavy initialization in background after server starts accepting requests."""
-        await service.initialize()
-
-        # Initialize APIKeyManager after service (needs VikingFS)
+    def _log_auth_mode_startup(config):
+        """Emit auth-mode banner synchronously so tests don't race deferred init."""
         effective_auth_mode = config.get_effective_auth_mode()
-        if config.root_api_key and config.root_api_key != "":
-            api_key_manager = APIKeyManager(
-                root_key=config.root_api_key,
-                viking_fs=service.viking_fs,
-                api_key_hashing_enabled=config.api_key_hashing_enabled,
-            )
-            await api_key_manager.load()
-            app.state.api_key_manager = api_key_manager
-            logger.info(
-                "APIKeyManager initialized with api_key_hashing_enabled=%s",
-                config.api_key_hashing_enabled,
-            )
-        elif effective_auth_mode == AuthMode.TRUSTED:
-            app.state.api_key_manager = None
+        if effective_auth_mode == AuthMode.TRUSTED:
             if config.root_api_key and config.root_api_key != "":
-                logger.info(
+                logger.warning(
                     "Trusted mode enabled: authentication trusts X-OpenViking-Account/User/Agent "
                     "headers and requires the configured server API key on each request. "
                     "Only expose this server behind a trusted network boundary or "
@@ -194,6 +178,27 @@ def create_app(
                     "Only expose this server behind a trusted network boundary or "
                     "identity-injecting gateway after configuring server.root_api_key."
                 )
+
+    async def _deferred_init(service, app, config):
+        """Run heavy initialization in background after server starts accepting requests."""
+        await service.initialize()
+
+        # Initialize APIKeyManager after service (needs VikingFS)
+        effective_auth_mode = config.get_effective_auth_mode()
+        if effective_auth_mode == AuthMode.TRUSTED:
+            app.state.api_key_manager = None
+        elif config.root_api_key and config.root_api_key != "":
+            api_key_manager = APIKeyManager(
+                root_key=config.root_api_key,
+                viking_fs=service.viking_fs,
+                api_key_hashing_enabled=config.api_key_hashing_enabled,
+            )
+            await api_key_manager.load()
+            app.state.api_key_manager = api_key_manager
+            logger.info(
+                "APIKeyManager initialized with api_key_hashing_enabled=%s",
+                config.api_key_hashing_enabled,
+            )
         else:
             # AuthMode.DEV - logging already handled in validate_server_config
             app.state.api_key_manager = None
@@ -218,6 +223,7 @@ def create_app(
         init_metrics_from_server_config(config, app=app, service=service)
         if config.observability.metrics.enabled:
             logger.info("Prometheus metrics enabled at /metrics")
+        _log_auth_mode_startup(config)
 
         # Initialize OAuth 2.1 store + provider when enabled in OpenViking config.
         # The store + provider instances were already constructed at app
@@ -305,6 +311,8 @@ def create_app(
     )
 
     app.state.config = config
+    if service is not None:
+        app.state.default_user = getattr(service, "user", None)
 
     # Add CORS middleware
     app.add_middleware(
@@ -386,13 +394,26 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     async def request_validation_error_handler(request: Request, exc: RequestValidationError):
         errors = [_normalize_validation_error(error) for error in exc.errors()]
-        code = "INVALID_ARGUMENT"
+        # Differentiate 400 (malformed body / value error) from 422 (well-formed
+        # body but missing/typed-wrong fields) so clients can react appropriately.
+        error_types = {str(error.get("type", "")) for error in errors}
+        has_empty_body = any(
+            tuple(error.get("loc", ())) == ("body",) and error.get("type") == "missing"
+            for error in errors
+        )
+        status_code = (
+            400
+            if has_empty_body
+            or error_types
+            & {"json_invalid", "model_attributes_type", "value_error", "literal_error"}
+            else 422
+        )
         return JSONResponse(
-            status_code=ERROR_CODE_TO_HTTP_STATUS[code],
+            status_code=status_code,
             content=Response(
                 status="error",
                 error=ErrorInfo(
-                    code=code,
+                    code="INVALID_ARGUMENT",
                     message=_validation_error_message(errors),
                     details={"validation_errors": errors},
                 ),

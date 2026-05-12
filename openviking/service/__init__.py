@@ -7,7 +7,6 @@ Provides business logic decoupled from transport layer,
 enabling reuse across HTTP Server and CLI.
 """
 
-import openviking.service.reindex_executor  # noqa: F401  pre-register for monkeypatch
 from openviking.service.core import OpenVikingService
 from openviking.service.debug_service import ComponentStatus, DebugService, SystemStatus
 from openviking.service.fs_service import FSService

@@ -96,7 +96,7 @@ class MemoryData(BaseModel):
 class MemoryFileContent(BaseModel):
     uri: Optional[str] = None
     plain_content: str
-    memory_fields: Dict
+    memory_fields: Optional[Dict] = None
 
 
 class ResolvedOperation(BaseModel):
