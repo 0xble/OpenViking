@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
@@ -9,11 +9,6 @@ use ratatui::{
 use super::app::{App, Panel};
 
 pub fn render(frame: &mut Frame, app: &App) {
-    let _ = render_with_content_area(frame, app);
-}
-
-/// Render the UI and return the content area rect for image preview
-pub fn render_with_content_area(frame: &mut Frame, app: &App) -> (Rect, Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(1)])
@@ -28,10 +23,8 @@ pub fn render_with_content_area(frame: &mut Frame, app: &App) -> (Rect, Rect) {
         .split(main_area);
 
     render_tree(frame, app, panels[0]);
-    let content_area = render_content(frame, app, panels[1]);
+    render_content(frame, app, panels[1]);
     render_status_bar(frame, app, status_area);
-
-    (main_area, content_area)
 }
 
 fn render_tree(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -108,9 +101,10 @@ fn render_tree(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     frame.render_stateful_widget(list, inner, &mut list_state);
 }
 
-fn render_content(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) -> Rect {
+fn render_content(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     if app.showing_vector_records {
-        return render_vector_records(frame, app, area);
+        render_vector_records(frame, app, area);
+        return;
     }
 
     let focused = app.focus == Panel::Content;
@@ -131,19 +125,15 @@ fn render_content(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) -> 
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
-    let inner_area = block.inner(area);
-
     let paragraph = Paragraph::new(app.content.as_str())
         .block(block)
         .wrap(Wrap { trim: false })
         .scroll((app.content_scroll, 0));
 
     frame.render_widget(paragraph, area);
-
-    inner_area
 }
 
-fn render_vector_records(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) -> Rect {
+fn render_vector_records(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let focused = app.focus == Panel::Content;
     let border_color = if focused {
         Color::Cyan
@@ -180,7 +170,7 @@ fn render_vector_records(frame: &mut Frame, app: &App, area: ratatui::layout::Re
         let empty =
             Paragraph::new("(no vector records)").style(Style::default().fg(Color::DarkGray));
         frame.render_widget(empty, inner);
-        return inner;
+        return;
     }
 
     let viewport_height = inner.height as usize;
@@ -255,8 +245,6 @@ fn render_vector_records(frame: &mut Frame, app: &App, area: ratatui::layout::Re
     );
 
     frame.render_stateful_widget(list, inner, &mut list_state);
-
-    inner
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {

@@ -73,15 +73,8 @@ pub async fn rm(
     _output_format: OutputFormat,
     _compact: bool,
 ) -> Result<()> {
-    let result = client.rm(uri, recursive).await?;
-
-    // Try to extract estimated_deleted_count if available
-    if let Some(count) = result.get("estimated_deleted_count").and_then(|v| v.as_u64()) {
-        println!("Removed: {} ({} items)", uri, count);
-    } else {
-        println!("Removed: {}", uri);
-    }
-
+    client.rm(uri, recursive).await?;
+    println!("Removed: {}", uri);
     Ok(())
 }
 

@@ -11,7 +11,6 @@ pub async fn find(
     since: Option<&str>,
     until: Option<&str>,
     time_field: Option<&str>,
-    level: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -24,7 +23,6 @@ pub async fn find(
             since.map(|s| s.to_string()),
             until.map(|s| s.to_string()),
             time_field.map(|s| s.to_string()),
-            level.map(|s| s.to_string()),
         )
         .await?;
     output_success(&result, output_format, compact);
@@ -41,7 +39,6 @@ pub async fn search(
     since: Option<&str>,
     until: Option<&str>,
     time_field: Option<&str>,
-    level: Option<&str>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
@@ -55,7 +52,6 @@ pub async fn search(
             since.map(|s| s.to_string()),
             until.map(|s| s.to_string()),
             time_field.map(|s| s.to_string()),
-            level.map(|s| s.to_string()),
         )
         .await?;
     output_success(&result, output_format, compact);

@@ -47,7 +47,7 @@ pub struct ChatCommand {
     pub session: Option<String>,
 
     /// Sender ID
-    #[arg(long, default_value = "user")]
+    #[arg(short, long, default_value = "user")]
     pub sender: String,
 
     /// Non-interactive mode (single message)
@@ -92,8 +92,6 @@ struct ChatRequest {
 struct ChatResponse {
     session_id: String,
     message: String,
-    #[serde(default)]
-    response_id: Option<String>,
     #[serde(default)]
     events: Option<Vec<serde_json::Value>>,
 }
@@ -243,7 +241,6 @@ impl ChatCommand {
         let mut response = response;
         let mut buffer = String::new();
         let mut final_message = String::new();
-        let mut response_id: Option<String> = None;
 
         while let Some(chunk) = response
             .chunk()
@@ -270,13 +267,10 @@ impl ChatCommand {
                             if let Some(msg) = event.data.as_str() {
                                 final_message = msg.to_string();
                             } else if let Some(obj) = event.data.as_object() {
-                                if let Some(msg) = obj.get("content").and_then(|m| m.as_str()) {
+                                if let Some(msg) = obj.get("message").and_then(|m| m.as_str()) {
                                     final_message = msg.to_string();
-                                }
-                                if let Some(rid) = obj.get("response_id").and_then(|r| r.as_str()) {
-                                    response_id = Some(rid.to_string());
-                                }
-                                if let Some(err) = obj.get("error").and_then(|e| e.as_str()) {
+                                } else if let Some(err) = obj.get("error").and_then(|e| e.as_str())
+                                {
                                     eprintln!("\x1b[1;31mError: {}\x1b[0m", err);
                                 }
                             }
@@ -284,10 +278,6 @@ impl ChatCommand {
                     }
                 }
             }
-        }
-
-        if let Some(response_id) = response_id {
-            eprintln!("\x1b[2mResponse ID: {}\x1b[0m", response_id);
         }
 
         // Print final response with markdown if we have it
@@ -462,11 +452,10 @@ impl ChatCommand {
         auth: &ChatAuth,
     ) -> Result<()> {
         let url = format!("{}/chat/stream", self.endpoint);
-        let request_session_id = session_id.clone().or_else(|| self.session.clone());
 
         let request = ChatRequest {
             message: input.to_string(),
-            session_id: request_session_id.clone(),
+            session_id: session_id.clone(),
             user_id: Some(self.sender.clone()),
             stream: true,
             context: None,
@@ -485,14 +474,11 @@ impl ChatCommand {
             return Err(Error::Api(format!("Request failed ({}): {}", status, text)));
         }
 
+        // Process the SSE stream
         let mut response = response;
         let mut buffer = String::new();
         let mut final_message = String::new();
-        let mut response_id: Option<String> = None;
-
-        if session_id.is_none() {
-            *session_id = request_session_id;
-        }
+        let mut got_session_id = false;
 
         while let Some(chunk) = response
             .chunk()
@@ -514,18 +500,25 @@ impl ChatCommand {
                 // Parse SSE line: "data: {json}"
                 if let Some(data_str) = line.strip_prefix("data: ") {
                     if let Ok(event) = serde_json::from_str::<ChatStreamEvent>(data_str) {
+                        // Extract session_id from first response event if needed
+                        if !got_session_id && session_id.is_none() {
+                            if let Some(obj) = event.data.as_object() {
+                                if let Some(sid) = obj.get("session_id").and_then(|s| s.as_str()) {
+                                    *session_id = Some(sid.to_string());
+                                    got_session_id = true;
+                                }
+                            }
+                        }
+
                         self.print_stream_event(&event);
                         if event.event == "response" {
                             if let Some(msg) = event.data.as_str() {
                                 final_message = msg.to_string();
                             } else if let Some(obj) = event.data.as_object() {
-                                if let Some(msg) = obj.get("content").and_then(|m| m.as_str()) {
+                                if let Some(msg) = obj.get("message").and_then(|m| m.as_str()) {
                                     final_message = msg.to_string();
-                                }
-                                if let Some(rid) = obj.get("response_id").and_then(|r| r.as_str()) {
-                                    response_id = Some(rid.to_string());
-                                }
-                                if let Some(err) = obj.get("error").and_then(|e| e.as_str()) {
+                                } else if let Some(err) = obj.get("error").and_then(|e| e.as_str())
+                                {
                                     eprintln!("\x1b[1;31mError: {}\x1b[0m", err);
                                 }
                             }
@@ -533,10 +526,6 @@ impl ChatCommand {
                     }
                 }
             }
-        }
-
-        if let Some(response_id) = response_id {
-            eprintln!("\x1b[2mResponse ID: {}\x1b[0m", response_id);
         }
 
         // Print final response with markdown
