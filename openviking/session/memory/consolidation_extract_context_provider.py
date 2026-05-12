@@ -98,6 +98,7 @@ class ConsolidationExtractContextProvider(ExtractContextProvider):
             return pre_fetch_messages
 
         tool_ctx = ToolContext(
+            viking_fs=viking_fs,
             request_ctx=ctx,
             transaction_handle=transaction_handle,
             default_search_uris=[],

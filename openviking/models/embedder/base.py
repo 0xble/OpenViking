@@ -14,10 +14,9 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, TypeVar
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.model_retry import retry_async, retry_sync
 from openviking.utils.safety import check_model_calls_enabled
-from openviking_cli.utils import get_logger
 
 T = TypeVar("T")
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 _token_tracker_instance = None
@@ -56,8 +55,7 @@ def _callable_accepts_is_query(func: Callable[..., Any]) -> bool:
     if "is_query" in signature.parameters:
         return True
     return any(
-        param.kind == inspect.Parameter.VAR_KEYWORD
-        for param in signature.parameters.values()
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()
     )
 
 
@@ -287,7 +285,7 @@ class EmbedderBase(ABC):
             finally:
                 elapsed = time.monotonic() - started
                 telemetry.set("embedding.async.duration_ms", round(elapsed * 1000, 3))
-                if logger and elapsed >= 3.0:
+                if logger and elapsed >= 1.0:
                     logger.warning(
                         "%s slow call provider=%s model=%s wait_ms=%.2f duration_ms=%.2f",
                         operation_name,

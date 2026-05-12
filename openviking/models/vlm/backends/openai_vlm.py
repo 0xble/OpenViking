@@ -4,13 +4,13 @@
 
 import base64
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
 from openviking.telemetry import tracer
-from openviking_cli.utils import get_logger
 
 try:
     import openai
@@ -22,7 +22,7 @@ from openviking.utils.model_retry import retry_async, retry_sync
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 _DASHSCOPE_HOSTS = {
@@ -202,6 +202,75 @@ class OpenAIVLM(VLMBase):
             )
         return message.content or ""
 
+    def _extract_from_chunk(self, chunk):
+        """Extract content and usage from a single chunk.
+
+        Returns:
+            tuple: (content, prompt_tokens, completion_tokens)
+        """
+        content = None
+        prompt_tokens = 0
+        completion_tokens = 0
+
+        if chunk.choices and chunk.choices[0].delta:
+            content = getattr(chunk.choices[0].delta, "content", None)
+
+        if hasattr(chunk, "usage") and chunk.usage:
+            prompt_tokens = chunk.usage.prompt_tokens or 0
+            completion_tokens = chunk.usage.completion_tokens or 0
+
+        return content, prompt_tokens, completion_tokens
+
+    def _process_streaming_response(self, response):
+        """Process streaming response and extract content and token usage."""
+        content_parts = []
+        prompt_tokens = 0
+        completion_tokens = 0
+
+        for chunk in response:
+            content, pt, ct = self._extract_from_chunk(chunk)
+            if content:
+                content_parts.append(content)
+            if pt > 0:
+                prompt_tokens = pt
+            if ct > 0:
+                completion_tokens = ct
+
+        if prompt_tokens > 0 or completion_tokens > 0:
+            self.update_token_usage(
+                model_name=self.model or "gpt-4o-mini",
+                provider=self.provider,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+
+        return "".join(content_parts)
+
+    async def _process_streaming_response_async(self, response):
+        """Process async streaming response and extract content and token usage."""
+        content_parts = []
+        prompt_tokens = 0
+        completion_tokens = 0
+
+        async for chunk in response:
+            content, pt, ct = self._extract_from_chunk(chunk)
+            if content:
+                content_parts.append(content)
+            if pt > 0:
+                prompt_tokens = pt
+            if ct > 0:
+                completion_tokens = ct
+
+        if prompt_tokens > 0 or completion_tokens > 0:
+            self.update_token_usage(
+                model_name=self.model or "gpt-4o-mini",
+                provider=self.provider,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+
+        return "".join(content_parts)
+
     def _build_text_kwargs(
         self,
         prompt: str = "",
@@ -216,14 +285,15 @@ class OpenAIVLM(VLMBase):
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
+            "stream": self.stream,
         }
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
         else:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, thinking)
-        max_tokens = self.max_tokens or 32768
-        kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = max_tokens
+        if self.max_tokens is not None:
+            kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
@@ -253,27 +323,34 @@ class OpenAIVLM(VLMBase):
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": kwargs_messages,
+            "stream": self.stream,
         }
         if is_reasoning:
             kwargs["reasoning_effort"] = self.reasoning_effort
         else:
             kwargs["temperature"] = self.temperature
         self._apply_provider_specific_extra_body(kwargs, thinking)
-        max_tokens = self.max_tokens or 32768
-        kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = max_tokens
+        if self.max_tokens is not None:
+            kwargs["max_completion_tokens" if is_reasoning else "max_tokens"] = self.max_tokens
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
         return kwargs
 
     def _extract_completion_content(self, response, elapsed: float) -> str:
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        content = self._extract_content_from_response(response)
+        if self.stream:
+            content = self._process_streaming_response(response)
+        else:
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
     async def _extract_completion_content_async(self, response, elapsed: float) -> str:
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        content = self._extract_content_from_response(response)
+        if self.stream:
+            content = await self._process_streaming_response_async(response)
+        else:
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
     def get_completion(
