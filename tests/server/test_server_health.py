@@ -101,6 +101,13 @@ async def test_404_for_unknown_route(client: httpx.AsyncClient):
 
 
 async def test_lifespan_shutdown_ignores_cancelled_service_close():
+    # The module-level FastMCP session manager can carry state across tests
+    # when other suites create real uvicorn servers; reset before exercising
+    # the lifespan in isolation.
+    from openviking.server.mcp_endpoint import reset_mcp_session_manager
+
+    reset_mcp_session_manager()
+
     class _Service:
         async def initialize(self):
             pass
