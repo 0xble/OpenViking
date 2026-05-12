@@ -91,13 +91,21 @@ class TestMemoryUpdateResult:
 class TestMemoryUpdater:
     """Tests for MemoryUpdater."""
 
-    def test_extract_context_unknown_date_parts_for_missing_ranges(self):
-        """Missing provenance ranges should still render stable URI path segments."""
+    def test_extract_context_date_fallback_for_missing_ranges(self):
+        """Missing provenance ranges should fall back to a real date.
+
+        Previously this returned the sentinel string 'unknown', which produced
+        events/unknown/unknown/unknown/ writes on disk. With an empty message
+        list the fallback chain ends at datetime.now(), so we only assert
+        the shape (4/2/2 digits), not specific values.
+        """
+        import re
+
         context = ExtractContext([])
 
-        assert context.get_year("") == "unknown"
-        assert context.get_month("") == "unknown"
-        assert context.get_day("") == "unknown"
+        assert re.fullmatch(r"\d{4}", context.get_year(""))
+        assert re.fullmatch(r"\d{2}", context.get_month(""))
+        assert re.fullmatch(r"\d{2}", context.get_day(""))
 
     def test_create(self):
         """Test creating a MemoryUpdater."""

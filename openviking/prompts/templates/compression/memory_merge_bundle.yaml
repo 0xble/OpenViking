@@ -65,6 +65,7 @@ template: |
   - Merge into a single coherent memory.
   - Keep non-conflicting details from existing memory.
   - Update conflicting details to reflect the newer fact.
+  - For list entries that begin with a "- <Field>:" prefix (e.g. "- Role:", "- Status:", "- Location:", "- Benefits Status:"), keep AT MOST ONE line per <Field> across the merged output. If both existing and new memory contain a "- <Field>:" line with the same field name, REPLACE the older line with the newer one. Do NOT stack multiple lines for the same field, even when they carry different "(as of YYYY-MM-DD)" timestamps. The new line supersedes the old one.
   - Output language must be {{ output_language }}.
   - Return JSON only.
 

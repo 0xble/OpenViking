@@ -43,6 +43,7 @@ class ExtractContext:
 
     def __init__(self, messages: List[Message]):
         self.messages = messages
+        self._cached_fallback_ymd: tuple[str, str, str] | None = None
 
     def get_first_message_time_from_ranges(self, ranges_str: str) -> str | None:
         """根据 ranges 字符串获取第一条消息的时间（YAML 日期格式）"""
@@ -58,29 +59,52 @@ class ExtractContext:
         msg_range = self.read_message_ranges(ranges_str)
         return msg_range._first_message_time_with_weekday()
 
-    def get_year(self, ranges_str: str) -> str | None:
+    def _fallback_ymd(self) -> tuple[str, str, str]:
+        """Fallback YYYY/MM/DD for empty/unparseable ranges.
+
+        Uses session first-message timestamp; get_session_timestamp() itself
+        falls back to datetime.now(), so this always returns real digits and
+        never sentinel strings that previously produced
+        events/unknown/unknown/unknown/ writes.
+
+        Cached on the instance: the events template calls get_year/get_month/
+        get_day separately per render, and if the session has no message
+        timestamps each call would reach datetime.now() independently. Across
+        a midnight/month/year boundary that produces an inconsistent path
+        (e.g. year=2026,month=12,day=01 then year=2027,month=01,day=01). One
+        cached value per ExtractContext eliminates that.
+        """
+        if self._cached_fallback_ymd is None:
+            ts = self.get_session_timestamp()
+            self._cached_fallback_ymd = (ts[0:4], ts[4:6], ts[6:8])
+        return self._cached_fallback_ymd
+
+    def get_year(self, ranges_str: str) -> str:
         """根据 ranges 字符串获取第一条消息的年份"""
-        if not ranges_str:
-            return None
-        msg_range = self.read_message_ranges(ranges_str)
-        first_time = msg_range._first_message_time()
-        return first_time.split("-")[0] if first_time else None
+        if ranges_str:
+            msg_range = self.read_message_ranges(ranges_str)
+            first_time = msg_range._first_message_time()
+            if first_time:
+                return first_time.split("-")[0]
+        return self._fallback_ymd()[0]
 
-    def get_month(self, ranges_str: str) -> str | None:
+    def get_month(self, ranges_str: str) -> str:
         """根据 ranges 字符串获取第一条消息的月份"""
-        if not ranges_str:
-            return None
-        msg_range = self.read_message_ranges(ranges_str)
-        first_time = msg_range._first_message_time()
-        return first_time.split("-")[1] if first_time else None
+        if ranges_str:
+            msg_range = self.read_message_ranges(ranges_str)
+            first_time = msg_range._first_message_time()
+            if first_time:
+                return first_time.split("-")[1]
+        return self._fallback_ymd()[1]
 
-    def get_day(self, ranges_str: str) -> str | None:
+    def get_day(self, ranges_str: str) -> str:
         """根据 ranges 字符串获取第一条消息的日期"""
-        if not ranges_str:
-            return None
-        msg_range = self.read_message_ranges(ranges_str)
-        first_time = msg_range._first_message_time()
-        return first_time.split("-")[2] if first_time else None
+        if ranges_str:
+            msg_range = self.read_message_ranges(ranges_str)
+            first_time = msg_range._first_message_time()
+            if first_time:
+                return first_time.split("-")[2]
+        return self._fallback_ymd()[2]
 
     def get_timestamp_from_ranges(self, ranges_str: str) -> str:
         """根据 ranges 获取第一条消息的紧凑时间戳（YYYYMMDDHHMMSS），用于文件名去重。
@@ -379,7 +403,7 @@ class MemoryUpdater:
 
         # Collect directories that need overview generation
         # uri is now a string, so extract directory using os.path
-        dirs = dict()
+        dirs = {}
         for operation in operations.upsert_operations:
             for uri_str in operation.uris:
                 dir_path = "/".join(uri_str.split("/")[:-1])
