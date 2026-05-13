@@ -21,7 +21,11 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.session.memory_archiver import MemoryArchiver
 from openviking.session.memory_deduplicator import MemoryDeduplicator
-from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
+from openviking_cli.exceptions import (
+    InvalidArgumentError,
+    NotInitializedError,
+    PermissionDeniedError,
+)
 
 router = APIRouter(prefix="/api/v1/maintenance", tags=["maintenance"])
 
@@ -100,6 +104,10 @@ async def run_memory_maintenance(
 
     if requested_scope:
         scope = await manager.get_scope(requested_scope)
+        if scope is not None and not _scope_belongs_to_request(scope, ctx):
+            raise PermissionDeniedError(
+                "memory maintenance scope does not belong to the request tenant"
+            )
         scope_entries = [scope] if scope is not None else [_request_scope(requested_scope, ctx)]
     else:
         scope_entries = await manager.list_scopes(
@@ -173,3 +181,7 @@ def _request_scope(scope_uri: str, ctx: RequestContext) -> MemoryMaintenanceScop
         user_id=ctx.user.user_id,
         agent_id=ctx.user.agent_id,
     )
+
+
+def _scope_belongs_to_request(scope: MemoryMaintenanceScope, ctx: RequestContext) -> bool:
+    return scope.account_id == ctx.account_id and scope.user_id == ctx.user.user_id
