@@ -358,7 +358,10 @@ async def running_server(temp_dir: Path, monkeypatch):
         except Exception:
             time.sleep(0.1)
 
-    for _ in range(50):
+    # _deferred_init runs the service.initialize() + APIKeyManager.load() in
+    # the background after the server starts accepting /health. Under full-
+    # suite load this can take well past 5s, so use a 30s ceiling.
+    for _ in range(300):
         if getattr(fastapi_app.state, "api_key_manager", None) is not None:
             break
         time.sleep(0.1)
