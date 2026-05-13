@@ -189,6 +189,7 @@ class MemoryMaintenanceManager:
         active_only: bool = True,
         account_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        agent_id: Optional[str] = None,
         limit: int = 100,
     ) -> List[MemoryMaintenanceScope]:
         await self.initialize()
@@ -199,6 +200,8 @@ class MemoryMaintenanceManager:
             scopes = [s for s in scopes if s.account_id == account_id]
         if user_id is not None:
             scopes = [s for s in scopes if s.user_id == user_id]
+        if agent_id is not None:
+            scopes = [s for s in scopes if s.agent_id == agent_id]
         scopes.sort(key=lambda s: s.updated_at or "", reverse=True)
         return [s.model_copy(deep=True) for s in scopes[: max(0, min(limit, 500))]]
 

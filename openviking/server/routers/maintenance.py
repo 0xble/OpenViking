@@ -80,11 +80,9 @@ async def list_memory_maintenance_scopes(
         active_only=active_only,
         account_id=ctx.account_id,
         user_id=ctx.user.user_id,
-        limit=500,
+        agent_id=ctx.user.agent_id,
+        limit=limit,
     )
-    scopes = [scope for scope in scopes if _scope_belongs_to_request(scope, ctx)][
-        : max(0, min(limit, 500))
-    ]
     return Response(
         status="ok",
         result={
@@ -124,11 +122,9 @@ async def run_memory_maintenance(
             active_only=True,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            limit=500,
+            agent_id=ctx.user.agent_id,
+            limit=limit,
         )
-        scope_entries = [scope for scope in scope_entries if _scope_belongs_to_request(scope, ctx)][
-            :limit
-        ]
 
     if not scope_entries:
         return Response(

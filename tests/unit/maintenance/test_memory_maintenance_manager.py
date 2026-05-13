@@ -73,8 +73,7 @@ def test_memory_scope_for_uri_groups_category_scopes():
         == "viking://user/u/memories/preferences/"
     )
     assert (
-        memory_scope_for_uri("viking://user/u/memories/profile.md")
-        == "viking://user/u/memories/"
+        memory_scope_for_uri("viking://user/u/memories/profile.md") == "viking://user/u/memories/"
     )
     assert memory_scope_for_uri("viking://resources/x.md") == ""
 
@@ -91,12 +90,8 @@ def test_dirty_scopes_from_memory_diff_groups_uris():
     grouped = dirty_scopes_from_memory_diff(_diff())
 
     assert grouped == {
-        "viking://agent/a/memories/patterns/": [
-            "viking://agent/a/memories/patterns/review.md"
-        ],
-        "viking://user/u/memories/preferences/": [
-            "viking://user/u/memories/preferences/editor.md"
-        ],
+        "viking://agent/a/memories/patterns/": ["viking://agent/a/memories/patterns/review.md"],
+        "viking://user/u/memories/preferences/": ["viking://user/u/memories/preferences/editor.md"],
         "viking://user/u/memories/": ["viking://user/u/memories/profile.md"],
     }
 
@@ -123,14 +118,49 @@ async def test_manager_records_and_persists_dirty_scopes():
 
 
 @pytest.mark.asyncio
+async def test_manager_filters_scopes_by_agent_before_limit():
+    fs = _MemoryFS()
+    manager = MemoryMaintenanceManager(viking_fs=fs)
+    current_ctx = _ctx()
+    other_ctx = _ctx()
+    other_ctx.user.agent_id = "other"
+
+    await manager.record_memory_diff(
+        {
+            "operations": {
+                "adds": [{"uri": "viking://agent/other/memories/patterns/review.md"}],
+            },
+        },
+        other_ctx,
+    )
+    await manager.record_memory_diff(
+        {
+            "operations": {
+                "adds": [{"uri": "viking://agent/agent/memories/patterns/review.md"}],
+            },
+        },
+        current_ctx,
+    )
+
+    scopes = await manager.list_scopes(
+        active_only=True,
+        account_id="acc",
+        user_id="user",
+        agent_id="agent",
+        limit=1,
+    )
+
+    assert [scope.scope_uri for scope in scopes] == ["viking://agent/agent/memories/patterns/"]
+
+
+@pytest.mark.asyncio
 async def test_manager_dirty_count_matches_retained_uris():
     fs = _MemoryFS()
     manager = MemoryMaintenanceManager(viking_fs=fs)
     memory_diff = {
         "operations": {
             "adds": [
-                {"uri": f"viking://user/u/memories/preferences/mem_{i}.md"}
-                for i in range(205)
+                {"uri": f"viking://user/u/memories/preferences/mem_{i}.md"} for i in range(205)
             ],
         },
     }
