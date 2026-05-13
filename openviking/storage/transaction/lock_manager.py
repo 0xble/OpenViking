@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 _HANDLE_CLEANUP_INTERVAL_SECONDS = 60.0
+_MANAGER_DEFAULT_TIMEOUT = object()
 
 
 class LockManager:
@@ -61,6 +62,11 @@ class LockManager:
             if current and current.locks:
                 active_handles[current.id] = current
         return active_handles
+
+    def _resolve_timeout(self, timeout: Any) -> Optional[float]:
+        if timeout is _MANAGER_DEFAULT_TIMEOUT:
+            return self._lock_timeout
+        return timeout
 
     async def start(self) -> None:
         """Start background cleanup and redo recovery."""
@@ -128,7 +134,7 @@ class LockManager:
         self,
         handle: LockHandle,
         paths: List[str],
-        timeout: Optional[float] = None,
+        timeout: Any = _MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         """
         一次性对多个路径进行子树加锁，使用有序加锁法防止死锁
@@ -149,6 +155,7 @@ class LockManager:
         Returns:
             是否成功获取所有锁
         """
+        timeout = self._resolve_timeout(timeout)
         if not paths:
             self._mark_handle_active(handle)
             return True
@@ -160,7 +167,8 @@ class LockManager:
             for path in sorted_paths:
                 locks_before = set(handle.locks)
                 success = await self._path_lock.acquire_subtree(
-                    path, handle,
+                    path,
+                    handle,
                     timeout=timeout,
                 )
                 if not success:
@@ -182,9 +190,10 @@ class LockManager:
         handle: LockHandle,
         point_paths: List[str],
         subtree_paths: List[str],
-        timeout: Optional[float] = None,
+        timeout: Any = _MANAGER_DEFAULT_TIMEOUT,
     ) -> bool:
         """"""
+        timeout = self._resolve_timeout(timeout)
         subtree_set = set(subtree_paths)
         point_only = [p for p in point_paths if p not in subtree_set]
         all_pairs = [(p, False) for p in point_only] + [(p, True) for p in subtree_set]
@@ -201,12 +210,14 @@ class LockManager:
                 locks_before = set(handle.locks)
                 if is_subtree:
                     success = await self._path_lock.acquire_subtree(
-                        path, handle,
+                        path,
+                        handle,
                         timeout=timeout,
                     )
                 else:
                     success = await self._path_lock.acquire_point(
-                        path, handle,
+                        path,
+                        handle,
                         timeout=timeout,
                     )
                 if not success:

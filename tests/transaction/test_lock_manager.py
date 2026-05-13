@@ -78,6 +78,72 @@ class TestLockManagerBasic:
         assert manager._path_lock.released_paths == [f"/a/{LOCK_FILE_NAME}"]
         assert handle.locks == [f"/preexisting/{LOCK_FILE_NAME}"]
 
+    async def test_batch_lock_omitted_timeout_uses_manager_default(self):
+        class FakePathLock:
+            def __init__(self):
+                self.timeouts = []
+
+            async def acquire_subtree(self, path, handle, timeout=None):
+                del path
+                self.timeouts.append(timeout)
+                handle.add_lock(f"/a/{LOCK_FILE_NAME}")
+                return True
+
+        manager = object.__new__(LockManager)
+        manager._path_lock = FakePathLock()
+        manager._handles = {}
+        manager._lock_timeout = 0.25
+        handle = manager.create_handle()
+
+        ok = await manager.acquire_subtree_batch(handle, ["/a"])
+
+        assert ok is True
+        assert manager._path_lock.timeouts == [0.25]
+
+    async def test_batch_lock_explicit_none_waits_forever(self):
+        class FakePathLock:
+            def __init__(self):
+                self.timeouts = []
+
+            async def acquire_subtree(self, path, handle, timeout=None):
+                del path
+                self.timeouts.append(timeout)
+                handle.add_lock(f"/a/{LOCK_FILE_NAME}")
+                return True
+
+        manager = object.__new__(LockManager)
+        manager._path_lock = FakePathLock()
+        manager._handles = {}
+        manager._lock_timeout = 0.25
+        handle = manager.create_handle()
+
+        ok = await manager.acquire_subtree_batch(handle, ["/a"], timeout=None)
+
+        assert ok is True
+        assert manager._path_lock.timeouts == [None]
+
+    async def test_mixed_batch_omitted_timeout_uses_manager_default(self):
+        class FakePathLock:
+            def __init__(self):
+                self.timeouts = []
+
+            async def acquire_point(self, path, handle, timeout=None):
+                del path
+                self.timeouts.append(timeout)
+                handle.add_lock(f"/a/{LOCK_FILE_NAME}")
+                return True
+
+        manager = object.__new__(LockManager)
+        manager._path_lock = FakePathLock()
+        manager._handles = {}
+        manager._lock_timeout = 0.25
+        handle = manager.create_handle()
+
+        ok = await manager.acquire_mixed_batch(handle, ["/a"], [])
+
+        assert ok is True
+        assert manager._path_lock.timeouts == [0.25]
+
     async def test_acquire_mv(self, agfs_client, lm, test_dir):
         src = f"{test_dir}/mv-src-{uuid.uuid4().hex}"
         dst = f"{test_dir}/mv-dst-{uuid.uuid4().hex}"
