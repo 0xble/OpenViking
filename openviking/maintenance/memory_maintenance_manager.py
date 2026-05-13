@@ -207,6 +207,22 @@ class MemoryMaintenanceManager:
         scope = self._scopes.get(scope_uri)
         return scope.model_copy(deep=True) if scope else None
 
+    async def ensure_scope(
+        self,
+        scope: MemoryMaintenanceScope,
+    ) -> MemoryMaintenanceScope:
+        """Create an empty scope record when maintenance is run explicitly."""
+        await self.initialize()
+        async with self._write_lock:
+            existing = self._scopes.get(scope.scope_uri)
+            if existing is None:
+                self._scopes[scope.scope_uri] = scope.model_copy(deep=True)
+                await self._save_unlocked()
+                existing = self._scopes[scope.scope_uri]
+            result = existing.model_copy(deep=True)
+
+        return result
+
     async def mark_run_complete(
         self,
         scope_uri: str,
@@ -305,8 +321,7 @@ class MemoryMaintenanceManager:
         ctx = _root_ctx()
 
         supports_atomic = all(
-            hasattr(self._viking_fs, name)
-            for name in ("write_file", "exists", "mv", "rm")
+            hasattr(self._viking_fs, name) for name in ("write_file", "exists", "mv", "rm")
         )
         if not supports_atomic:
             await self._viking_fs.write_file(self.STORAGE_URI, content, ctx=ctx)
@@ -318,8 +333,7 @@ class MemoryMaintenanceManager:
         except Exception as exc:
             if not is_not_found_error(exc):
                 logger.warning(
-                    "[MemoryMaintenanceManager] Failed to remove old backup "
-                    "backup=%s: %s",
+                    "[MemoryMaintenanceManager] Failed to remove old backup backup=%s: %s",
                     self.STORAGE_BAK_URI,
                     exc,
                 )
@@ -352,8 +366,7 @@ class MemoryMaintenanceManager:
                     await self._reload_storage_state(ctx)
             except Exception as rollback_exc:
                 logger.error(
-                    "[MemoryMaintenanceManager] Failed to restore backup "
-                    "backup=%s storage=%s: %s",
+                    "[MemoryMaintenanceManager] Failed to restore backup backup=%s storage=%s: %s",
                     self.STORAGE_BAK_URI,
                     self.STORAGE_URI,
                     rollback_exc,
@@ -367,8 +380,7 @@ class MemoryMaintenanceManager:
                 self._replace_scopes_from_payload(data)
         except Exception as exc:
             logger.error(
-                "[MemoryMaintenanceManager] Failed to reload restored state "
-                "storage=%s: %s",
+                "[MemoryMaintenanceManager] Failed to reload restored state storage=%s: %s",
                 self.STORAGE_URI,
                 exc,
             )

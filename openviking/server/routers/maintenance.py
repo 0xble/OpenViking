@@ -80,8 +80,11 @@ async def list_memory_maintenance_scopes(
         active_only=active_only,
         account_id=ctx.account_id,
         user_id=ctx.user.user_id,
-        limit=limit,
+        limit=500,
     )
+    scopes = [scope for scope in scopes if _scope_belongs_to_request(scope, ctx)][
+        : max(0, min(limit, 500))
+    ]
     return Response(
         status="ok",
         result={
@@ -113,14 +116,19 @@ async def run_memory_maintenance(
             raise PermissionDeniedError(
                 "memory maintenance scope does not belong to the request tenant"
             )
-        scope_entries = [scope] if scope is not None else [_request_scope(requested_scope, ctx)]
+        if scope is None:
+            scope = await manager.ensure_scope(_request_scope(requested_scope, ctx))
+        scope_entries = [scope]
     else:
         scope_entries = await manager.list_scopes(
             active_only=True,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            limit=limit,
+            limit=500,
         )
+        scope_entries = [scope for scope in scope_entries if _scope_belongs_to_request(scope, ctx)][
+            :limit
+        ]
 
     if not scope_entries:
         return Response(
@@ -204,7 +212,11 @@ def _normalize_scope_uri(scope_uri: str) -> str:
 
 
 def _scope_belongs_to_request(scope: MemoryMaintenanceScope, ctx: RequestContext) -> bool:
-    return scope.account_id == ctx.account_id and scope.user_id == ctx.user.user_id
+    return (
+        scope.account_id == ctx.account_id
+        and scope.user_id == ctx.user.user_id
+        and scope.agent_id == ctx.user.agent_id
+    )
 
 
 def _scope_uri_allowed_for_request(scope_uri: str, ctx: RequestContext) -> bool:

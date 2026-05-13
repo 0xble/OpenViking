@@ -47,6 +47,34 @@ async def test_memory_maintenance_run_empty_dirty_scopes(client):
     }
 
 
+async def test_memory_maintenance_scopes_filters_current_agent(client, service):
+    manager = MemoryMaintenanceManager(viking_fs=service.viking_fs)
+    current_agent_uri = "viking://agent/default/memories/preferences/editor.md"
+    other_agent_uri = "viking://agent/research/memories/preferences/editor.md"
+    await manager.record_memory_diff(
+        _memory_diff(current_agent_uri),
+        RequestContext(
+            user=UserIdentifier("test_account", "test_user", "default"),
+            role=Role.ROOT,
+        ),
+    )
+    await manager.record_memory_diff(
+        _memory_diff(other_agent_uri),
+        RequestContext(
+            user=UserIdentifier("test_account", "test_user", "research"),
+            role=Role.ROOT,
+        ),
+    )
+
+    resp = await client.get("/api/v1/maintenance/memory/scopes")
+
+    assert resp.status_code == 200
+    scopes = resp.json()["result"]["scopes"]
+    assert [scope["scope_uri"] for scope in scopes] == [
+        "viking://agent/default/memories/preferences/"
+    ]
+
+
 async def test_memory_maintenance_run_rejects_nonblocking_request(client):
     resp = await client.post(
         "/api/v1/maintenance/memory/run",
@@ -146,6 +174,45 @@ async def test_memory_maintenance_explicit_scope_canonicalizes_lookup(
     assert resp.status_code == 200
     assert seen["scope_uri"] == "viking://user/test_user/memories/preferences/"
     assert seen["target_uris"] == [memory_uri]
+
+
+async def test_memory_maintenance_explicit_clean_scope_preserves_tenant(
+    client,
+    service,
+    monkeypatch,
+):
+    seen = {}
+
+    class FakeConsolidator:
+        async def run(self, scope_uri, ctx, *, dry_run=False, target_uris=None):
+            seen["target_uris"] = target_uris
+            return ConsolidationResult(scope_uri=scope_uri, dry_run=dry_run)
+
+    monkeypatch.setattr(
+        "openviking.server.routers.maintenance._consolidator",
+        lambda: FakeConsolidator(),
+    )
+
+    resp = await client.post(
+        "/api/v1/maintenance/memory/run",
+        json={
+            "scope": "viking://user/test_user/memories/preferences/",
+            "dry_run": False,
+            "wait": True,
+            "limit": 10,
+        },
+    )
+
+    assert resp.status_code == 200
+    assert seen["target_uris"] is None
+
+    reloaded = MemoryMaintenanceManager(viking_fs=service.viking_fs)
+    scope = await reloaded.get_scope("viking://user/test_user/memories/preferences/")
+    assert scope is not None
+    assert scope.account_id == "test_account"
+    assert scope.user_id == "test_user"
+    assert scope.agent_id == "default"
+    assert scope.is_active is False
 
 
 async def test_memory_maintenance_partial_result_keeps_scope_dirty(
