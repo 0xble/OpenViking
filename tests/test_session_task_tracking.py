@@ -391,9 +391,8 @@ async def test_add_resource_async_returns_task_id(api_client):
     service.resources.add_resource = fake_add_resource
 
     from openviking.server.identity import RequestContext, Role
-    from openviking_cli.session.user_id import UserIdentifier
 
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
     result = await service.resources.add_resource(ctx=ctx, reason="test async resource")
 
     assert "task_id" in result
@@ -416,9 +415,8 @@ async def test_add_resource_sync_no_task_id(api_client):
     service.resources.add_resource = fake_add_resource
 
     from openviking.server.identity import RequestContext, Role
-    from openviking_cli.session.user_id import UserIdentifier
 
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
     result = await service.resources.add_resource(ctx=ctx, reason="test sync resource")
 
     assert "task_id" not in result
@@ -458,9 +456,8 @@ async def test_add_resource_async_task_lifecycle(api_client):
     service.resources.add_resource = fake_add_resource
 
     from openviking.server.identity import RequestContext, Role
-    from openviking_cli.session.user_id import UserIdentifier
 
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
     result = await service.resources.add_resource(ctx=ctx, reason="test lifecycle")
 
     task_id = result["task_id"]
@@ -507,9 +504,8 @@ async def test_add_resource_task_list_filter(api_client):
     service.resources.add_resource = fake_add_resource
 
     from openviking.server.identity import RequestContext, Role
-    from openviking_cli.session.user_id import UserIdentifier
 
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
     result = await service.resources.add_resource(ctx=ctx, reason="test list filter")
     task_id = result["task_id"]
 
@@ -551,9 +547,8 @@ async def test_add_skill_async_returns_task_id(api_client):
     service.resources.add_skill = fake_add_skill
 
     from openviking.server.identity import RequestContext, Role
-    from openviking_cli.session.user_id import UserIdentifier
 
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
     result = await service.resources.add_skill(data="test skill", ctx=ctx)
 
     assert "task_id" in result
@@ -575,9 +570,8 @@ async def test_add_skill_sync_no_task_id(api_client):
     service.resources.add_skill = fake_add_skill
 
     from openviking.server.identity import RequestContext, Role
-    from openviking_cli.session.user_id import UserIdentifier
 
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    ctx = RequestContext(user=service.user, role=Role.ROOT)
     result = await service.resources.add_skill(data="test skill", ctx=ctx, wait=True)
 
     assert "task_id" not in result

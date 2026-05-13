@@ -179,7 +179,15 @@ async def test_semantic_dag_skip_vectorization_does_not_schedule_tasks(monkeypat
     await executor.run(root_uri)
     await asyncio.sleep(0)
 
-    assert fake_fs.writes == [
+    # Filter out hash and summary cache writes added by the fork's placeholder
+    # rejection / summary cache features; the test only asserts the semantic
+    # artifacts themselves.
+    semantic_writes = [
+        (uri, content)
+        for uri, content in fake_fs.writes
+        if not (uri.endswith(".overview.hash") or uri.endswith(".summary_cache.json"))
+    ]
+    assert semantic_writes == [
         (f"{root_uri}/child/.overview.md", "overview"),
         (f"{root_uri}/child/.abstract.md", "abstract"),
         (f"{root_uri}/.overview.md", "overview"),

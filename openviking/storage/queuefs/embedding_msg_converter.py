@@ -49,12 +49,24 @@ class EmbeddingMsgConverter:
                 context_data["owner_space"] = owner_user.user_space_name()
             else:
                 context_data["owner_space"] = ""
-        if context_data.get("owner_user_id") is None and context_data.get("owner_agent_id") is None:
-            owner_fields = owner_fields_for_uri(
-                context_data.get("uri", ""),
+        if uri:
+            owner_fields_for_normalize = owner_fields_for_uri(
+                uri,
                 user=context.user,
                 account_id=context_data.get("account_id"),
             )
+            context_data["uri"] = owner_fields_for_normalize["uri"]
+        else:
+            owner_fields_for_normalize = None
+        if context_data.get("owner_user_id") is None and context_data.get("owner_agent_id") is None:
+            if owner_fields_for_normalize is not None:
+                owner_fields = owner_fields_for_normalize
+            else:
+                owner_fields = owner_fields_for_uri(
+                    context_data.get("uri", ""),
+                    user=context.user,
+                    account_id=context_data.get("account_id"),
+                )
             context_data["owner_user_id"] = owner_fields["owner_user_id"]
             context_data["owner_agent_id"] = owner_fields["owner_agent_id"]
 

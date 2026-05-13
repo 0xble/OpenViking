@@ -486,6 +486,10 @@ class SemanticProcessor(DequeueHandlerBase):
             if msg.telemetry_id and msg.id:
                 request_wait_tracker.mark_semantic_done(msg.telemetry_id, msg.id)
 
+        def _mark_failed(reason: str) -> None:
+            if msg.telemetry_id and msg.id:
+                request_wait_tracker.mark_semantic_failed(msg.telemetry_id, msg.id, reason)
+
         try:
             entries = await viking_fs.ls(dir_uri, ctx=ctx)
         except Exception as e:
