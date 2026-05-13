@@ -412,8 +412,8 @@ class TestUriResolution:
 
     @pytest.fixture
     def test_registry(self):
-        """Create a test registry with sample schemas."""
-        registry = MemoryTypeRegistry()
+        """Create a test registry with sample schemas (no bundled load)."""
+        registry = MemoryTypeRegistry(load_schemas=False)
 
         # Add preferences schema
         registry.register(

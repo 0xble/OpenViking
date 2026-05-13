@@ -408,7 +408,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         # 读取单文件 schema 的文件（只对非 add_only 模式）
         for file_uri in read_files:
             try:
-                result_str = await read_tool.execute(self.create_tool_context(), uri=file_uri)
+                result_str = await read_tool.execute(
+                    self._viking_fs, self.create_tool_context(), uri=file_uri
+                )
                 add_tool_call_pair_to_messages(
                     messages=pre_fetch_messages,
                     call_id=call_id_seq,
@@ -429,7 +431,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 if not file_uri:
                     continue
                 try:
-                    result_str = await read_tool.execute(self.create_tool_context(), uri=file_uri)
+                    result_str = await read_tool.execute(
+                        self._viking_fs, self.create_tool_context(), uri=file_uri
+                    )
                     add_tool_call_pair_to_messages(
                         messages=pre_fetch_messages,
                         call_id=call_id_seq,
@@ -452,7 +456,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         if not tool:
             return {"error": f"Unknown tool: {tool_call.name}"}
         tracer.info(f"tool_call.arguments={tool_call.arguments}")
-        result = await tool.execute(self.create_tool_context(), **tool_call.arguments)
+        result = await tool.execute(
+            self._viking_fs, self.create_tool_context(), **tool_call.arguments
+        )
         return result
 
     def get_tools(self) -> List[str]:

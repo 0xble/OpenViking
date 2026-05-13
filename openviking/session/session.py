@@ -970,18 +970,21 @@ class Session:
             try:
                 with bind_telemetry(telemetry):
                     redo_task_id = str(uuid.uuid4())
-                    redo_log = get_lock_manager().redo_log
-                    redo_log.write_pending(
-                        redo_task_id,
-                        {
-                            "archive_uri": archive_uri,
-                            "session_uri": self._session_uri,
-                            "account_id": self.ctx.account_id,
-                            "user_id": self.ctx.user.user_id,
-                            "agent_id": self.ctx.user.agent_id,
-                            "role": self.ctx.role.value,
-                        },
-                    )
+                    lock_manager = get_lock_manager()
+                    redo_log = lock_manager.redo_log
+                    redo_recovery_enabled = lock_manager.redo_recovery_enabled
+                    if redo_recovery_enabled:
+                        redo_log.write_pending(
+                            redo_task_id,
+                            {
+                                "archive_uri": archive_uri,
+                                "session_uri": self._session_uri,
+                                "account_id": self.ctx.account_id,
+                                "user_id": self.ctx.user.user_id,
+                                "agent_id": self.ctx.user.agent_id,
+                                "role": self.ctx.role.value,
+                            },
+                        )
 
                     if self._session_compressor:
                         logger.info(
@@ -1011,7 +1014,8 @@ class Session:
                             except Exception as e:
                                 logger.warning(f"Failed to create relation to {usage.uri}: {e}")
 
-                    redo_log.mark_done(redo_task_id)
+                    if redo_recovery_enabled:
+                        redo_log.mark_done(redo_task_id)
 
                     if self._vikingdb_manager:
                         uris = [u.uri for u in usage_records if u.uri]
