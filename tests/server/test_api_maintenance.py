@@ -75,6 +75,43 @@ async def test_memory_maintenance_scopes_filters_current_agent(client, service):
     ]
 
 
+async def test_memory_maintenance_shared_user_scope_visible_across_agents(
+    client,
+    service,
+    monkeypatch,
+):
+    manager = MemoryMaintenanceManager(viking_fs=service.viking_fs)
+    memory_uri = "viking://user/test_user/memories/preferences/editor.md"
+    await manager.record_memory_diff(
+        _memory_diff(memory_uri),
+        RequestContext(
+            user=UserIdentifier("test_account", "test_user", "research"),
+            role=Role.ROOT,
+        ),
+    )
+    seen = {}
+
+    class FakeConsolidator:
+        async def run(self, scope_uri, ctx, *, dry_run=False, target_uris=None):
+            seen["scope_uri"] = scope_uri
+            seen["target_uris"] = target_uris
+            return ConsolidationResult(scope_uri=scope_uri, dry_run=dry_run)
+
+    monkeypatch.setattr(
+        "openviking.server.routers.maintenance._consolidator",
+        lambda: FakeConsolidator(),
+    )
+
+    resp = await client.post(
+        "/api/v1/maintenance/memory/run",
+        json={"dry_run": True, "wait": True, "limit": 10},
+    )
+
+    assert resp.status_code == 200
+    assert seen["scope_uri"] == "viking://user/test_user/memories/preferences/"
+    assert seen["target_uris"] == [memory_uri]
+
+
 async def test_memory_maintenance_run_rejects_nonblocking_request(client):
     resp = await client.post(
         "/api/v1/maintenance/memory/run",

@@ -80,9 +80,11 @@ async def list_memory_maintenance_scopes(
         active_only=active_only,
         account_id=ctx.account_id,
         user_id=ctx.user.user_id,
-        agent_id=ctx.user.agent_id,
-        limit=limit,
+        limit=None,
     )
+    scopes = [scope for scope in scopes if _scope_belongs_to_request(scope, ctx)][
+        : max(0, min(limit, 500))
+    ]
     return Response(
         status="ok",
         result={
@@ -122,9 +124,11 @@ async def run_memory_maintenance(
             active_only=True,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
-            agent_id=ctx.user.agent_id,
-            limit=limit,
+            limit=None,
         )
+        scope_entries = [scope for scope in scope_entries if _scope_belongs_to_request(scope, ctx)][
+            :limit
+        ]
 
     if not scope_entries:
         return Response(
@@ -208,11 +212,19 @@ def _normalize_scope_uri(scope_uri: str) -> str:
 
 
 def _scope_belongs_to_request(scope: MemoryMaintenanceScope, ctx: RequestContext) -> bool:
-    return (
-        scope.account_id == ctx.account_id
-        and scope.user_id == ctx.user.user_id
-        and scope.agent_id == ctx.user.agent_id
-    )
+    if scope.account_id != ctx.account_id or scope.user_id != ctx.user.user_id:
+        return False
+
+    scope_uri = _normalize_scope_uri(scope.scope_uri)
+    if scope_uri.startswith(canonical_agent_root(ctx).rstrip("/") + "/memories/"):
+        return scope.agent_id == ctx.user.agent_id
+
+    if scope_uri.startswith(canonical_user_root(ctx).rstrip("/") + "/memories/"):
+        if ctx.namespace_policy.isolate_user_scope_by_agent:
+            return scope.agent_id == ctx.user.agent_id
+        return True
+
+    return False
 
 
 def _scope_uri_allowed_for_request(scope_uri: str, ctx: RequestContext) -> bool:
