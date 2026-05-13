@@ -4,6 +4,7 @@
 """Tests for maintenance endpoints."""
 
 from openviking.maintenance import MemoryMaintenanceManager
+from openviking.maintenance.memory_consolidator import ConsolidationResult
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -103,3 +104,90 @@ async def test_memory_maintenance_explicit_missing_scope_rejects_foreign_tenant(
     assert body["status"] == "error"
     assert body["error"]["code"] == "PERMISSION_DENIED"
     assert "does not belong" in body["error"]["message"]
+
+
+async def test_memory_maintenance_explicit_scope_canonicalizes_lookup(
+    client,
+    service,
+    monkeypatch,
+):
+    manager = MemoryMaintenanceManager(viking_fs=service.viking_fs)
+    memory_uri = "viking://user/test_user/memories/preferences/editor.md"
+    await manager.record_memory_diff(
+        _memory_diff(memory_uri),
+        RequestContext(
+            user=UserIdentifier("test_account", "test_user", "default"),
+            role=Role.ROOT,
+        ),
+    )
+    seen = {}
+
+    class FakeConsolidator:
+        async def run(self, scope_uri, ctx, *, dry_run=False, target_uris=None):
+            seen["scope_uri"] = scope_uri
+            seen["target_uris"] = target_uris
+            return ConsolidationResult(scope_uri=scope_uri, dry_run=dry_run)
+
+    monkeypatch.setattr(
+        "openviking.server.routers.maintenance._consolidator",
+        lambda: FakeConsolidator(),
+    )
+
+    resp = await client.post(
+        "/api/v1/maintenance/memory/run",
+        json={
+            "scope": "viking://user/test_user/memories/preferences",
+            "dry_run": True,
+            "wait": True,
+            "limit": 10,
+        },
+    )
+
+    assert resp.status_code == 200
+    assert seen["scope_uri"] == "viking://user/test_user/memories/preferences/"
+    assert seen["target_uris"] == [memory_uri]
+
+
+async def test_memory_maintenance_partial_result_keeps_scope_dirty(
+    client,
+    service,
+    monkeypatch,
+):
+    manager = MemoryMaintenanceManager(viking_fs=service.viking_fs)
+    memory_uri = "viking://user/test_user/memories/preferences/editor.md"
+    await manager.record_memory_diff(
+        _memory_diff(memory_uri),
+        RequestContext(
+            user=UserIdentifier("test_account", "test_user", "default"),
+            role=Role.ROOT,
+        ),
+    )
+
+    class FakeConsolidator:
+        async def run(self, scope_uri, ctx, *, dry_run=False, target_uris=None):
+            result = ConsolidationResult(scope_uri=scope_uri, dry_run=dry_run)
+            result.partial = True
+            result.errors = ["cluster failed"]
+            return result
+
+    monkeypatch.setattr(
+        "openviking.server.routers.maintenance._consolidator",
+        lambda: FakeConsolidator(),
+    )
+
+    resp = await client.post(
+        "/api/v1/maintenance/memory/run",
+        json={"dry_run": False, "wait": True, "limit": 10},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["result"]["status"] == "error"
+
+    reloaded = MemoryMaintenanceManager(viking_fs=service.viking_fs)
+    scopes = await reloaded.list_scopes(
+        active_only=True, account_id="test_account", user_id="test_user"
+    )
+    assert len(scopes) == 1
+    assert scopes[0].dirty_uris == [memory_uri]
+    assert scopes[0].last_error == "cluster failed"

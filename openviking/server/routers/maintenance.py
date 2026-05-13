@@ -101,7 +101,7 @@ async def run_memory_maintenance(
     if not request.wait:
         raise InvalidArgumentError("wait=false is not supported for memory maintenance runs")
     limit = max(1, min(request.limit, 100))
-    requested_scope = request.scope.strip()
+    requested_scope = _normalize_scope_uri(request.scope)
 
     if requested_scope:
         if not _scope_uri_allowed_for_request(requested_scope, ctx):
@@ -152,11 +152,19 @@ async def run_memory_maintenance(
                 target_uris=target_uris,
             )
             runs.append(asdict(result))
-            await manager.mark_run_complete(
-                scope_uri,
-                audit_uri=result.audit_uri,
-                dry_run=request.dry_run,
-            )
+            if result.partial or result.errors:
+                status = "error"
+                if not request.dry_run:
+                    await manager.mark_run_failed(
+                        scope_uri,
+                        "; ".join(result.errors) or "maintenance completed partially",
+                    )
+            else:
+                await manager.mark_run_complete(
+                    scope_uri,
+                    audit_uri=result.audit_uri,
+                    dry_run=request.dry_run,
+                )
         except Exception as exc:
             status = "error"
             failed = await manager.mark_run_failed(scope_uri, str(exc))
@@ -188,12 +196,19 @@ def _request_scope(scope_uri: str, ctx: RequestContext) -> MemoryMaintenanceScop
     )
 
 
+def _normalize_scope_uri(scope_uri: str) -> str:
+    normalized = scope_uri.strip()
+    if not normalized:
+        return ""
+    return normalized.rstrip("/") + "/"
+
+
 def _scope_belongs_to_request(scope: MemoryMaintenanceScope, ctx: RequestContext) -> bool:
     return scope.account_id == ctx.account_id and scope.user_id == ctx.user.user_id
 
 
 def _scope_uri_allowed_for_request(scope_uri: str, ctx: RequestContext) -> bool:
-    normalized = scope_uri.rstrip("/") + "/"
+    normalized = _normalize_scope_uri(scope_uri)
     allowed_prefixes = (
         canonical_user_root(ctx).rstrip("/") + "/memories/",
         canonical_agent_root(ctx).rstrip("/") + "/memories/",
