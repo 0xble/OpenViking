@@ -251,7 +251,9 @@ class MemorySearchTool(MemoryTool):
                 limit=limit + 10,
                 ctx=request_ctx,
             )
-            return optimize_search_result(search_result.to_dict(), limit=limit)
+            if hasattr(search_result, "to_dict"):
+                search_result = search_result.to_dict()
+            return optimize_search_result(search_result, limit=limit)
         except Exception as e:
             tracer.error(f"Failed to execute search: {e}")
             return {"error": str(e)}

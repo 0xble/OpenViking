@@ -4,6 +4,11 @@
 Tests for memory tools.
 """
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+
 from openviking.session.memory.tools import (
     MemoryLsTool,
     MemoryReadTool,
@@ -33,6 +38,27 @@ class TestMemoryTools:
         assert tool.name == "search"
         assert "Semantic search" in tool.description
         assert "query" in tool.parameters["properties"]
+
+    @pytest.mark.asyncio
+    async def test_search_tool_accepts_dict_result(self):
+        """Search backends may return an already-serialized result."""
+        tool = MemorySearchTool()
+        viking_fs = SimpleNamespace(
+            search=AsyncMock(
+                return_value={
+                    "memories": [
+                        {"uri": "viking://user/default/memories/events/one.md", "score": 0.9},
+                        {"uri": "viking://user/default/memories/events/.overview.md", "score": 0.8},
+                    ],
+                    "resources": [],
+                    "skills": [],
+                }
+            )
+        )
+
+        result = await tool.execute(viking_fs, None, query="events", limit=5)
+
+        assert result == [{"uri": "viking://user/default/memories/events/one.md", "score": 0.9}]
 
     def test_ls_tool_properties(self):
         """Test MemoryLsTool properties."""
