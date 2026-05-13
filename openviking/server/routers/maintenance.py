@@ -172,6 +172,7 @@ async def run_memory_maintenance(
                     scope_uri,
                     audit_uri=result.audit_uri,
                     dry_run=request.dry_run,
+                    processed_uris=target_uris or [],
                 )
         except Exception as exc:
             status = "error"

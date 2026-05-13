@@ -192,6 +192,63 @@ async def test_mark_run_complete_clears_dirty_state_only_for_apply():
 
 
 @pytest.mark.asyncio
+async def test_mark_run_complete_preserves_concurrent_dirty_uris():
+    fs = _MemoryFS()
+    runner = MemoryMaintenanceManager(viking_fs=fs)
+    await runner.record_memory_diff(_diff(), _ctx())
+    scope = "viking://user/u/memories/preferences/"
+    processed_uri = "viking://user/u/memories/preferences/editor.md"
+
+    recorder = MemoryMaintenanceManager(viking_fs=fs)
+    await recorder.record_memory_diff(
+        {
+            "operations": {
+                "adds": [{"uri": "viking://user/u/memories/preferences/theme.md"}],
+            },
+        },
+        _ctx(),
+    )
+
+    completed = await runner.mark_run_complete(
+        scope,
+        audit_uri="viking://audit",
+        dry_run=False,
+        processed_uris=[processed_uri],
+    )
+
+    assert completed is not None
+    assert completed.dirty_uris == ["viking://user/u/memories/preferences/theme.md"]
+    assert completed.dirty_count == 1
+    assert completed.is_active is True
+
+
+@pytest.mark.asyncio
+async def test_mark_run_failed_preserves_concurrent_dirty_uris():
+    fs = _MemoryFS()
+    runner = MemoryMaintenanceManager(viking_fs=fs)
+    await runner.record_memory_diff(_diff(), _ctx())
+    scope = "viking://user/u/memories/preferences/"
+
+    recorder = MemoryMaintenanceManager(viking_fs=fs)
+    await recorder.record_memory_diff(
+        {
+            "operations": {
+                "adds": [{"uri": "viking://user/u/memories/preferences/theme.md"}],
+            },
+        },
+        _ctx(),
+    )
+
+    failed = await runner.mark_run_failed(scope, "failed")
+
+    assert failed.dirty_uris == [
+        "viking://user/u/memories/preferences/editor.md",
+        "viking://user/u/memories/preferences/theme.md",
+    ]
+    assert failed.last_error == "failed"
+
+
+@pytest.mark.asyncio
 async def test_manager_uses_non_atomic_write_when_backend_lacks_mv():
     class WriteOnlyFS:
         def __init__(self):

@@ -234,9 +234,11 @@ class MemoryMaintenanceManager:
         *,
         audit_uri: str = "",
         dry_run: bool = False,
+        processed_uris: Optional[List[str]] = None,
     ) -> Optional[MemoryMaintenanceScope]:
         await self.initialize()
         async with self._write_lock:
+            await self._load()
             scope = self._scopes.get(scope_uri)
             if scope is None:
                 scope = MemoryMaintenanceScope(scope_uri=scope_uri)
@@ -247,9 +249,13 @@ class MemoryMaintenanceManager:
             scope.retry_count = 0
             scope.last_error = ""
             if not dry_run:
-                scope.dirty_count = 0
-                scope.dirty_uris = []
-                scope.is_active = False
+                if processed_uris is None:
+                    scope.dirty_uris = []
+                else:
+                    processed = set(processed_uris)
+                    scope.dirty_uris = [uri for uri in scope.dirty_uris if uri not in processed]
+                scope.dirty_count = len(scope.dirty_uris)
+                scope.is_active = scope.dirty_count > 0
             await self._save_unlocked()
             result = scope.model_copy(deep=True)
 
@@ -258,6 +264,7 @@ class MemoryMaintenanceManager:
     async def mark_run_failed(self, scope_uri: str, error: str) -> MemoryMaintenanceScope:
         await self.initialize()
         async with self._write_lock:
+            await self._load()
             scope = self._scopes.get(scope_uri)
             if scope is None:
                 scope = MemoryMaintenanceScope(scope_uri=scope_uri)
