@@ -10,6 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
 
+from openviking.core.namespace import canonical_agent_root, canonical_user_root
 from openviking.maintenance import (
     MemoryConsolidator,
     MemoryMaintenanceManager,
@@ -103,6 +104,10 @@ async def run_memory_maintenance(
     requested_scope = request.scope.strip()
 
     if requested_scope:
+        if not _scope_uri_allowed_for_request(requested_scope, ctx):
+            raise PermissionDeniedError(
+                "memory maintenance scope does not belong to the request tenant"
+            )
         scope = await manager.get_scope(requested_scope)
         if scope is not None and not _scope_belongs_to_request(scope, ctx):
             raise PermissionDeniedError(
@@ -185,3 +190,12 @@ def _request_scope(scope_uri: str, ctx: RequestContext) -> MemoryMaintenanceScop
 
 def _scope_belongs_to_request(scope: MemoryMaintenanceScope, ctx: RequestContext) -> bool:
     return scope.account_id == ctx.account_id and scope.user_id == ctx.user.user_id
+
+
+def _scope_uri_allowed_for_request(scope_uri: str, ctx: RequestContext) -> bool:
+    normalized = scope_uri.rstrip("/") + "/"
+    allowed_prefixes = (
+        canonical_user_root(ctx).rstrip("/") + "/memories/",
+        canonical_agent_root(ctx).rstrip("/") + "/memories/",
+    )
+    return any(normalized.startswith(prefix) for prefix in allowed_prefixes)

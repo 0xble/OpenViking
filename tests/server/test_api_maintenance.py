@@ -85,3 +85,21 @@ async def test_memory_maintenance_explicit_scope_rejects_foreign_tenant(client, 
     assert body["status"] == "error"
     assert body["error"]["code"] == "PERMISSION_DENIED"
     assert "does not belong" in body["error"]["message"]
+
+
+async def test_memory_maintenance_explicit_missing_scope_rejects_foreign_tenant(client):
+    resp = await client.post(
+        "/api/v1/maintenance/memory/run",
+        json={
+            "scope": "viking://user/foreign_user/memories/preferences/",
+            "dry_run": True,
+            "wait": True,
+            "limit": 10,
+        },
+    )
+
+    assert resp.status_code == 403
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert "does not belong" in body["error"]["message"]
