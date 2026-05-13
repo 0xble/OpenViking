@@ -29,3 +29,16 @@ async def test_memory_maintenance_run_empty_dirty_scopes(client):
         "scopes": [],
         "runs": [],
     }
+
+
+async def test_memory_maintenance_run_rejects_nonblocking_request(client):
+    resp = await client.post(
+        "/api/v1/maintenance/memory/run",
+        json={"dry_run": True, "wait": False, "limit": 10},
+    )
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "wait=false is not supported" in body["error"]["message"]

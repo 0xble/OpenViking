@@ -21,7 +21,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.session.memory_archiver import MemoryArchiver
 from openviking.session.memory_deduplicator import MemoryDeduplicator
-from openviking_cli.exceptions import NotInitializedError
+from openviking_cli.exceptions import InvalidArgumentError, NotInitializedError
 
 router = APIRouter(prefix="/api/v1/maintenance", tags=["maintenance"])
 
@@ -93,14 +93,14 @@ async def run_memory_maintenance(
 ):
     """Run memory maintenance for one scope or the current dirty scopes."""
     manager = _manager()
+    if not request.wait:
+        raise InvalidArgumentError("wait=false is not supported for memory maintenance runs")
     limit = max(1, min(request.limit, 100))
     requested_scope = request.scope.strip()
 
     if requested_scope:
         scope = await manager.get_scope(requested_scope)
-        scope_entries = (
-            [scope] if scope is not None else [MemoryMaintenanceScope(scope_uri=requested_scope)]
-        )
+        scope_entries = [scope] if scope is not None else [_request_scope(requested_scope, ctx)]
     else:
         scope_entries = await manager.list_scopes(
             active_only=True,
@@ -163,4 +163,13 @@ async def run_memory_maintenance(
             "scopes": processed_scopes,
             "runs": runs,
         },
+    )
+
+
+def _request_scope(scope_uri: str, ctx: RequestContext) -> MemoryMaintenanceScope:
+    return MemoryMaintenanceScope(
+        scope_uri=scope_uri,
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+        agent_id=ctx.user.agent_id,
     )
