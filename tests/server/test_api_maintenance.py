@@ -332,3 +332,47 @@ async def test_memory_maintenance_partial_result_keeps_scope_dirty(
     assert len(scopes) == 1
     assert scopes[0].dirty_uris == [memory_uri]
     assert scopes[0].last_error == "cluster failed"
+
+
+async def test_memory_maintenance_dry_run_exception_does_not_mark_failed(
+    client,
+    service,
+    monkeypatch,
+):
+    manager = MemoryMaintenanceManager(viking_fs=service.viking_fs)
+    memory_uri = "viking://user/test_user/memories/preferences/editor.md"
+    await manager.record_memory_diff(
+        _memory_diff(memory_uri),
+        RequestContext(
+            user=UserIdentifier("test_account", "test_user", "default"),
+            role=Role.ROOT,
+        ),
+    )
+
+    class FakeConsolidator:
+        async def run(self, scope_uri, ctx, *, dry_run=False, target_uris=None):
+            raise RuntimeError("dry-run failed")
+
+    monkeypatch.setattr(
+        "openviking.server.routers.maintenance._consolidator",
+        lambda: FakeConsolidator(),
+    )
+
+    resp = await client.post(
+        "/api/v1/maintenance/memory/run",
+        json={"dry_run": True, "wait": True, "limit": 10},
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["result"]["status"] == "error"
+    assert body["result"]["runs"][0]["error"] == "dry-run failed"
+
+    reloaded = MemoryMaintenanceManager(viking_fs=service.viking_fs)
+    scopes = await reloaded.list_scopes(
+        active_only=True, account_id="test_account", user_id="test_user"
+    )
+    assert len(scopes) == 1
+    assert scopes[0].dirty_uris == [memory_uri]
+    assert scopes[0].retry_count == 0
+    assert scopes[0].last_error == ""

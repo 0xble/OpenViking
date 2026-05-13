@@ -174,12 +174,15 @@ async def run_memory_maintenance(
                 )
         except Exception as exc:
             status = "error"
-            failed = await manager.mark_run_failed(scope_uri, str(exc))
+            error = str(exc)
+            if not request.dry_run:
+                failed = await manager.mark_run_failed(scope_uri, error)
+                error = failed.last_error
             runs.append(
                 {
                     "scope_uri": scope_uri,
                     "status": "error",
-                    "error": failed.last_error,
+                    "error": error,
                 }
             )
 
