@@ -117,8 +117,13 @@ This skill was created from a string.
             user=UserIdentifier.the_default_user(),
             role=Role.USER,
         )
+
+        async def _fake_initialize_agent_directories(_ctx):
+            return 0
+
         local_client._service = SimpleNamespace(
-            resources=SimpleNamespace(add_skill=_fake_add_skill)
+            initialize_agent_directories=_fake_initialize_agent_directories,
+            resources=SimpleNamespace(add_skill=_fake_add_skill),
         )
 
         result = await LocalClient.add_skill(
