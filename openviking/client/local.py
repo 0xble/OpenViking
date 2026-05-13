@@ -164,16 +164,25 @@ class LocalClient(BaseClient):
         execution = await run_with_telemetry(
             operation="resources.add_skill",
             telemetry=telemetry,
-            fn=lambda: self._service.resources.add_skill(
-                data=data,
-                ctx=self._ctx,
-                wait=wait,
-                timeout=timeout,
-            ),
+            fn=lambda: self._add_skill_impl(data=data, wait=wait, timeout=timeout),
         )
         return attach_telemetry_payload(
             execution.result,
             execution.telemetry,
+        )
+
+    async def _add_skill_impl(
+        self,
+        data: Any,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        await self._service.initialize_agent_directories(self._ctx)
+        return await self._service.resources.add_skill(
+            data=data,
+            ctx=self._ctx,
+            wait=wait,
+            timeout=timeout,
         )
 
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:

@@ -180,6 +180,28 @@ This skill was loaded from a directory.
         assert "uri" in result
         assert result["uri"].startswith(f"{_agent_skills_root(client)}/")
 
+    async def test_add_skill_initializes_agent_directories(self, temp_dir: Path):
+        """A fresh local client should create agent roots before writing skills."""
+        data_dir = temp_dir / "fresh_skill_data"
+        skill_content = """---
+name: fresh-agent-dir-skill
+description: Verifies agent directory initialization
+---
+
+# Fresh Agent Directory Skill
+"""
+        client = AsyncOpenViking(path=str(data_dir))
+        await client.initialize()
+        try:
+            result = await client.add_skill(data=skill_content)
+
+            assert result["uri"].startswith(f"{_agent_skills_root(client)}/")
+            abstract = await client.abstract(result["uri"])
+            assert "fresh-agent-dir-skill" in abstract
+        finally:
+            await client.close()
+            await AsyncOpenViking.reset()
+
 
 class TestSkillSearch:
     """Test skill search"""

@@ -106,44 +106,38 @@ class TestMemoryDiffArchive:
         assert diff["summary"]["total_updates"] == 0
         assert diff["summary"]["total_deletes"] == 0
 
-    @pytest.mark.skip(
-        reason="compressor_v2 _build_memory_diff classifies upsert without prior "
-        "old_content as an add rather than an update; test expected the older "
-        "behavior. Pre-existing upstream regression."
-    )
     @pytest.mark.asyncio
     async def test_build_memory_diff_update(self, compressor, mock_viking_fs, mock_ctx):
         """Test building memory_diff for modified memory files (updates)."""
-
-        # Setup: files exist
-        async def mock_read(uri, ctx=None):
-            if uri == "memory/user/test/identity.md":
-                return "# Identity\n\nOld identity content"
-            raise Exception("File not found")
-
-        mock_viking_fs.read_file.side_effect = mock_read
-
         result = MemoryUpdateResult()
-        result.written_uris = ["memory/user/test/identity.md"]
+        result.edited_uris = ["memory/user/test/identity.md"]
+
+        old_content = MemoryFileContent(
+            uri="memory/user/test/identity.md",
+            plain_content="# Identity\n\nOld identity content",
+            memory_type="identity",
+            memory_fields={"name": "test"},
+        )
+        operation = ResolvedOperation(
+            uris=["memory/user/test/identity.md"],
+            memory_type="identity",
+            memory_fields={"name": "test"},
+            new_memory_file_content=MemoryFileContent(
+                uri="memory/user/test/identity.md",
+                plain_content="# Identity\n\nNew identity content",
+                memory_type="identity",
+                memory_fields={"name": "test"},
+            ),
+            old_memory_file_content=old_content,
+        )
 
         operations = ResolvedOperations(
-            upsert_operations=[],
+            upsert_operations=[operation],
             delete_file_contents=[],
             errors=[],
         )
 
-        # First call returns old content, second returns new content
-        call_count = 0
-
-        async def mock_read_multiple(uri, ctx=None):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return "# Identity\n\nOld identity content"
-            else:
-                return "# Identity\n\nNew identity content"
-
-        mock_viking_fs.read_file.side_effect = mock_read_multiple
+        mock_viking_fs.read_file = AsyncMock(return_value="# Identity\n\nNew identity content")
 
         diff = await compressor._build_memory_diff(
             result=result,
@@ -154,6 +148,9 @@ class TestMemoryDiffArchive:
 
         assert diff["summary"]["total_adds"] == 0
         assert diff["summary"]["total_updates"] == 1
+        update = diff["operations"]["updates"][0]
+        assert "Old identity content" in update["before"]
+        assert "New identity content" in update["after"]
 
     @pytest.mark.asyncio
     async def test_build_memory_diff_delete(self, compressor, mock_viking_fs, mock_ctx):
@@ -236,35 +233,44 @@ class TestMemoryDiffArchive:
         assert "Old content" in update["before"]
         assert "New content" in update["after"]
 
-    @pytest.mark.skip(
-        reason="Same classification issue as test_build_memory_diff_update. Pre-existing "
-        "upstream regression."
-    )
     @pytest.mark.asyncio
     async def test_build_memory_diff_mixed(self, compressor, mock_viking_fs, mock_ctx):
         """Test building memory_diff with mixed operations."""
-        # Setup: one file exists (update), one doesn't (add)
-        call_count = 0
 
         async def mock_read(uri, ctx=None):
-            nonlocal call_count
-            call_count += 1
-            if "existing" in uri:
-                return "# Existing\n\nOld content"
-            elif "new" in uri:
+            if "new" in uri:
                 return "# New\n\nNew content"
+            if "identity" in uri:
+                return "# Existing\n\nUpdated content"
             raise Exception("File not found")
 
         mock_viking_fs.read_file.side_effect = mock_read
 
         result = MemoryUpdateResult()
-        result.written_uris = [
-            "memory/user/test/identity.md",  # existing -> update
-            "memory/user/test/context/new.md",  # new -> add
-        ]
+        result.written_uris = ["memory/user/test/context/new.md"]
+        result.edited_uris = ["memory/user/test/identity.md"]
+
+        old_content = MemoryFileContent(
+            uri="memory/user/test/identity.md",
+            plain_content="# Existing\n\nOld content",
+            memory_type="identity",
+            memory_fields={"name": "test"},
+        )
+        operation = ResolvedOperation(
+            uris=["memory/user/test/identity.md"],
+            memory_type="identity",
+            memory_fields={"name": "test"},
+            new_memory_file_content=MemoryFileContent(
+                uri="memory/user/test/identity.md",
+                plain_content="# Existing\n\nUpdated content",
+                memory_type="identity",
+                memory_fields={"name": "test"},
+            ),
+            old_memory_file_content=old_content,
+        )
 
         operations = ResolvedOperations(
-            upsert_operations=[],
+            upsert_operations=[operation],
             delete_file_contents=[],
             errors=[],
         )

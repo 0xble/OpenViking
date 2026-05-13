@@ -419,10 +419,6 @@ class TestCompressorV2:
 
         logger.info("Test completed successfully!")
 
-    @pytest.mark.skip(
-        reason="Lock acquire retry semantics changed after upstream merge; test predates "
-        "the new retry policy. Pre-existing upstream regression."
-    )
     @pytest.mark.asyncio
     async def test_v2_lock_acquire_respects_max_retries(self):
         """v2 memory extraction should stop after configured lock retry limit."""
@@ -433,6 +429,9 @@ class TestCompressorV2:
 
         class DummySchema:
             directory = "viking://user/{{ user_space }}/memories/events"
+
+            def filename_has_variables(self):
+                return True
 
         class DummyProvider:
             def get_memory_schemas(self, _ctx):
@@ -456,7 +455,7 @@ class TestCompressorV2:
 
         lock_manager = SimpleNamespace(
             create_handle=lambda: object(),
-            acquire_subtree_batch=AsyncMock(return_value=False),
+            acquire_mixed_batch=AsyncMock(return_value=False),
             release=AsyncMock(),
         )
 
@@ -482,4 +481,4 @@ class TestCompressorV2:
             )
 
         assert result == []
-        assert lock_manager.acquire_subtree_batch.await_count == 2
+        assert lock_manager.acquire_mixed_batch.await_count == 2
