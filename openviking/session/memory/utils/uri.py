@@ -129,8 +129,12 @@ def generate_uri(
     if not uri_template:
         raise ValueError("Memory type has neither directory nor filename_template")
 
+    # Only enforce non-None for fields actually referenced in the URI template.
+    # Other None-valued fields are tolerated (eg secondary memory fields that
+    # an LLM extraction left blank).
+    template_vars = set(re.findall(r"\{\{\s*(\w+)\s*\}\}", uri_template))
     for key, value in fields.items():
-        if value is None:
+        if value is None and key in template_vars:
             raise ValueError(f"Template variable '{key}' has None value")
 
     # Build the context for Jinja2 rendering - include user_space and agent_space
