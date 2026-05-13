@@ -482,3 +482,62 @@ class TestCompressorV2:
 
         assert result == []
         assert lock_manager.acquire_mixed_batch.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_extract_phase_lock_attempts_are_bounded(self):
+        """Archive extraction lock attempts should not wait forever inside retries."""
+        compressor = SessionCompressorV2(vikingdb=None)
+        user = UserIdentifier.the_default_user()
+        ctx = RequestContext(user=user, role=Role.ROOT)
+        messages = [Message.create_user("test")]
+        viking_fs = MockVikingFS()
+        viking_fs.agfs = object()
+
+        class DummySchema:
+            directory = "viking://user/{{ user_space }}/memories/events"
+
+        class DummyProvider:
+            _isolation_handler = None
+            _ctx = None
+            _viking_fs = None
+
+            def get_memory_schemas(self, _ctx):
+                return [DummySchema()]
+
+        class DummyExtractLoop:
+            def __init__(self, **_kwargs):
+                pass
+
+            async def run(self):
+                return None, []
+
+        lock_manager = SimpleNamespace(
+            create_handle=lambda: object(),
+            acquire_subtree_batch=AsyncMock(return_value=False),
+            release=AsyncMock(),
+        )
+
+        with (
+            patch("openviking.session.compressor_v2.get_viking_fs", return_value=viking_fs),
+            patch("openviking.storage.transaction.init_lock_manager"),
+            patch("openviking.storage.transaction.get_lock_manager", return_value=lock_manager),
+            patch("openviking.session.compressor_v2.ExtractLoop", DummyExtractLoop),
+            patch("openviking.session.compressor_v2.asyncio.sleep", new=AsyncMock()),
+        ):
+            initialize_openviking_config()
+            config = get_openviking_config()
+            config.memory.v2_lock_max_retries = 2
+            config.memory.v2_lock_retry_interval_seconds = 0.0
+
+            with pytest.raises(TimeoutError):
+                await compressor._run_extract_phase(
+                    provider=DummyProvider(),
+                    messages=messages,
+                    ctx=ctx,
+                    strict_extract_errors=True,
+                    phase_label="archive",
+                )
+
+        assert lock_manager.acquire_subtree_batch.await_count == 2
+        for call in lock_manager.acquire_subtree_batch.await_args_list:
+            assert call.kwargs["timeout"] == 1.0
