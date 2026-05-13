@@ -18,7 +18,7 @@ from openviking.maintenance import (
 )
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.session.memory_archiver import MemoryArchiver
 from openviking.session.memory_deduplicator import MemoryDeduplicator
@@ -143,6 +143,7 @@ async def run_memory_maintenance(
     runs: list[dict[str, Any]] = []
     processed_scopes: list[str] = []
     status = "completed"
+    run_ctx = _maintenance_run_context(ctx)
 
     for scope in scope_entries[:limit]:
         scope_uri = scope.scope_uri
@@ -153,7 +154,7 @@ async def run_memory_maintenance(
                 consolidator = _consolidator()
             result = await consolidator.run(
                 scope_uri,
-                ctx,
+                run_ctx,
                 dry_run=request.dry_run,
                 target_uris=target_uris,
             )
@@ -203,6 +204,15 @@ def _request_scope(scope_uri: str, ctx: RequestContext) -> MemoryMaintenanceScop
         account_id=ctx.account_id,
         user_id=ctx.user.user_id,
         agent_id=ctx.user.agent_id,
+    )
+
+
+def _maintenance_run_context(ctx: RequestContext) -> RequestContext:
+    return RequestContext(
+        user=ctx.user,
+        role=Role.ROOT,
+        namespace_policy=ctx.namespace_policy,
+        from_oauth=ctx.from_oauth,
     )
 
 

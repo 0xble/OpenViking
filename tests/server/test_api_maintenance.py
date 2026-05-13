@@ -3,9 +3,13 @@
 
 """Tests for maintenance endpoints."""
 
-from openviking.maintenance import MemoryMaintenanceManager
+from openviking.maintenance import MemoryMaintenanceManager, MemoryMaintenanceScope
 from openviking.maintenance.memory_consolidator import ConsolidationResult
 from openviking.server.identity import RequestContext, Role
+from openviking.server.routers.maintenance import (
+    MemoryMaintenanceRunRequest,
+    run_memory_maintenance,
+)
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -45,6 +49,60 @@ async def test_memory_maintenance_run_empty_dirty_scopes(client):
         "scopes": [],
         "runs": [],
     }
+
+
+async def test_memory_maintenance_run_uses_root_context_for_consolidator(monkeypatch):
+    memory_uri = "viking://user/alice/memories/preferences/editor.md"
+    scope = MemoryMaintenanceScope(
+        scope_uri="viking://user/alice/memories/preferences/",
+        account_id="acct",
+        user_id="alice",
+        agent_id="agent",
+        dirty_count=1,
+        dirty_uris=[memory_uri],
+    )
+    seen = {}
+
+    class FakeManager:
+        async def list_scopes(self, **kwargs):
+            return [scope]
+
+        async def mark_run_complete(self, scope_uri, **kwargs):
+            seen["completed"] = {"scope_uri": scope_uri, **kwargs}
+            return scope
+
+    class FakeConsolidator:
+        async def run(self, scope_uri, ctx, *, dry_run=False, target_uris=None):
+            seen["ctx"] = ctx
+            return ConsolidationResult(
+                scope_uri=scope_uri,
+                dry_run=dry_run,
+                audit_uri="viking://agent/acct/maintenance/run.json",
+            )
+
+    monkeypatch.setattr(
+        "openviking.server.routers.maintenance._manager",
+        lambda: FakeManager(),
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.maintenance._consolidator",
+        lambda: FakeConsolidator(),
+    )
+
+    ctx = RequestContext(
+        user=UserIdentifier("acct", "alice", "agent"),
+        role=Role.USER,
+    )
+
+    resp = await run_memory_maintenance(
+        MemoryMaintenanceRunRequest(dry_run=False, wait=True, limit=10),
+        ctx=ctx,
+    )
+
+    assert resp.status == "ok"
+    assert seen["ctx"].role == Role.ROOT
+    assert seen["ctx"].user is ctx.user
+    assert seen["completed"]["audit_uri"] == "viking://agent/acct/maintenance/run.json"
 
 
 async def test_memory_maintenance_scopes_filters_current_agent(client, service):
