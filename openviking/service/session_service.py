@@ -491,6 +491,7 @@ class SessionService:
         )
         self._record_lifecycle_metric("extract", "ok")
         return memories
+
     @staticmethod
     def effective_auto_commit_policy(session: Session) -> Optional[Dict[str, Any]]:
         """Return the resolved auto-commit policy (defaults filled), or None when disabled."""
@@ -571,9 +572,7 @@ class SessionService:
                     return False
                 self._auto_commit_inflight.add(claim)
         except Exception:
-            logger.debug(
-                "Skipped auto-commit scheduling for %s", session_id, exc_info=True
-            )
+            logger.debug("Skipped auto-commit scheduling for %s", session_id, exc_info=True)
             return False
 
         task = asyncio.create_task(self.run_auto_commit(session_id, ctx, reason=reason_hint))
