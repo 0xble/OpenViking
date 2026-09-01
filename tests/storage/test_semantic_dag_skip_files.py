@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-from unittest.mock import AsyncMock, MagicMock
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,36 +10,43 @@ from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking_cli.session.user_id import UserIdentifier
 
 
-def _mock_transaction_layer(monkeypatch):
-    """Patch lock layer to no-op for DAG tests."""
-    mock_handle = MagicMock()
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
-        AsyncMock(return_value=mock_handle),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: MagicMock(),
-    )
-
-
 class _FakeVikingFS:
     def __init__(self, tree):
         self._tree = tree
         self.writes = []
+        self._async_agfs = self
 
-    async def ls(self, uri, ctx=None):
+    async def ls(self, uri, node_limit=None, ctx=None):
         return self._tree.get(uri, [])
 
-    async def write_file(self, path, content, ctx=None):
+    async def write_file(self, path, content, ctx=None, lease_ref=None):
         self.writes.append((path, content))
+
+    async def pathlock_acquire_exact_batch(self, paths):
+        return {"paths": paths}
+
+    async def pathlock_release(self, lease):
+        return None
 
     def _uri_to_path(self, uri, ctx=None):
         return uri.replace("viking://", "/local/acc1/")
+
+
+class _UnlistableRootVikingFS(_FakeVikingFS):
+    def __init__(self, *, fail_sidecar_write, list_error):
+        super().__init__({})
+        self.fail_sidecar_write = fail_sidecar_write
+        self.list_error = list_error
+        self.materialized_dirs = set()
+
+    async def ls(self, uri, node_limit=None, ctx=None):
+        raise self.list_error(uri)
+
+    async def write_file(self, path, content, ctx=None, lease_ref=None):
+        self.materialized_dirs.add(path.rsplit("/", 1)[0])
+        if self.fail_sidecar_write:
+            raise OSError("sidecar write failed after creating parent")
+        await super().write_file(path, content, ctx=ctx, lease_ref=lease_ref)
 
 
 class _FakeProcessor:
@@ -51,17 +58,20 @@ class _FakeProcessor:
         self.summarized_files.append(file_path)
         return {"name": file_path.split("/")[-1], "summary": "summary"}
 
-    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts):
+    async def _generate_overview(self, dir_uri, file_summaries, children_abstracts, **kwargs):
         return "overview"
 
-    def _extract_abstract_from_overview(self, overview):
-        return "abstract"
-
-    def _enforce_size_limits(self, overview, abstract):
-        return overview, abstract
+    def _normalize_overview_generation(self, overview):
+        return overview, "abstract"
 
     async def _vectorize_directory(
-        self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
+        self,
+        uri,
+        context_type,
+        abstract,
+        overview,
+        ctx=None,
+        ingest_options=None,
     ):
         pass
 
@@ -75,22 +85,16 @@ class _FakeProcessor:
         file_path,
         summary_dict,
         ctx=None,
-        semantic_msg_id=None,
         use_summary=False,
+        ingest_options=None,
     ):
         self.vectorized_files.append(file_path)
-
-
-class _DummyTracker:
-    async def register(self, **_kwargs):
-        return None
 
 
 @pytest.mark.asyncio
 async def test_messages_jsonl_excluded_from_summary(monkeypatch):
     """messages.jsonl should be skipped by _list_dir and never summarized."""
-    _mock_transaction_layer(monkeypatch)
-    root_uri = "viking://session/test-session"
+    root_uri = "viking://user/user1/sessions/test-session"
     tree = {
         root_uri: [
             {"name": "messages.jsonl", "isDir": False},
@@ -100,13 +104,9 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
-        lambda: _DummyTracker(),
-    )
 
     processor = _FakeProcessor()
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
         processor=processor,
         context_type="session",
@@ -124,8 +124,7 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch):
 @pytest.mark.asyncio
 async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
     """messages.jsonl in a subdirectory should also be skipped."""
-    _mock_transaction_layer(monkeypatch)
-    root_uri = "viking://session/test-session"
+    root_uri = "viking://user/user1/sessions/test-session"
     tree = {
         root_uri: [
             {"name": "subdir", "isDir": True},
@@ -137,13 +136,9 @@ async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
-    monkeypatch.setattr(
-        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
-        lambda: _DummyTracker(),
-    )
 
     processor = _FakeProcessor()
-    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
     executor = SemanticDagExecutor(
         processor=processor,
         context_type="session",
@@ -155,6 +150,69 @@ async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
     summarized_names = [p.split("/")[-1] for p in processor.summarized_files]
     assert "messages.jsonl" not in summarized_names
     assert "data.csv" in summarized_names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_sidecar_write", [False, True])
+@pytest.mark.parametrize("list_error", [FileNotFoundError, NotADirectoryError])
+async def test_unlistable_semantic_root_is_not_materialized_as_directory(
+    monkeypatch, fail_sidecar_write, list_error
+):
+    root_uri = "viking://user/user1/memories/profile.md"
+    fake_fs = _UnlistableRootVikingFS(
+        fail_sidecar_write=fail_sidecar_write,
+        list_error=list_error,
+    )
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="memory",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        generation_trigger="reindex",
+        skip_vectorization=True,
+    )
+
+    await executor.run(root_uri)
+
+    assert root_uri not in fake_fs.materialized_dirs
+    assert fake_fs.writes == []
+
+
+@pytest.mark.asyncio
+async def test_empty_semantic_directory_still_receives_sidecars(monkeypatch):
+    root_uri = "viking://user/user1/memories/empty"
+    fake_fs = _FakeVikingFS({root_uri: []})
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_dag.get_openviking_config",
+        lambda: SimpleNamespace(semantic=SimpleNamespace(overview_sample_limit=32)),
+    )
+
+    processor = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="memory",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        generation_trigger="reindex",
+        skip_vectorization=True,
+    )
+
+    await executor.run(root_uri)
+
+    assert [path for path, _content in fake_fs.writes] == [
+        f"{root_uri}/.overview.md",
+        f"{root_uri}/.abstract.md",
+    ]
 
 
 if __name__ == "__main__":

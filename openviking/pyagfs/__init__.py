@@ -10,7 +10,7 @@ import sys
 import sysconfig
 from pathlib import Path
 
-from .client import AGFSClient, FileHandle
+from .async_client import AsyncAGFSClient
 from .exceptions import (
     AGFSAlreadyExistsError,
     AGFSClientError,
@@ -30,17 +30,43 @@ from .exceptions import (
     AGFSNotADirectoryError,
     AGFSNotFoundError,
     AGFSNotSupportedError,
+    AGFSPathNotFoundError,
     AGFSPermissionDeniedError,
     AGFSPluginError,
+    AGFSResourceExhaustedError,
     AGFSSerializationError,
     AGFSTimeoutError,
+    GitConcurrentCommitError,
+    GitRestoreWritebackPartialError,
 )
 from .helpers import cp, download, upload
+from .protocols import AGFSSyncClientProtocol
 
 _logger = logging.getLogger(__name__)
 
 # Directory that ships pre-built native libraries (Rust .so/.dylib).
 _LIB_DIR = Path(__file__).resolve().parent.parent / "lib"
+
+
+def _is_compatible_ragfs_extension(path: str, ext_suffix: str) -> bool:
+    """Return whether a vendored ragfs_python extension can be loaded here."""
+    name = Path(path).name
+    if not name.startswith("ragfs_python"):
+        return False
+
+    # CPython-specific extensions are only safe for the exact running
+    # interpreter ABI tag. Reject both Unix-style `.cpython-312-...` and
+    # Windows-style `.cp312-...` artifacts unless they exactly match
+    # the active EXT_SUFFIX.
+    if name.startswith("ragfs_python.cp") and not name.startswith("ragfs_python.abi3."):
+        return name == f"ragfs_python{ext_suffix}"
+
+    # Stable ABI artifacts are intentionally interpreter-independent.
+    if name.startswith("ragfs_python.abi3."):
+        return True
+
+    # Keep accepting generic platform extensions when projects ship them.
+    return name.endswith((".so", ".dylib", ".pyd"))
 
 
 def _find_ragfs_so():
@@ -61,11 +87,12 @@ def _find_ragfs_so():
         abi3_exact = _LIB_DIR / f"ragfs_python{abi3_suffix}"
         if abi3_exact.exists():
             return str(abi3_exact)
-        # Glob fallback: ragfs_python.cpython-*, ragfs_python.abi3.*, ragfs_python.*.pyd
+        # Glob fallback: keep stable/generic artifacts, but never load a
+        # CPython-version-specific binary whose tag differs from EXT_SUFFIX.
         for pattern in ("ragfs_python.cpython-*", "ragfs_python.abi3.*", "ragfs_python.*"):
-            matches = glob.glob(str(_LIB_DIR / pattern))
-            if matches:
-                return matches[0]
+            for match in sorted(glob.glob(str(_LIB_DIR / pattern))):
+                if _is_compatible_ragfs_extension(match, ext_suffix):
+                    return match
     except Exception:
         pass
     return None
@@ -74,23 +101,31 @@ def _find_ragfs_so():
 def _load_rust_binding():
     """Attempt to load the Rust (PyO3) binding client.
 
-    Searches openviking/lib/ for the pre-built native extension first,
-    then falls back to a pip-installed ``ragfs_python`` package.
+    Prefers the pip-installed ``ragfs_python`` package (e.g. from maturin develop),
+    then falls back to the vendored native extension in openviking/lib/.
     """
+    # Prefer pip-installed version (handles @rpath correctly)
+    try:
+        from ragfs_python import RAGFSBindingClient as _Rust
+
+        return _Rust, None
+    except ImportError:
+        pass
+
+    # Fallback: vendored .so in openviking/lib/
     try:
         so_path = _find_ragfs_so()
         if so_path:
             spec = importlib.util.spec_from_file_location("ragfs_python", so_path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Unable to load Rust binding spec from {so_path}")
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
             return mod.RAGFSBindingClient, None
-
-        # Fallback: maybe ragfs_python was pip-installed (dev environment)
-        from ragfs_python import RAGFSBindingClient as _Rust
-
-        return _Rust, None
     except Exception:
-        raise ImportError("Rust binding not available")
+        pass
+
+    raise ImportError("Rust binding not available")
 
 
 def get_binding_client():
@@ -105,6 +140,25 @@ def get_binding_client():
         return client, fh
     except ImportError as exc:
         raise ImportError("ragfs_python native library is not available: " + str(exc)) from exc
+
+
+def reopen_rust_tracing_file() -> None:
+    """Reopen the Rust tracing log file after Python rotates the active file."""
+    try:
+        import ragfs_python as rust_module
+    except ImportError:
+        so_path = _find_ragfs_so()
+        if not so_path:
+            return
+        spec = importlib.util.spec_from_file_location("ragfs_python", so_path)
+        if spec is None or spec.loader is None:
+            return
+        rust_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rust_module)
+
+    reopen_hook = getattr(rust_module, "reopen_tracing_file", None)
+    if callable(reopen_hook):
+        reopen_hook()
 
 
 # Module-level defaults
@@ -123,10 +177,10 @@ except Exception:
     BindingFileHandle = None
 
 __all__ = [
-    "AGFSClient",
+    "AsyncAGFSClient",
+    "AGFSSyncClientProtocol",
     "AGFSBindingClient",
     "RAGFSBindingClient",
-    "FileHandle",
     "BindingFileHandle",
     "get_binding_client",
     "AGFSClientError",
@@ -135,6 +189,7 @@ __all__ = [
     "AGFSHTTPError",
     "AGFSNotSupportedError",
     "AGFSNotFoundError",
+    "AGFSPathNotFoundError",
     "AGFSAlreadyExistsError",
     "AGFSFileExistsError",
     "AGFSPermissionDeniedError",
@@ -143,6 +198,7 @@ __all__ = [
     "AGFSIsADirectoryError",
     "AGFSDirectoryNotEmptyError",
     "AGFSInvalidOperationError",
+    "AGFSResourceExhaustedError",
     "AGFSIoError",
     "AGFSConfigError",
     "AGFSMountPointNotFoundError",
@@ -151,6 +207,8 @@ __all__ = [
     "AGFSNetworkError",
     "AGFSInternalError",
     "AGFSPluginError",
+    "GitConcurrentCommitError",
+    "GitRestoreWritebackPartialError",
     "cp",
     "upload",
     "download",

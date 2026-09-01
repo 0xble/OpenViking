@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional
 
 import requests
 
+import openviking
+from openviking.storage.errors import ConnectionError
 from openviking_cli.utils.logger import default_logger as logger
 
 # Default request timeout (seconds)
@@ -82,6 +84,7 @@ class VikingDBClient:
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
+            "User-Agent": f"openviking/{openviking.__version__}",
         }
         headers.update(self.headers)
 
@@ -95,6 +98,11 @@ class VikingDBClient:
                 timeout=DEFAULT_TIMEOUT,
             )
             return response
-        except Exception as e:
+        except requests.RequestException as e:
             logger.error(f"Request to {url} failed: {e}")
-            raise e
+            raise ConnectionError(
+                f"Request to {path} failed: {e}",
+                error_type="connection_error",
+                retryable=True,
+                action=path,
+            ) from e

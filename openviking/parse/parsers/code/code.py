@@ -17,7 +17,7 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Set, Tuple, Union
 from urllib.parse import unquote, urlparse
 
 from openviking.parse.base import (
@@ -38,6 +38,7 @@ from openviking.parse.parsers.constants import (
 )
 from openviking.parse.parsers.upload_utils import upload_directory
 from openviking.utils import is_github_url, parse_code_hosting_url
+from openviking.utils.code_hosting_utils import _domain_matches
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
@@ -50,7 +51,7 @@ class CodeRepositoryParser(BaseParser):
 
     Features:
     - Shallow clone for Git repositories
-    - Automatic filtering of non-code directories (.git, node_modules, etc.)
+    - Automatic filtering based on .gitignore and of non-code directories (.git, node_modules, etc.)
     - Direct mapping to VikingFS temp directory
     - Preserves directory structure without chunking
 
@@ -146,7 +147,7 @@ class CodeRepositoryParser(BaseParser):
             commit = source_meta.get("repo_commit")
 
             # If repo_name is still default, try to extract from original source
-            # original_source is the full GitHub/GitLab URL that the user provided
+            # original_source is the full code-hosting URL that the user provided
             # (e.g. "https://github.com/volcengine/OpenViking")
             if repo_name == "repository":
                 original_source = kwargs.get("original_source") or source_meta.get(
@@ -169,7 +170,14 @@ class CodeRepositoryParser(BaseParser):
             logger.info(f"Uploading to VikingFS: {target_root_uri}")
 
             # 4. Upload to VikingFS (filtering on the fly)
-            file_count = await self._upload_directory(local_dir, target_root_uri, viking_fs)
+            file_count = await self._upload_directory(
+                local_dir,
+                target_root_uri,
+                viking_fs,
+                ignore_dirs=kwargs.get("ignore_dirs"),
+                include=kwargs.get("include"),
+                exclude=kwargs.get("exclude"),
+            )
 
             logger.info(f"Uploaded {file_count} files to {target_root_uri}")
 
@@ -185,7 +193,7 @@ class CodeRepositoryParser(BaseParser):
             # source_path is CRITICAL:
             #   1. TreeBuilder uses source_path to parse org/repo via parse_code_hosting_url()
             #   2. If source_path is a local path (like /tmp/.../OpenViking), parsing fails
-            #   3. If source_path is the original GitHub URL (https://github.com/volcengine/OpenViking),
+            #   3. If source_path is the original code-hosting URL,
             #      TreeBuilder can correctly extract "volcengine/OpenViking"
             #
             # Priority order:
@@ -291,17 +299,14 @@ class CodeRepositoryParser(BaseParser):
                 base_parts = path_parts[: git_index + 1]
 
             config = get_openviking_config()
-            if (
-                parsed.netloc in config.code.github_domains + config.code.gitlab_domains
-                and len(path_parts) >= 2
-            ):
+            if _domain_matches(parsed, config.code.github_domains + config.code.gitlab_domains):
                 base_parts = path_parts[:2]
             base_path = "/" + "/".join(base_parts)
             return parsed._replace(path=base_path, query="", fragment="").geturl()
         return url
 
     def _get_repo_name(self, url: str) -> str:
-        """Get repository name with organization for GitHub/GitLab URLs.
+        """Get repository name with organization for configured code-hosting URLs.
 
         For https://github.com/volcengine/OpenViking, returns "volcengine/OpenViking"
         For other URLs, falls back to just the repo name.
@@ -318,7 +323,7 @@ class CodeRepositoryParser(BaseParser):
         elif ":" in url and not url.startswith("file://"):
             name_source = url.split(":", 1)[1]
 
-        # Original logic for non-GitHub/GitLab URLs
+        # Fallback for URLs outside the configured code-hosting domains
         name = name_source.rstrip("/").split("/")[-1]
         if name.endswith(".git"):
             name = name[:-4]
@@ -469,7 +474,7 @@ class CodeRepositoryParser(BaseParser):
             "clone",
             "--depth",
             "1",
-            "--recursive",
+            "--no-recurse-submodules",
         ]
         if branch and not commit:
             clone_args.extend(["--branch", branch])
@@ -574,7 +579,23 @@ class CodeRepositoryParser(BaseParser):
 
         return name
 
-    async def _upload_directory(self, local_dir: Path, viking_uri_base: str, viking_fs: Any) -> int:
+    async def _upload_directory(
+        self,
+        local_dir: Path,
+        viking_uri_base: str,
+        viking_fs: Any,
+        *,
+        ignore_dirs: Optional[Union[Set[str], List[str], str]] = None,
+        include: Optional[str] = None,
+        exclude: Optional[str] = None,
+    ) -> int:
         """Recursively upload directory to VikingFS using shared upload utilities."""
-        count, _ = await upload_directory(local_dir, viking_uri_base, viking_fs)
+        count, _ = await upload_directory(
+            local_dir,
+            viking_uri_base,
+            viking_fs,
+            ignore_dirs=ignore_dirs,
+            include=include,
+            exclude=exclude,
+        )
         return count

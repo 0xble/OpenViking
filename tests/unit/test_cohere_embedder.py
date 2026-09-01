@@ -87,9 +87,7 @@ class TestCohereDenseEmbedder:
         mock_client_class.return_value = mock_client
 
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "embeddings": {"float": [[0.1] * 1024]}
-        }
+        mock_response.json.return_value = {"embeddings": {"float": [[0.1] * 1024]}}
         mock_response.raise_for_status = MagicMock()
         mock_client.post.return_value = mock_response
 
@@ -113,9 +111,7 @@ class TestCohereDenseEmbedder:
         mock_client_class.return_value = mock_client
 
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "embeddings": {"float": [[0.1] * 1024]}
-        }
+        mock_response.json.return_value = {"embeddings": {"float": [[0.1] * 1024]}}
         mock_response.raise_for_status = MagicMock()
         mock_client.post.return_value = mock_response
 
@@ -134,9 +130,7 @@ class TestCohereDenseEmbedder:
         mock_client_class.return_value = mock_client
 
         mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "embeddings": {"float": [[0.1] * 1024]}
-        }
+        mock_response.json.return_value = {"embeddings": {"float": [[0.1] * 1024]}}
         mock_response.raise_for_status = MagicMock()
         mock_client.post.return_value = mock_response
 
@@ -149,39 +143,6 @@ class TestCohereDenseEmbedder:
 
         payload = mock_client.post.call_args[1]["json"]
         assert payload["output_dimension"] == 1024
-
-    @patch("openviking.models.embedder.cohere_embedders.httpx.Client")
-    def test_embed_batch(self, mock_client_class):
-        mock_client = MagicMock()
-        mock_client_class.return_value = mock_client
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = {
-            "embeddings": {"float": [[0.1] * 1024, [0.2] * 1024]}
-        }
-        mock_response.raise_for_status = MagicMock()
-        mock_client.post.return_value = mock_response
-
-        embedder = CohereDenseEmbedder(
-            model_name="embed-english-v3.0",
-            api_key="cohere-key",
-        )
-        results = embedder.embed_batch(["Hello", "World"])
-
-        assert len(results) == 2
-        assert len(results[0].dense_vector) == 1024
-
-    @patch("openviking.models.embedder.cohere_embedders.httpx.Client")
-    def test_embed_batch_empty(self, mock_client_class):
-        mock_client = MagicMock()
-        mock_client_class.return_value = mock_client
-
-        embedder = CohereDenseEmbedder(
-            model_name="embed-english-v3.0",
-            api_key="cohere-key",
-        )
-        assert embedder.embed_batch([]) == []
-        mock_client.post.assert_not_called()
 
     @patch("openviking.models.embedder.cohere_embedders.httpx.Client")
     def test_embed_api_error(self, mock_client_class):

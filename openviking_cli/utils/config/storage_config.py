@@ -23,6 +23,13 @@ class StorageConfig(BaseModel):
     """
 
     workspace: str = Field(default="./data", description="Local data storage path (primary)")
+    skip_process_lock: bool = Field(
+        default=False,
+        description=(
+            "Skip the startup PID lock for the workspace directory. Use only when you "
+            "explicitly accept the risk of multi-process storage contention."
+        ),
+    )
 
     agfs: AGFSConfig = Field(default_factory=AGFSConfig, description="AGFS configuration")
 
@@ -42,8 +49,49 @@ class StorageConfig(BaseModel):
 
     model_config = {"extra": "forbid"}
 
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_deprecated_task_tracker(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "task_tracker" in data:
+            data = dict(data)
+            data.pop("task_tracker", None)
+            logger.warning(
+                "StorageConfig: 'task_tracker' is deprecated and ignored. "
+                "Task records are always persisted."
+            )
+        return data
+
     @model_validator(mode="after")
     def resolve_paths(self):
+        """Normalize storage paths and map legacy transaction settings into native pathlock config."""
+        if "lock_timeout" in self.transaction.model_fields_set:
+            logger.warning(
+                "StorageConfig: 'transaction.lock_timeout' is deprecated and ignored. "
+                "The runtime wait timeout is fixed at 0.0 seconds."
+            )
+
+        if (
+            "lock_expire" in self.transaction.model_fields_set
+            and "lock_expire_secs" not in self.agfs.pathlock.model_fields_set
+        ):
+            self.agfs.pathlock.lock_expire_secs = self.transaction.lock_expire
+            logger.warning(
+                "StorageConfig: 'transaction.lock_expire' is deprecated. "
+                "Mapped to 'storage.agfs.pathlock.lock_expire_secs'."
+            )
+        elif "lock_expire" in self.transaction.model_fields_set:
+            logger.warning(
+                "StorageConfig: 'transaction.lock_expire' is deprecated and ignored because "
+                "'storage.agfs.pathlock.lock_expire_secs' is set."
+            )
+
+        if "redo_recovery_enabled" in self.transaction.model_fields_set:
+            logger.warning(
+                "StorageConfig: 'transaction.redo_recovery_enabled' is deprecated and ignored. "
+                "Session commit phase-2 recovery now resumes from the persistent "
+                "'session_commit' queue."
+            )
+
         if self.agfs.path is not None:
             logger.warning(
                 f"StorageConfig: 'agfs.path' is deprecated and will be ignored. "
@@ -75,3 +123,10 @@ class StorageConfig(BaseModel):
         upload_temp_dir = workspace_path / "temp" / "upload"
         upload_temp_dir.mkdir(parents=True, exist_ok=True)
         return upload_temp_dir
+
+    def build_task_tracker(self, agfs: Any):
+        """Build the persistent TaskTracker from storage config."""
+        from openviking.service.task_store import PersistentTaskStore
+        from openviking.service.task_tracker import TaskTracker
+
+        return TaskTracker(store=PersistentTaskStore(agfs))

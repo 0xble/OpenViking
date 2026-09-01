@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from openviking.core.namespace import owner_fields_for_uri
+from openviking.core.namespace import context_type_for_uri, owner_fields_for_uri
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.uri import VikingURI
@@ -41,12 +41,18 @@ class ContextLevel(int, Enum):
 
 class Vectorize:
     text: str = ""
-    # image: str = ""
+    # images: list of image references (data URIs or URLs) for multimodal embedding
+    images: List[str] = []
     # video: str = ""
     # audio: str = ""
 
-    def __init__(self, text: str = ""):
+    def __init__(
+        self,
+        text: str = "",
+        images: Optional[List[str]] = None,
+    ):
         self.text = text
+        self.images = list(images) if images else []
 
 
 class Context:
@@ -73,7 +79,6 @@ class Context:
         user: Optional[UserIdentifier] = None,
         account_id: Optional[str] = None,
         owner_user_id: Optional[str] = None,
-        owner_agent_id: Optional[str] = None,
         owner_space: Optional[str] = None,
         id: Optional[str] = None,
     ):
@@ -86,7 +91,7 @@ class Context:
         self.temp_uri = temp_uri
         self.is_leaf = is_leaf
         self.abstract = abstract
-        self.context_type = context_type or self._derive_context_type()
+        self.context_type = context_type or context_type_for_uri(uri)
         self.category = category or self._derive_category()
         self.created_at = created_at or datetime.now(timezone.utc)
         self.updated_at = updated_at or self.created_at
@@ -100,39 +105,13 @@ class Context:
         self.session_id = session_id
         self.user = user
         self.account_id = account_id or (user.account_id if user else "default")
-        owner_fields = owner_fields_for_uri(
-            uri,
-            user=user,
-            account_id=self.account_id,
-        )
+        owner_fields = owner_fields_for_uri(uri)
         self.owner_user_id = (
             owner_user_id if owner_user_id is not None else owner_fields["owner_user_id"]
         )
-        self.owner_agent_id = (
-            owner_agent_id if owner_agent_id is not None else owner_fields["owner_agent_id"]
-        )
-        self.owner_space = owner_space or self._derive_owner_space(user)
+        self.owner_space = owner_space or owner_fields["owner_user_id"] or ""
         self.vector: Optional[List[float]] = None
         self.vectorize = Vectorize(abstract)
-
-    def _derive_owner_space(self, user: Optional[UserIdentifier]) -> str:
-        """Best-effort owner space derived from URI and user."""
-        if not user:
-            return ""
-        if self.uri.startswith("viking://agent/"):
-            return user.agent_id
-        if self.uri.startswith("viking://user/") or self.uri.startswith("viking://session/"):
-            return user.user_id
-        return ""
-
-    def _derive_context_type(self) -> str:
-        """Derive context type from URI using substring matching."""
-        if "/skills" in self.uri:
-            return "skill"
-        elif "/memories" in self.uri:
-            return "memory"
-        else:
-            return "resource"
 
     def _derive_category(self) -> str:
         """Derive category from URI using substring matching."""
@@ -159,13 +138,11 @@ class Context:
 
     def get_vectorization_text(self) -> str:
         """Get text for vectorization."""
-        # todo: multi-modal support
         return self.vectorize.text
 
-    def update_activity(self):
-        """Update activity statistics."""
-        self.active_count += 1
-        self.updated_at = datetime.now(timezone.utc)
+    def get_vectorization_images(self) -> List[str]:
+        """Get image references (data URIs or URLs) for multimodal vectorization."""
+        return self.vectorize.images
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert context to dictionary format for storage."""
@@ -190,7 +167,6 @@ class Context:
             "session_id": self.session_id,
             "account_id": self.account_id,
             "owner_user_id": self.owner_user_id,
-            "owner_agent_id": self.owner_agent_id,
             "owner_space": self.owner_space,
         }
         if self.level is not None:
@@ -252,7 +228,6 @@ class Context:
             user=user_obj,
             account_id=data.get("account_id"),
             owner_user_id=data.get("owner_user_id"),
-            owner_agent_id=data.get("owner_agent_id"),
             owner_space=data.get("owner_space"),
         )
         obj.id = data.get("id", obj.id)

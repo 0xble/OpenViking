@@ -8,9 +8,8 @@ from typing import Any, Callable, Coroutine
 from loguru import logger
 
 from vikingbot.config.schema import SessionKey
-
-
 from vikingbot.session.manager import SessionManager
+from vikingbot.utils.session_paths import resolve_workspace_path
 
 # Default interval: 30 minutes
 DEFAULT_HEARTBEAT_INTERVAL_S = 30 * 60
@@ -91,7 +90,8 @@ class HeartbeatService:
     def __init__(
         self,
         workspace: Path,
-        on_heartbeat: Callable[[str, str | None, dict[str, Any] | None], Coroutine[Any, Any, str]] | None = None,
+        on_heartbeat: Callable[[str, str | None, dict[str, Any] | None], Coroutine[Any, Any, str]]
+        | None = None,
         interval_s: int = DEFAULT_HEARTBEAT_INTERVAL_S,
         enabled: bool = True,
         sandbox_mode: str = "shared",
@@ -108,9 +108,9 @@ class HeartbeatService:
 
     def _is_session_stale(self, session_info: dict[str, Any]) -> bool:
         """Check whether a session has been inactive for too long."""
-        reference = _parse_session_timestamp(session_info.get("updated_at")) or _parse_session_timestamp(
-            session_info.get("created_at")
-        )
+        reference = _parse_session_timestamp(
+            session_info.get("updated_at")
+        ) or _parse_session_timestamp(session_info.get("created_at"))
         if reference is None:
             return False
 
@@ -132,7 +132,11 @@ class HeartbeatService:
             if self.sandbox_mode == "shared":
                 sandbox_workspace = self.workspace / "shared"
             else:
-                sandbox_workspace = self.workspace / session_key.safe_name()
+                sandbox_workspace = resolve_workspace_path(
+                    self.workspace,
+                    session_key,
+                    self.sandbox_mode,
+                )
             workspaces.setdefault(sandbox_workspace, []).append(session_key)
         return workspaces
 
@@ -176,8 +180,6 @@ class HeartbeatService:
         active_workspaces = 0
 
         for workspace_path, session_key_list in workspaces.items():
-            logger.debug(f"Heartbeat: checking workspace {workspace_path}...")
-
             content = _read_heartbeat_file(workspace_path)
 
             # Skip if HEARTBEAT.md is empty or doesn't exist
@@ -211,9 +213,6 @@ class HeartbeatService:
 
                 except Exception as e:
                     logger.exception(f"Heartbeat execution failed for {workspace_path}: {e}")
-
-        if active_workspaces == 0:
-            logger.debug("Heartbeat: no tasks in any workspace")
 
     async def trigger_now(self, session_key: SessionKey | None = None) -> str | None:
         """Manually trigger a heartbeat."""

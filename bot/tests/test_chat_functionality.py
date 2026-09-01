@@ -10,7 +10,9 @@ from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
 from vikingbot.channels.single_turn import SingleTurnChannel, SingleTurnChannelConfig
+from vikingbot.cli.commands import _CHAT_PROMPT_MESSAGE, _CHAT_PROMPT_STYLE
 from vikingbot.config.schema import SessionKey
+from vikingbot.session.manager import Session
 
 
 @pytest.fixture
@@ -77,8 +79,53 @@ class TestSingleTurnChannel:
         assert channel._response_received.is_set()
 
 
+class TestSessionHistoryProviderSpecificFields:
+    """Tests provider-specific history reconstruction from persisted session messages."""
+
+    def test_deepseek_history_includes_reasoning_content(self):
+        session = Session(key=SessionKey(type="cli", channel_id="default", chat_id="test-session"))
+        session.add_message("user", "hello")
+        session.add_message(
+            "assistant",
+            "hi",
+            reasoning_content="internal reasoning",
+        )
+
+        history = session.get_history(provider_name="deepseek")
+
+        assert history == [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": "hi",
+                "reasoning_content": "internal reasoning",
+            },
+        ]
+
+    def test_non_deepseek_history_omits_reasoning_content(self):
+        session = Session(key=SessionKey(type="cli", channel_id="default", chat_id="test-session"))
+        session.add_message("user", "hello")
+        session.add_message(
+            "assistant",
+            "hi",
+            reasoning_content="internal reasoning",
+        )
+
+        history = session.get_history(provider_name="openai")
+
+        assert history == [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+        ]
+
+
 class TestChatChannel:
-    """Tests for ChatChannel (interactive vikingbot chat)."""
+    def test_interactive_prompt_uses_terminal_foreground_and_visible_label(self):
+        assert _CHAT_PROMPT_MESSAGE == [("class:user-label", "You: ")]
+        rules = dict(_CHAT_PROMPT_STYLE.style_rules)
+        assert rules[""] == "fg:ansidefault"
+        assert rules["user-label"] == "bold fg:ansicyan"
+        assert all("ansiblack" not in style for style in rules.values())
 
     def test_chat_channel_initialization(self, message_bus, temp_workspace):
         """Test that ChatChannel can be initialized correctly."""

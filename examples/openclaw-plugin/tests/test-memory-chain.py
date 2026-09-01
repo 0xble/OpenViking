@@ -161,7 +161,7 @@ class OpenVikingInspector:
         if self.api_key:
             h["X-API-Key"] = self.api_key
         if self.agent_id:
-            h["X-OpenViking-Agent"] = self.agent_id
+            h["X-OpenViking-Actor-Peer"] = self.agent_id
         return h
 
     def _get(self, path: str, timeout: int = 10) -> dict | None:
@@ -239,7 +239,7 @@ class OpenVikingInspector:
         return result
 
     def search_memories(
-        self, query: str, target_uri: str = "viking://user/memories", limit: int = 10
+        self, query: str, target_uri: str = "viking://~/memories", limit: int = 10
     ) -> list:
         result = self._post(
             "/api/v1/search/find",

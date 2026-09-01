@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """MiniMax Embedder Implementation via HTTP API"""
 
-import asyncio
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -11,6 +10,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -80,7 +80,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
         # Initialize session with retry logic
         self.session = self._create_session()
-        self._async_client: Optional[httpx.AsyncClient] = None
+        self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Auto-detect dimension if not provided
         if self._dimension is None:
@@ -172,11 +172,10 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         }
 
     async def _call_api_async(self, texts: List[str], is_query: bool = False) -> List[List[float]]:
-        if self._async_client is None:
-            self._async_client = httpx.AsyncClient(timeout=60.0)
+        client = self._async_client_cache.get(lambda: httpx.AsyncClient(timeout=60.0))
 
         try:
-            response = await self._async_client.post(
+            response = await client.post(
                 self.api_base,
                 headers=self._build_headers(),
                 params=self._build_params(),
@@ -232,61 +231,10 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         )
         return result
 
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
-        """Batch embedding"""
-        if not texts:
-            return []
-
-        # MiniMax might have batch size limits, but let's assume the caller handles batching or use safe defaults
-        # For now, we pass through. If needed, we can implement internal chunking.
-        vectors = self._call_api(texts, is_query=is_query)
-        results = [EmbedResult(dense_vector=v) for v in vectors]
-        # Estimate token usage for batch
-        total_tokens = sum(self._estimate_tokens(text) for text in texts)
-        self.update_token_usage(
-            model_name=self.model_name,
-            provider="minimax",
-            prompt_tokens=total_tokens,
-            completion_tokens=0,
-        )
-        return results
-
-    async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
-    ) -> List[EmbedResult]:
-        if not texts:
-            return []
-
-        async def _call() -> List[EmbedResult]:
-            vectors = await self._call_api_async(texts, is_query=is_query)
-            return [EmbedResult(dense_vector=v) for v in vectors]
-
-        results = await self._run_with_async_retry(
-            _call,
-            logger=logger,
-            operation_name="MiniMax async batch embedding",
-        )
-        total_tokens = sum(self._estimate_tokens(text) for text in texts)
-        self.update_token_usage(
-            model_name=self.model_name,
-            provider="minimax",
-            prompt_tokens=total_tokens,
-            completion_tokens=0,
-        )
-        return results
-
     def get_dimension(self) -> int:
         """Get embedding dimension"""
         return self._dimension
 
     def close(self):
         self.session.close()
-        if self._async_client is not None:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-            if loop and loop.is_running():
-                loop.create_task(self._async_client.aclose())
-            else:
-                asyncio.run(self._async_client.aclose())
+        self._async_client_cache.close_all_with_aclose()

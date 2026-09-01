@@ -13,6 +13,8 @@ The actual MetricRegistry writes are performed by HTTPCollector.
 
 from __future__ import annotations
 
+from typing import Any
+
 from .base import EventMetricDataSource
 
 
@@ -32,6 +34,12 @@ class HttpRequestLifecycleDataSource(EventMetricDataSource):
         status: str,
         duration_seconds: float,
         account_id: str | None = None,
+        request_id: str | None = None,
+        user_id: str | None = None,
+        url_path: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        error_details: dict[str, Any] | None = None,
     ) -> None:
         """
         Emit a completed-request event with normalized method, route, status, and duration data.
@@ -39,16 +47,26 @@ class HttpRequestLifecycleDataSource(EventMetricDataSource):
         The payload is plain data so middleware can attach an explicit `account_id` when the
         authenticated tenant is already known.
         """
-        EventMetricDataSource._emit(
-            "http.request",
-            {
-                "method": str(method),
-                "route": str(route),
-                "status": str(status),
-                "duration_seconds": float(duration_seconds),
-                "account_id": None if account_id is None else str(account_id),
-            },
-        )
+        payload = {
+            "method": str(method),
+            "route": str(route),
+            "status": str(status),
+            "duration_seconds": float(duration_seconds),
+            "account_id": None if account_id is None else str(account_id),
+        }
+        if request_id is not None:
+            payload["request_id"] = str(request_id)
+        if user_id is not None:
+            payload["user_id"] = str(user_id)
+        if url_path is not None:
+            payload["url_path"] = str(url_path)
+        if error_code is not None:
+            payload["error_code"] = str(error_code)
+        if error_message is not None:
+            payload["error_message"] = str(error_message)
+        if error_details is not None:
+            payload["error_details"] = dict(error_details)
+        EventMetricDataSource._emit("http.request", payload)
 
     @staticmethod
     def set_inflight(*, route: str, value: float, account_id: str | None = None) -> None:

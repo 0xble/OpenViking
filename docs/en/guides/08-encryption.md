@@ -13,12 +13,25 @@ OpenViking provides transparent at-rest data encryption to ensure data security 
 
 See [Data Encryption](../concepts/10-encryption.md) for conceptual explanations.
 
+## Encryption in Multi-Write Storage
+
+Multi-write storage reuses the same transparent encryption model. Encryption still happens inside RAGFS, so the Python SDK, HTTP API, and CLI do not need to handle encryption or decryption directly.
+
+Rules:
+
+- When global `encryption.enabled=true`, the primary backend must be encrypted.
+- Each backup backend may control its own encryption through `encryption.enabled`.
+- Multi-write internal metadata such as `.redirect.json` and `.sync_log.json` follows the primary backend's encryption policy.
+- OpenViking does not expose and does not need public encryption APIs for operating on these internal files.
+
+See the [Multi-Write Storage Guide](./13-multi-write-storage.md) for more multi-write configuration details.
+
 ## Quick Start
 
 ### 1. Initialize Root Key (Local Mode)
 
 ```bash
-ov system crypto init-key --output ~/.openviking/master.key
+ov system crypto init-key --output-file ~/.openviking/master.key
 ```
 
 ### 2. Configure Encryption
@@ -43,19 +56,25 @@ Edit `~/.openviking/ov.conf`:
 ### 3. Verify
 
 ```python
-import openviking as ov
 import asyncio
+from pathlib import Path
+from openviking_sdk import AsyncHTTPClient
 
 
 async def test():
-    client = ov.AsyncOpenViking(path="./data")
+    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
     await client.initialize()
 
-    # Add resource (automatically encrypted)
-    await client.add_resource("Hello, encrypted world!", reason="Test encryption")
+    # add_resource expects a file path or URL
+    sample = Path("./encrypted-sample.txt")
+    sample.write_text("Hello, encrypted world!", encoding="utf-8")
+    await client.add_resource(
+        path=str(sample),
+        options={"reason": "Test encryption"},
+    )
 
     # Read resource (automatically decrypted)
-    results = await client.find("encrypted")
+    results = await client.find(query="encrypted")
     print(f"Found {len(results)} results")
 
     await client.close()
@@ -65,6 +84,84 @@ asyncio.run(test())
 ```
 
 Done! Now all written data is automatically encrypted.
+
+## API Key Hashing Configuration
+
+OpenViking provides two layers of encryption protection:
+
+| Encryption Layer | Config | Algorithm | Reversible | Description |
+|------------------|--------|-----------|------------|-------------|
+| **File Layer** | `encryption.enabled` | AES-GCM | ✅ Yes | Protects entire storage files |
+| **API Key Field Layer** | `encryption.api_key_hashing.enabled` | Argon2id | ❌ No | Protects API keys themselves |
+
+### ⚠️ Breaking Change Notice
+
+**Version Change**: OpenViking v0.3.12 → later versions
+
+**Behavior Change**:
+- **Before**: `encryption.enabled = true` implicitly enabled API key Argon2id hashing
+- **Now**: You must explicitly configure `encryption.api_key_hashing.enabled`
+
+**Impact**:
+- After upgrade, if `encryption.enabled = true` but `encryption.api_key_hashing.enabled` is not explicitly set to `true`, you will see the following warning log on startup:
+  ```
+  API key hashing is disabled while file encryption is enabled.
+  Previously, encryption.enabled=true implicitly enabled API key Argon2id hashing.
+  Now, API keys will be stored in plaintext within AES-GCM encrypted files.
+  To maintain the previous behavior, set encryption.api_key_hashing.enabled=true.
+  ```
+
+**Migration Options**:
+
+| Option | Config | Behavior |
+|--------|--------|----------|
+| **Maintain Previous Behavior** | `api_key_hashing.enabled = true` | API keys stored using Argon2id hashing |
+| **Recommended New Behavior** | `api_key_hashing.enabled = false` (default) | API keys stored in plaintext (file layer still encrypted) |
+
+### Default Behavior
+
+**By default, `encryption.api_key_hashing.enabled = false`**:
+- API keys are stored in plaintext within JSON files
+- If `encryption.enabled = true`, the entire file is protected by AES-GCM encryption
+- `ov admin list-users` can display the full API key
+
+### Enabling Argon2id Hashing
+
+For maximum API key protection, you can enable Argon2id one-way hashing:
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "api_key_hashing": {
+      "enabled": true
+    }
+  }
+}
+```
+
+**Note**: When enabled:
+- API keys are stored using Argon2id one-way hashing
+- Plaintext keys cannot be recovered from hash values
+- `ov admin list-users` only shows `key_prefix` instead of the full API key
+- Plaintext keys are only visible when creating users or regenerating keys
+
+### Configuration Example
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "local",
+    "local": {
+      "key_file": "~/.openviking/master.key"
+    },
+    "api_key_hashing": {
+      "enabled": false
+    }
+  }
+}
+```
 
 ## Choosing a Key Provider
 
@@ -82,10 +179,10 @@ Done! Now all written data is automatically encrypted.
 
 ```bash
 # Generate and save to specified path
-ov system crypto init-key --output ~/.openviking/master.key
+ov system crypto init-key --output-file ~/.openviking/master.key
 
 # Or use short option
-ov system crypto init-key -o ~/.openviking/master.key
+ov system crypto init-key -f ~/.openviking/master.key
 ```
 
 **Output example**:
@@ -303,33 +400,24 @@ except Exception as e:
 
 ### Migrating from Unencrypted to Encrypted
 
-1. Back up existing data
-2. Enable encryption (see above)
-3. Re-import all resources:
+Enabling encryption does not rewrite existing plaintext files. They remain readable for backward compatibility, while new writes use encryption. To encrypt existing public scopes, migrate them through OVPack into a new, empty encrypted storage environment:
 
-```python
-import openviking as ov
-import asyncio
+1. Stop application writes and create a logical backup while the original unencrypted environment is running:
 
-
-async def migrate():
-    client = ov.AsyncOpenViking(path="./data")
-    await client.initialize()
-
-    # List all resources
-    resources = await client.list_resources()
-
-    for resource in resources:
-        # Read old resource (unencrypted)
-        content = await client.read_resource(resource["uri"])
-        # Re-write (automatically encrypted)
-        await client.add_resource(content, reason="Migrate to encrypted storage")
-
-    await client.close()
-
-
-asyncio.run(migrate())
+```bash
+ov backup ./backups/before-encryption.ovpack
 ```
+
+2. Stop OpenViking. Enable encryption and point the storage configuration at a **new, empty** workspace/backend. Keep the original data and encryption key backup until verification is complete.
+3. Start the encrypted environment and restore the logical backup. Restore writes the package content through the encrypted storage layer:
+
+```bash
+ov restore ./backups/before-encryption.ovpack --on-conflict fail
+```
+
+4. Verify resource, user, session, and index data before switching traffic. OVPack excludes runtime/internal state such as queues, uploads, locks, and watches; recreate or validate those separately.
+
+See [OVPack Import and Export](09-ovpack.md#full-backup-and-restore) for supported scopes and restore options.
 
 ### Switching Key Providers
 
@@ -398,4 +486,4 @@ If using encrypted files created with an older OpenViking version, partial reads
 
 - [Data Encryption](../concepts/10-encryption.md) - Encryption concepts
 - [Configuration Guide](./01-configuration.md) - Complete configuration reference
-- [Technical Design](../../design/multi-tenant-file-encryption-desigin.md) - Encryption technical design
+- [Multi-Tenant](../concepts/11-multi-tenant.md) - Account, user, and agent isolation model

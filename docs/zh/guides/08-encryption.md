@@ -13,12 +13,25 @@ OpenViking 提供透明的静态数据加密，确保多租户环境下的数据
 
 加密功能的概念说明见 [数据加密](../concepts/10-encryption.md)。
 
+## 多写存储中的加密
+
+多写存储复用同一套透明加密机制。加密仍在 RAGFS 内部完成，Python SDK、HTTP API 和 CLI 不需要处理加解密。
+
+规则：
+
+- 全局 `encryption.enabled=true` 时，primary backend 必须加密。
+- backup backend 可以通过自己的 `encryption.enabled` 控制是否加密。
+- `.redirect.json` 和 `.sync_log.json` 等多写内部元数据跟随 primary 加密策略。
+- OpenViking 不提供也不需要公开的加解密 API 来操作这些内部文件。
+
+更多多写配置见 [多写存储指南](./13-multi-write-storage.md)。
+
 ## 快速开始
 
 ### 1. 初始化根密钥（Local 模式）
 
 ```bash
-ov system crypto init-key --output ~/.openviking/master.key
+ov system crypto init-key --output-file ~/.openviking/master.key
 ```
 
 ### 2. 配置加密
@@ -43,19 +56,25 @@ ov system crypto init-key --output ~/.openviking/master.key
 ### 3. 验证
 
 ```python
-import openviking as ov
 import asyncio
+from pathlib import Path
+from openviking_sdk import AsyncHTTPClient
 
 
 async def test():
-    client = ov.AsyncOpenViking(path="./data")
+    client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
     await client.initialize()
 
-    # 添加资源（自动加密）
-    await client.add_resource("Hello, encrypted world!", reason="测试加密")
+    # add_resource 接收文件路径或 URL
+    sample = Path("./encrypted-sample.txt")
+    sample.write_text("Hello, encrypted world!", encoding="utf-8")
+    await client.add_resource(
+        path=str(sample),
+        options={"reason": "测试加密"},
+    )
 
     # 读取资源（自动解密）
-    results = await client.find("encrypted")
+    results = await client.find(query="encrypted")
     print(f"找到 {len(results)} 个结果")
 
     await client.close()
@@ -65,6 +84,84 @@ asyncio.run(test())
 ```
 
 完成！现在所有写入的数据都会自动加密。
+
+## API Key 哈希配置
+
+OpenViking 提供两层加密保护：
+
+| 加密层 | 配置项 | 算法 | 可逆性 | 说明 |
+|--------|--------|------|--------|------|
+| **文件层** | `encryption.enabled` | AES-GCM | ✅ 可逆 | 保护整个存储文件 |
+| **API key 字段层** | `encryption.api_key_hashing.enabled` | Argon2id | ❌ 不可逆 | 保护 API key 本身 |
+
+### ⚠️ Breaking Change 说明
+
+**版本变更**：OpenViking v0.3.12 → later versions
+
+**行为变化**：
+- **之前**：`encryption.enabled = true` 隐式启用 API key Argon2id 哈希
+- **现在**：需要显式配置 `encryption.api_key_hashing.enabled`
+
+**影响**：
+- 升级后，如果 `encryption.enabled = true` 但 `encryption.api_key_hashing.enabled` 未显式配置为 `true`，会在启动时看到以下警告日志：
+  ```
+  API key hashing is disabled while file encryption is enabled.
+  Previously, encryption.enabled=true implicitly enabled API key Argon2id hashing.
+  Now, API keys will be stored in plaintext within AES-GCM encrypted files.
+  To maintain the previous behavior, set encryption.api_key_hashing.enabled=true.
+  ```
+
+**迁移选项**：
+
+| 选项 | 配置 | 行为 |
+|------|------|------|
+| **保持原有行为** | `api_key_hashing.enabled = true` | API key 使用 Argon2id 哈希存储 |
+| **推荐新行为** | `api_key_hashing.enabled = false`（默认） | API key 明文存储（文件层仍加密） |
+
+### 默认行为
+
+**默认情况下，`encryption.api_key_hashing.enabled = false`**：
+- API key 以明文存储在 JSON 文件中
+- 如果 `encryption.enabled = true`，整个文件会被 AES-GCM 加密保护
+- `ov admin list-users` 可以显示完整的 API key
+
+### 启用 Argon2id 哈希
+
+如果需要最高级别的 API key 保护，可以启用 Argon2id 单向哈希：
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "api_key_hashing": {
+      "enabled": true
+    }
+  }
+}
+```
+
+**注意**：启用后：
+- API key 使用 Argon2id 单向哈希存储
+- 无法从哈希值还原出明文 key
+- `ov admin list-users` 只显示 `key_prefix` 而不是完整的 API key
+- 只有在创建用户或重新生成 key 时才能看到明文 key
+
+### 配置示例
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "local",
+    "local": {
+      "key_file": "~/.openviking/master.key"
+    },
+    "api_key_hashing": {
+      "enabled": false
+    }
+  }
+}
+```
 
 ## 密钥提供程序选择
 
@@ -82,10 +179,10 @@ asyncio.run(test())
 
 ```bash
 # 生成并保存到指定路径
-ov system  crypto init-key --output ~/.openviking/master.key
+ov system crypto init-key --output-file ~/.openviking/master.key
 
 # 或者使用简短命令
-ov system crypto init-key -o ~/.openviking/master.key
+ov system crypto init-key -f ~/.openviking/master.key
 ```
 
 **输出示例**：
@@ -303,33 +400,24 @@ except Exception as e:
 
 ### 从无加密迁移到有加密
 
-1. 备份现有数据
-2. 启用加密（参考上文）
-3. 重新导入所有资源：
+启用加密不会改写已有明文文件。为了向后兼容，这些文件仍可读取；新写入的数据会使用加密。如需加密已有公开 scope，应通过 OVPack 将其迁移到全新的空加密存储环境：
 
-```python
-import openviking as ov
-import asyncio
+1. 停止业务写入，在原未加密环境运行时创建逻辑备份：
 
-
-async def migrate():
-    client = ov.AsyncOpenViking(path="./data")
-    await client.initialize()
-
-    # 列出所有资源
-    resources = await client.list_resources()
-
-    for resource in resources:
-        # 读取旧资源（未加密）
-        content = await client.read_resource(resource["uri"])
-        # 重新写入（自动加密）
-        await client.add_resource(content, reason="迁移到加密存储")
-
-    await client.close()
-
-
-asyncio.run(migrate())
+```bash
+ov backup ./backups/before-encryption.ovpack
 ```
+
+2. 停止 OpenViking，启用加密，并将存储配置指向**全新的空** workspace/backend。验证完成前保留原数据和加密密钥备份。
+3. 启动加密环境后恢复逻辑备份。恢复过程会通过加密存储层写入 package 内容：
+
+```bash
+ov restore ./backups/before-encryption.ovpack --on-conflict fail
+```
+
+4. 切流前验证资源、用户、session 和索引数据。OVPack 不包含 queue、upload、lock、watch 和 relation 文件等运行时/内部状态，这些内容需要单独重建或验证。
+
+支持的 scope 和恢复选项详见 [OVPack 导入与导出](09-ovpack.md#全量备份与恢复)。
 
 ### 切换密钥提供程序
 
@@ -398,4 +486,4 @@ Error: KeyMismatchError
 
 - [数据加密](../concepts/10-encryption.md) - 加密概念说明
 - [配置指南](./01-configuration.md) - 完整配置参考
-- [技术设计](../../design/multi-tenant-file-encryption-desigin.md) - 加密技术设计文档
+- [多租户](../concepts/11-multi-tenant.md) - 账号、用户与 Agent 的隔离模型

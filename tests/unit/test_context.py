@@ -170,12 +170,12 @@ class TestContextInit:
         assert ctx.vectorize.text == "Test"
 
 
-class TestContextDeriveContextType:
-    """Test Context._derive_context_type."""
+class TestContextContextType:
+    """Test Context context_type inference."""
 
     def test_derive_skill(self):
         """Test deriving skill type from URI."""
-        ctx = Context(uri="viking://agent/test/skills/my-skill/")
+        ctx = Context(uri="viking://user/test/skills/my-skill/")
 
         assert ctx.context_type == "skill"
 
@@ -272,17 +272,6 @@ class TestContextMethods:
         ctx = Context(uri="viking://test/", abstract="Test abstract")
 
         assert ctx.get_vectorization_text() == "Test abstract"
-
-    def test_update_activity(self):
-        """Test update_activity method."""
-        ctx = Context(uri="viking://test/", active_count=5)
-        old_updated = ctx.updated_at
-
-        ctx.update_activity()
-
-        assert ctx.active_count == 6
-        assert ctx.updated_at > old_updated
-
 
 class TestContextToDict:
     """Test Context.to_dict."""
@@ -408,7 +397,6 @@ class TestContextFromDict:
             "user": {
                 "account_id": "account-123",
                 "user_id": "user-123",
-                "agent_id": "agent-456",
             },
         }
 
@@ -477,45 +465,33 @@ class TestContextWithUser:
 
     def test_user_account_id_inheritance(self):
         """Test account_id inherited from user."""
-        user = UserIdentifier(account_id="account-123", user_id="user-123", agent_id="agent-456")
+        user = UserIdentifier(account_id="account-123", user_id="user-123")
         ctx = Context(uri="viking://test/", user=user)
 
         assert ctx.account_id == user.account_id
 
-    def test_owner_fields_agent(self):
-        """Test owner fields for canonical agent URI."""
-        user = UserIdentifier(account_id="account-123", user_id="user-123", agent_id="agent-456")
-        ctx = Context(uri="viking://agent/test/skills/my-skill/", user=user)
-
-        assert ctx.owner_user_id is None
-        assert ctx.owner_agent_id == "test"
-        assert ctx.owner_space == user.agent_id
-
     def test_owner_fields_user(self):
         """Test owner fields for canonical user URI."""
-        user = UserIdentifier(account_id="account-123", user_id="user-123", agent_id="agent-456")
+        user = UserIdentifier(account_id="account-123", user_id="user-123")
         ctx = Context(uri="viking://user/test/memories/test.md", user=user)
 
         assert ctx.owner_user_id == "test"
-        assert ctx.owner_agent_id is None
-        assert ctx.owner_space == user.user_id
+        assert ctx.owner_space == "test"
 
     def test_owner_fields_session(self):
         """Test owner fields for session URI."""
-        user = UserIdentifier(account_id="account-123", user_id="user-123", agent_id="agent-456")
-        ctx = Context(uri="viking://session/test/msg/1.md", user=user)
+        user = UserIdentifier(account_id="account-123", user_id="user-123")
+        ctx = Context(uri="viking://user/user-123/sessions/test/msg/1.md", user=user)
 
-        assert ctx.owner_user_id is None
-        assert ctx.owner_agent_id is None
+        assert ctx.owner_user_id == user.user_id
         assert ctx.owner_space == user.user_id
 
     def test_owner_fields_resource_default(self):
         """Test owner fields default for resource URI."""
-        user = UserIdentifier(account_id="account-123", user_id="user-123", agent_id="agent-456")
+        user = UserIdentifier(account_id="account-123", user_id="user-123")
         ctx = Context(uri="viking://resources/docs/test.md", user=user)
 
         assert ctx.owner_user_id is None
-        assert ctx.owner_agent_id is None
         assert ctx.owner_space == ""
 
 

@@ -12,6 +12,7 @@ export const MEMORY_TRIGGERS = [
 
 const CJK_CHAR_REGEX = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
 const RELEVANT_MEMORIES_BLOCK_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
+const OPENVIKING_CONTEXT_BLOCK_RE = /<openviking-context\b[^>]*>[\s\S]*?<\/openviking-context>/gi;
 const CONVERSATION_METADATA_BLOCK_RE =
   /(?:^|\n)\s*(?:Conversation info|Conversation metadata|会话信息|对话信息)\s*(?:\([^)]+\))?\s*:\s*```[\s\S]*?```/gi;
 /** Strips "Sender (untrusted metadata): ```json ... ```" so capture sends clean text to OpenViking extract. */
@@ -19,7 +20,7 @@ const SENDER_METADATA_BLOCK_RE = /Sender\s*\([^)]*\)\s*:\s*```[\s\S]*?```/gi;
 const FENCED_JSON_BLOCK_RE = /```json\s*([\s\S]*?)```/gi;
 const METADATA_JSON_KEY_RE =
   /"(session|sessionid|sessionkey|conversationid|channel|sender|userid|agentid|timestamp|timezone)"\s*:/gi;
-const LEADING_TIMESTAMP_PREFIX_RE = /^\s*(?!\[\[)\[(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+)?(?:\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{2,4})(?:\s+\d{1,2}:\d{2}(?::\d{2})?(?:\s*[A-Z]{1,5}(?:[+-]\d{1,2})?)?)?\s*\]\s*/i;
+const LEADING_TIMESTAMP_PREFIX_RE = /^\s*(?!\[\[)\[(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\s+)?(?:\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{2,4})(?:[T\s]\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{1,2}(?::\d{2})?)?(?:\s*[A-Z]{1,5}(?:[+-]\d{1,2})?)?)?\s*\]\s*/i;
 const COMPACTED_SYSTEM_MSG_RE = /^System:\s*\[.*?\]\s*Compacted\s*(.+)$/i;
 const COMMAND_TEXT_RE = /^\/[a-z0-9_-]{1,64}\b/i;
 const NON_CONTENT_TEXT_RE = /^[\p{P}\p{S}\s]+$/u;
@@ -27,8 +28,6 @@ const SUBAGENT_CONTEXT_RE = /^\s*\[Subagent Context\]/i;
 const MEMORY_INTENT_RE = /记住|记下|remember|save|store|偏好|preference|规则|rule|事实|fact/i;
 const QUESTION_CUE_RE =
   /[?？]|\b(?:what|when|where|who|why|how|which|can|could|would|did|does|is|are)\b|^(?:请问|能否|可否|怎么|如何|什么时候|谁|什么|哪|是否)/i;
-export const CAPTURE_LIMIT = 3;
-
 function resolveCaptureMinLength(text: string): number {
   return CJK_CHAR_REGEX.test(text) ? 4 : 10;
 }
@@ -45,11 +44,11 @@ function looksLikeMetadataJsonBlock(content: string): boolean {
   return matchedKeys.size >= 3;
 }
 
-const HEARTBEAT_RE = /\bHEARTBEAT(?:\.md|_OK)\b/;
+const TOOL_PLACEHOLDER_RE = /^\s*\[tool(?::\s*|Use:\s*)[^\]]+\]\s*$/i;
 
 export function sanitizeUserTextForCapture(text: string): string {
-  // 过滤 HEARTBEAT 健康检查消息
-  if (HEARTBEAT_RE.test(text)) {
+  // Drop legacy synthetic tool placeholders before they reach memory extraction.
+  if (TOOL_PLACEHOLDER_RE.test(text)) {
     return "";
   }
   // 处理 Compactor 系统消息，提取实际用户输入
@@ -62,6 +61,7 @@ export function sanitizeUserTextForCapture(text: string): string {
     return "";
   }
   return text
+    .replace(OPENVIKING_CONTEXT_BLOCK_RE, " ")
     .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
     .replace(CONVERSATION_METADATA_BLOCK_RE, " ")
     .replace(SENDER_METADATA_BLOCK_RE, " ")
@@ -69,7 +69,16 @@ export function sanitizeUserTextForCapture(text: string): string {
       looksLikeMetadataJsonBlock(String(inner ?? "")) ? " " : full,
     )
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "")
+    .replace(SUBAGENT_CONTEXT_RE, "")
     .replace(/\u0000/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function stripOpenVikingContextInjection(text: string): string {
+  return text
+    .replace(OPENVIKING_CONTEXT_BLOCK_RE, " ")
+    .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -273,21 +282,6 @@ export function extractTextsFromUserMessages(messages: unknown[]): string[] {
   return texts;
 }
 
-function formatToolUseBlock(b: Record<string, unknown>): string {
-  const name = typeof b.name === "string" ? b.name : "unknown";
-  let inputStr = "";
-  if (b.input !== undefined && b.input !== null) {
-    try {
-      inputStr = typeof b.input === "string" ? b.input : JSON.stringify(b.input);
-    } catch {
-      inputStr = String(b.input);
-    }
-  }
-  return inputStr
-    ? `[toolUse: ${name}]\n${inputStr}`
-    : `[toolUse: ${name}]`;
-}
-
 function formatToolResultContent(content: unknown): string {
   if (typeof content === "string") return content.trim();
   if (Array.isArray(content)) {
@@ -306,39 +300,6 @@ function formatToolResultContent(content: unknown): string {
     } catch {
       return String(content);
     }
-  }
-  return "";
-}
-
-/**
- * Extract text from a single message without a `[role]:` prefix.
- * Used by afterTurn to send messages with their actual role.
- */
-export function extractSingleMessageText(msg: unknown): string {
-  if (!msg || typeof msg !== "object") return "";
-  const m = msg as Record<string, unknown>;
-  const role = m.role as string;
-  if (!role || role === "system") return "";
-
-  if (role === "toolResult") {
-    const toolName = typeof m.toolName === "string" ? m.toolName : "tool";
-    const resultText = formatToolResultContent(m.content);
-    return resultText ? `[${toolName} result]: ${resultText}` : "";
-  }
-
-  const content = m.content;
-  if (typeof content === "string") return content.trim();
-  if (Array.isArray(content)) {
-    const parts: string[] = [];
-    for (const block of content) {
-      const b = block as Record<string, unknown>;
-      if (b?.type === "text" && typeof b.text === "string") {
-        parts.push((b.text as string).trim());
-      } else if (b?.type === "toolUse") {
-        parts.push(formatToolUseBlock(b));
-      }
-    }
-    return parts.join("\n");
   }
   return "";
 }
@@ -366,7 +327,7 @@ function extractPartText(content: unknown): string {
 /**
  * 结构化消息类型 - 用于 afterTurn 发送到 OpenViking
  */
-export type ExtractedMessage = {
+type ExtractedMessage = {
   role: "user" | "assistant";
   parts: Array<{
     type: "text";
@@ -443,14 +404,14 @@ export function extractNewTurnMessages(
           : undefined);
       if (output) {
         result.push({
-          role: "user",
+          role: "assistant",
           parts: [{
             type: "tool",
             toolCallId: toolCallId || undefined,
             toolName,
             toolInput,
             toolOutput: output,
-            toolStatus: "completed",
+            toolStatus: msg.isError === true ? "error" : "completed",
           }],
         });
       }
@@ -458,7 +419,6 @@ export function extractNewTurnMessages(
     }
 
     // user/assistant -> type: "text"
-    // 统一 role 为 user
     const content = msg.content;
     const text = extractPartText(content);
 
@@ -494,4 +454,30 @@ export function extractLatestUserText(messages: unknown[] | undefined): string {
     }
   }
   return "";
+}
+
+/**
+ * Backward-compatible wrapper around extractNewTurnMessages.
+ * Returns flat text strings in the legacy `[role]: text` format.
+ * @deprecated Use extractNewTurnMessages for structured output.
+ */
+export function extractNewTurnTexts(
+  messages: unknown[],
+  startIndex: number,
+): { texts: string[]; newCount: number } {
+  const { messages: extracted, newCount } = extractNewTurnMessages(messages, startIndex);
+  const texts: string[] = [];
+  for (const msg of extracted) {
+    for (const part of msg.parts) {
+      if (part.type === "text") {
+        texts.push(`[${msg.role}]: ${part.text}`);
+      } else if (part.type === "tool") {
+        if (part.toolInput && Object.keys(part.toolInput).length > 0) {
+          texts.push(`[toolUse: ${part.toolName}] ${JSON.stringify(part.toolInput)}`);
+        }
+        texts.push(`[${part.toolName} result]: ${part.toolOutput}`);
+      }
+    }
+  }
+  return { texts, newCount };
 }

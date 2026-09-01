@@ -7,11 +7,11 @@ use crate::client::HttpClient;
 pub struct FsEntry {
     pub uri: String,
     #[serde(default)]
-    pub size: Option<u64>,
+    pub _size: Option<u64>,
     #[serde(default)]
     pub is_dir: bool,
     #[serde(default)]
-    pub mod_time: Option<String>,
+    pub _mod_time: Option<String>,
 }
 
 impl FsEntry {
@@ -69,9 +69,9 @@ impl TreeState {
             let mut root_node = TreeNode {
                 entry: FsEntry {
                     uri: "/".to_string(),
-                    size: None,
+                    _size: None,
                     is_dir: true,
-                    mod_time: None,
+                    _mod_time: None,
                 },
                 depth: 0,
                 expanded: true,
@@ -86,9 +86,9 @@ impl TreeState {
                 let mut node = TreeNode {
                     entry: FsEntry {
                         uri: scope_uri.clone(),
-                        size: None,
+                        _size: None,
                         is_dir: true,
-                        mod_time: None,
+                        _mod_time: None,
                     },
                     depth: 1,
                     expanded: false,
@@ -122,9 +122,9 @@ impl TreeState {
                     self.nodes = vec![TreeNode {
                         entry: FsEntry {
                             uri: format!("(error: {})", e),
-                            size: None,
+                            _size: None,
                             is_dir: false,
-                            mod_time: None,
+                            _mod_time: None,
                         },
                         depth: 0,
                         expanded: false,
@@ -139,7 +139,7 @@ impl TreeState {
 
     async fn fetch_children(client: &HttpClient, uri: &str) -> Result<Vec<TreeNode>, String> {
         let result = client
-            .ls(uri, false, false, "original", 256, false, 1000)
+            .ls(uri, false, false, "original", 256, false, 1000, &[])
             .await
             .map_err(|e| e.to_string())?;
 
@@ -290,7 +290,7 @@ impl TreeState {
             self.scroll_offset = self.cursor - viewport_height + 1;
         }
     }
-    
+
     /// Expand a node by its URI
     pub async fn expand_node_by_uri(&mut self, client: &HttpClient, uri: &str) {
         // Find the node in visible rows
@@ -316,8 +316,11 @@ impl TreeState {
             }
         }
     }
-    
+
     pub fn allow_deletion(&self, selected_uri: &str) -> bool {
-        selected_uri != "/" && !Self::ROOT_SCOPES.iter().any(|s| selected_uri == format!("viking://{}", s))
+        selected_uri != "/"
+            && !Self::ROOT_SCOPES
+                .iter()
+                .any(|s| selected_uri == format!("viking://{}", s))
     }
 }

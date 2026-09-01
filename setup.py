@@ -10,6 +10,7 @@ from pathlib import Path
 
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
+from setuptools.command.build_py import build_py
 
 try:
     from wheel.bdist_wheel import bdist_wheel
@@ -323,7 +324,7 @@ class OpenVikingBuildExt(build_ext):
                 if result.stderr:
                     print(result.stderr.decode("utf-8", errors="replace"))
 
-                # Extract the native .so/.pyd from the built wheel.
+                # Extract the stable-ABI native extension from the built wheel.
                 whl_files = list(Path(tmpdir).glob("ragfs_python-*.whl"))
                 if not whl_files:
                     message = "maturin produced no wheel for ragfs-python."
@@ -333,14 +334,22 @@ class OpenVikingBuildExt(build_ext):
                     return
 
                 ragfs_lib_dir.mkdir(parents=True, exist_ok=True)
+                for stale_artifact in ragfs_lib_dir.glob("ragfs_python*.so"):
+                    stale_artifact.unlink()
+                for stale_artifact in ragfs_lib_dir.glob("ragfs_python*.pyd"):
+                    stale_artifact.unlink()
+                for stale_artifact in ragfs_lib_dir.glob("ragfs_python*.dylib"):
+                    stale_artifact.unlink()
+
                 extracted = False
                 with zipfile.ZipFile(str(whl_files[0])) as zf:
                     for name in zf.namelist():
                         basename = Path(name).name
-                        # Match: ragfs_python.cpython-312-darwin.so, ragfs_python.abi3.so, ragfs_python.cp312-win_amd64.pyd, etc.
-                        if basename.startswith("ragfs_python") and (
-                            basename.endswith(".so") or basename.endswith(".pyd")
-                        ):
+                        is_ragfs_extension = basename == "ragfs_python.pyd" or (
+                            basename.startswith("ragfs_python.abi3.")
+                            and basename.endswith((".so", ".pyd"))
+                        )
+                        if is_ragfs_extension:
                             target_path = ragfs_lib_dir / basename
                             with zf.open(name) as src, open(target_path, "wb") as dst:
                                 dst.write(src.read())
@@ -351,7 +360,9 @@ class OpenVikingBuildExt(build_ext):
                             break
 
                 if not extracted:
-                    message = "Could not find ragfs_python .so/.pyd in built wheel."
+                    message = (
+                        "Could not find ragfs_python stable-ABI native extension in built wheel."
+                    )
                     if require_ragfs_artifact:
                         raise RuntimeError(message)
                     print(f"[Warning] {message}")
@@ -449,6 +460,77 @@ class OpenVikingBuildExt(build_ext):
         self.spawn([self.cmake_executable] + build_args)
 
 
+def _build_web_studio():
+    """Build the web-studio SPA and copy dist into the Python package tree.
+
+    Skipped when OV_SKIP_STUDIO_BUILD=1 or when the bundle already exists.
+    Falls back gracefully (warning, not error) when npm is unavailable.
+    """
+    if os.environ.get("OV_SKIP_STUDIO_BUILD") == "1":
+        print("  [SKIP] web-studio build disabled by OV_SKIP_STUDIO_BUILD=1")
+        return
+
+    dest = SETUP_DIR / "openviking" / "web_studio" / "dist"
+    if (dest / "index.html").is_file():
+        print("  [OK] web-studio bundle already present")
+        return
+
+    source = SETUP_DIR / "web-studio"
+    if not (source / "package.json").is_file():
+        print("  [SKIP] web-studio source not found; /studio will be unavailable")
+        return
+
+    npm = shutil.which("npm")
+    if not npm:
+        print("  [SKIP] npm not found; install Node.js to enable /studio")
+        return
+
+    print("Building web-studio (Vite SPA)...")
+    try:
+        subprocess.check_call([npm, "ci"], cwd=str(source))
+        subprocess.check_call(
+            [npm, "run", "build", "--", "--base=/studio/"],
+            cwd=str(source),
+        )
+    except subprocess.CalledProcessError as exc:
+        print(f"  [WARNING] web-studio npm build failed ({exc}); /studio will be unavailable")
+        return
+
+    built = source / "dist"
+    if not (built / "index.html").is_file():
+        print("  [WARNING] web-studio build produced no index.html; /studio will be unavailable")
+        return
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(built, dest)
+    print(f"  [OK] web-studio bundle copied to {dest}")
+
+
+class OpenVikingBuildPy(build_py):
+    def run(self):
+        _build_web_studio()
+        super().run()
+        package_root = Path(self.build_lib) / "vikingbot"
+        for asset_name in ("workspace", "bridge"):
+            source = SETUP_DIR / "bot" / asset_name
+            if not source.is_dir():
+                raise FileNotFoundError(
+                    f"required VikingBot asset directory not found: {source}"
+                )
+            destination = package_root / asset_name
+            if destination.exists():
+                shutil.rmtree(destination)
+            shutil.copytree(
+                source,
+                destination,
+                ignore=shutil.ignore_patterns(
+                    "node_modules", "dist", "__pycache__", "*.pyc"
+                ),
+            )
+
+
 if bdist_wheel is not None:
 
     class OpenVikingBdistWheel(bdist_wheel):
@@ -461,6 +543,7 @@ else:
 
 cmdclass = {
     "build_ext": OpenVikingBuildExt,
+    "build_py": OpenVikingBuildPy,
 }
 if OpenVikingBdistWheel is not None:
     cmdclass["bdist_wheel"] = OpenVikingBdistWheel
@@ -481,9 +564,14 @@ setup(
             "lib/ragfs_python*.pyd",
             "bin/ov",
             "bin/ov.exe",
-            "console/static/**/*",
+            "server/static/**/*",
+            "web_studio/dist/**/*",
             "storage/vectordb/engine/*.abi3.so",
             "storage/vectordb/engine/*.pyd",
+        ],
+        "vikingbot": [
+            "workspace/**/*",
+            "bridge/**/*",
         ],
     },
     include_package_data=True,

@@ -5,7 +5,7 @@
 - 服务健康检查与组件状态
 - 请求级 `telemetry`
 - 终端侧 `ov tui`
-- Web 侧 `OpenViking Console`
+- Web 侧 `Web Studio`（同 OV server，路径 `/studio`）
 - `/metrics` 时序指标
 
 如果你只想快速判断“该看哪里”，先看下面这张表。
@@ -15,8 +15,8 @@
 | 入口 | 适合看什么 | 典型场景 |
 | --- | --- | --- |
 | `/health`、`observer/*` | 服务是否健康、队列是否堆积、VikingDB/VLM 状态 | 部署验收、值班巡检 |
-| `ov tui` | `viking://` 文件树、目录摘要、文件正文、向量记录 | 开发调试、核对资源是否真正落库 |
-| `OpenViking Console` | Web UI 里的文件浏览、检索、资源导入、租户与系统状态 | 不想手敲命令时做交互式排查 |
+| `ov tui` | `viking://` 文件树、目录摘要、文件正文、向量记录、受支持图片文件的预览 | 开发调试、核对资源是否真正落库 |
+| `Web Studio`（`/studio`） | 同 OV server 的 Web UI：Home 看 token / 检索 / context commits 趋势，Resources 浏览 URI，Retrieval 直接发 find，Request Logs 看审计日志 | 不想手敲命令时做交互式排查 |
 | `telemetry` | 单次请求耗时、token、向量检索、资源处理阶段 | 排查一次具体调用为什么慢、为什么结果异常 |
 | `/metrics` | 请求量趋势、错误率、时延分布、队列与探针状态 | Prometheus 抓取、Grafana 看板、告警规则 |
 
@@ -36,7 +36,7 @@ curl http://localhost:1933/health
 
 ### 整体系统状态
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 status = client.get_status()
@@ -58,9 +58,12 @@ curl http://localhost:1933/api/v1/observer/system \
     "is_healthy": true,
     "errors": [],
     "components": {
-      "queue": {"name": "queue", "is_healthy": true, "has_errors": false},
-      "vikingdb": {"name": "vikingdb", "is_healthy": true, "has_errors": false},
-      "vlm": {"name": "vlm", "is_healthy": true, "has_errors": false}
+      "queue": {"name": "queue", "is_healthy": true, "has_errors": false, "status": "..."},
+      "vikingdb": {"name": "vikingdb", "is_healthy": true, "has_errors": false, "status": "..."},
+      "models": {"name": "models", "is_healthy": true, "has_errors": false, "status": "..."},
+      "lock": {"name": "lock", "is_healthy": true, "has_errors": false, "status": "..."},
+      "retrieval": {"name": "retrieval", "is_healthy": true, "has_errors": false, "status": "..."},
+      "filesystem": {"name": "filesystem", "is_healthy": true, "has_errors": false, "status": "..."}
     }
   }
 }
@@ -72,7 +75,10 @@ curl http://localhost:1933/api/v1/observer/system \
 | --- | --- | --- |
 | `GET /api/v1/observer/queue` | Queue | 处理队列状态 |
 | `GET /api/v1/observer/vikingdb` | VikingDB | 向量数据库状态 |
-| `GET /api/v1/observer/vlm` | VLM | 视觉语言模型状态 |
+| `GET /api/v1/observer/models` | Models | VLM、Embedding 和 Rerank 模型状态 |
+| `GET /api/v1/observer/lock` | Lock | 锁和事务状态 |
+| `GET /api/v1/observer/retrieval` | Retrieval | 检索质量指标 |
+| `GET /api/v1/observer/filesystem` | Filesystem | 文件系统操作指标 |
 
 例如：
 
@@ -83,7 +89,7 @@ curl http://localhost:1933/api/v1/observer/queue \
 
 ### 快速健康检查
 
-**Python SDK (Embedded / HTTP)**
+**Python HTTP SDK**
 
 ```python
 if client.is_healthy():
@@ -135,7 +141,8 @@ ov tui viking://resources
 
 这个 TUI 适合做两类观测：
 
-- 看 `viking://resources`、`viking://user`、`viking://agent`、`viking://session` 下实际落了哪些数据
+- 看 `viking://resources` 和 `viking://user` 下实际落了哪些数据
+  （session 位于 `viking://user/{user_id}/sessions`）
 - 看某个 URI 对应的向量记录是否已经写入，以及数量是否符合预期
 
 常用按键：
@@ -152,52 +159,35 @@ ov tui viking://resources
 一个常见排查流程是：
 
 1. 用 `ov tui viking://resources` 找到目标文档或目录。
-2. 确认右侧能看到 `abstract` / `overview` / 正文内容。
+2. 确认右侧能看到 `abstract` / `overview` / 正文内容（受支持的图片文件 —— `png` / `jpg` / `jpeg` / `gif` / `bmp` / `webp` / `tiff` / `tif` —— 会直接渲染预览）。
 3. 按 `v` 进入向量记录视图，确认该 URI 下是否已经有向量数据。
 4. 按 `c` 查看总量，必要时按 `n` 翻页继续核对。
 
 TUI 更偏“数据面排查”。它适合回答“资源到底有没有进去”“向量到底有没有写进去”，但不直接展示单次请求的 token 或阶段耗时。
 
-## 用 OpenViking Console 做 Web 观测
+## 用 Web Studio 做 Web 观测
 
-仓库里还有一个独立的 Web Console，它不是主 CLI 的一部分，需要单独启动：
-
-```bash
-python -m openviking.console.bootstrap \
-  --host 127.0.0.1 \
-  --port 8020 \
-  --openviking-url http://127.0.0.1:1933
-```
-
-然后打开：
+OV server 自身在 `/studio` 提供 Web Studio 前端 —— 不需要单独进程，跟着 `openviking-server` 一起起来就行。
 
 ```text
-http://127.0.0.1:8020/
+http://127.0.0.1:1933/studio
 ```
 
-第一次使用时，在 `Settings` 面板里填入 `X-API-Key`。
+第一次使用时，在右上角 Connection 对话框里填入 `X-API-Key`，base URL 默认就是当前同源（也就是 `/studio` 来自哪个域名，API 就走那个域名）。
 
-当前比较适合观测的面板有：
+当前比较适合观测的页面有：
 
-- `FileSystem`：浏览 URI、查看目录和文件
-- `Find`：直接发检索请求并查看结果
-- `Add Resource`：导入资源并查看返回结果
-- `Add Memory`：通过 session 提交一段内容，观察 memory 提交流程
-- `Tenants` / `Monitor`：查看租户、用户以及系统状态
+- `Home`（`/studio`）：今日 token 消耗、检索次数、context commits 趋势、agent 访问汇总 —— 直接读 `/api/v1/console/*` BFF
+- `Request Logs`（`/studio/request-logs`）：审计日志、按 account / user / agent / route 过滤，对应 `/api/v1/console/audit`
+- `Resources`（`/studio/resources`）：浏览 URI、查看目录和文件、上传资源
+- `Retrieval`（`/studio/retrieval`）：直接发 find / search / grep 请求并查看结果
+- `Sessions`（`/studio/sessions`）：浏览 session 历史、查看 message / memory 提交流程
 
-如果你要执行写操作，例如 `Add Resource`、`Add Memory`、租户或用户管理，需要带 `--write-enabled` 启动：
+写操作（`Add Resource`、`Add Memory`、租户/用户管理）通过当前已登录的 API key 鉴权，没有额外的 `--write-enabled` 开关需要打开。
 
-```bash
-python -m openviking.console.bootstrap \
-  --host 127.0.0.1 \
-  --port 8020 \
-  --openviking-url http://127.0.0.1:1933 \
-  --write-enabled
-```
+从观测角度看，Studio 的一个优点是直接调用 `/api/v1/console/*` BFF 的统计接口（dashboard summary、token series、context commits、audit logs），跟旧 console 复用同一套数据，只是 UI 换了。对于 `find`、`add-resource` 和 `session commit` 这类操作，结果面板可以展开看 `telemetry.summary`。
 
-从观测角度看，Console 的一个优点是结果面板会直接显示接口返回值。对于 `find`、`add-resource` 和 `session commit` 这类操作，Console 代理层会默认帮你请求 `telemetry`，所以页面结果里通常可以直接看到 `telemetry.summary`。
-
-Console 更适合“边点边看”的交互式排查；如果你要把观测数据接到自己的日志系统或自动化链路，建议直接调用 HTTP API 或 SDK，并显式请求 telemetry。
+Studio 更适合“边点边看”的交互式排查；如果你要把观测数据接到自己的日志系统或自动化链路，建议直接调用 HTTP API 或 SDK，并显式请求 telemetry。
 
 ## 请求级 Telemetry
 
@@ -231,6 +221,149 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 完整字段、支持范围和更多示例见：
 
 - [操作级 Telemetry 参考](07-operation-telemetry.md)
+
+## 产生本地 Trace 并提交排查
+
+如果一次问题无法只靠响应里的 `telemetry.summary` 判断，可以让 OpenViking 把 OpenTelemetry trace 写到本地 JSONL 文件。用户把 JSONL 文件和有问题的 `trace_id` 提交给管理员/支持人员，由管理员上传到排查环境并继续分析。这个方式适合离线客户环境、无法直连 OTLP 后端的环境，或者需要把复现过程打包给支持人员分析的场景。
+
+### 1. 开启本地 trace 文件
+
+在运行 OpenViking Server 的机器上，编辑 `~/.openviking/ov.conf`（或你启动时通过 `--config` 指定的配置文件），加入或调整：
+
+```json
+{
+  "server": {
+    "observability": {
+      "traces": {
+        "enabled": true,
+        "protocol": "local",
+        "service_name": "openviking-server",
+        "local_path": "~/.openviking/logs/traces.jsonl",
+        "local_rotation_mb": 40,
+        "local_backup_count": 2
+      }
+    }
+  }
+}
+```
+
+改完后需要**重启 OpenViking Server**。默认文件路径是：
+
+```text
+~/.openviking/logs/traces.jsonl
+```
+
+当文件达到 `local_rotation_mb` 后会轮转，例如：
+
+```text
+~/.openviking/logs/traces.jsonl.2
+~/.openviking/logs/traces.jsonl.1
+~/.openviking/logs/traces.jsonl
+```
+
+### 2. 复现问题并确认 trace 已产生
+
+启动服务后，执行能复现问题的操作，例如一次 `find`、资源导入、`session commit` 或 agent 调用。操作完成后等待几秒，或优雅停止服务以便 batch exporter 刷盘，然后检查文件：
+
+```bash
+ls -lh ~/.openviking/logs/traces.jsonl*
+tail -n 3 ~/.openviking/logs/traces.jsonl
+```
+
+如果没有文件或文件为空，优先检查：
+
+- Server 是否已重启并加载了新的 `ov.conf`
+- `server.observability.traces.enabled` 是否为 `true`
+- `server.observability.traces.protocol` 是否为 `"local"`
+- 当前进程是否有权限写入 `~/.openviking/logs`
+
+### 3. 提交 trace 文件给管理员
+
+这一步通常由**用户提交材料，管理员/支持人员上传并排查**：
+
+1. 用户不要直接上传到排查环境，只需要把本地 JSONL 文件交给管理员/支持人员。
+2. 如果已经知道有问题的 `trace_id`，请和 JSONL 一起提交。
+3. 如果不确定具体 `trace_id`，请至少提供复现时间段、操作步骤和相关请求/错误日志，方便管理员从文件中定位。
+
+建议提交当前文件和轮转文件：
+
+```text
+~/.openviking/logs/traces.jsonl
+~/.openviking/logs/traces.jsonl.1
+~/.openviking/logs/traces.jsonl.2
+```
+
+也可以先打包后再提交：
+
+```bash
+cd ~/.openviking/logs
+tar czf /tmp/openviking-traces.tgz traces.jsonl*
+```
+
+提交给管理员/支持人员的信息建议包括：
+
+- `traces.jsonl*` 文件或打包后的 `openviking-traces.tgz`
+- 有问题的 `trace_id`（如果已知）
+- 复现问题的时间段和操作步骤
+- OpenViking 版本/commit、启动命令、关键配置（去掉密钥和 token）
+- 相关错误日志或请求 id（如果有）
+
+#### 管理员上传参考
+
+管理员在有 OpenViking 源码、且能访问远端 OTLP 排查环境的机器上，从仓库根目录运行：
+
+```bash
+python tests/upload_offline_trace.py \
+  --file /path/to/traces.jsonl
+```
+
+上传脚本会读取当前环境的 `ov.conf` 作为**上传目标配置**，因此该配置里的 trace exporter 必须是远端 OTLP，例如：
+
+```json
+{
+  "server": {
+    "observability": {
+      "traces": {
+        "enabled": true,
+        "protocol": "grpc",
+        "tls": {
+          "insecure": true
+        },
+        "endpoint": "otel-collector:4317",
+        "service_name": "openviking-server",
+        "headers": {}
+      }
+    }
+  }
+}
+```
+
+如果当前 `ov.conf` 不是上传目标配置，请准备一个单独的上传配置，并通过 `--config` 指定：
+
+```bash
+python tests/upload_offline_trace.py \
+  --file /path/to/traces.jsonl \
+  --config /path/to/upload-ov.conf
+```
+
+默认会按从旧到新的顺序一并上传轮转文件（例如 `traces.jsonl.2`、`traces.jsonl.1`、`traces.jsonl`）。如果只想上传当前文件：
+
+```bash
+python tests/upload_offline_trace.py \
+  --file /path/to/traces.jsonl \
+  --no-include-rotated
+```
+
+上传成功后，脚本会打印本次上传的 trace id 列表；管理员可结合用户提交的 `trace_id` 或复现时间段继续排查：
+
+```text
+Uploaded:
+  batches: 12
+  spans: 345
+  trace_ids: 3
+    0123456789abcdef0123456789abcdef
+    ...
+```
 
 ## 用 `/metrics` 做时序观测
 
@@ -268,6 +401,82 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 }
 ```
 改完配置后需要**重启 OpenViking Server** 才会生效。
+
+### observability 配置层级
+
+OpenViking 将信号级别的可观测性配置统一放在 `server.observability` 下：
+
+- `server.observability.metrics`：metrics 子系统与 exporter 配置
+- `server.observability.traces`：trace 导出配置
+- `server.observability.logs`：log 导出配置
+- `server.observability.dump_body`：把 HTTP 请求/响应 body（按 content-type 过滤、按字节截断）作为属性挂到当前 trace span 上，便于在 trace UI 中调试。默认关闭，因为 body 可能含密钥/高基数内容
+- `server.observability.usage_audit`：按请求记录用量/成本审计日志，使用 SQLite 存储。`sqlite_path` 可覆盖数据库位置（多实例部署时设为每实例独立的本地路径）；`timezone` 控制时间戳的时区本地化。默认开启
+
+示例：
+
+```json
+{
+  "server": {
+    "observability": {
+      "metrics": {
+        "enabled": true,
+        "exporters": {
+          "prometheus": {
+            "enabled": true
+          },
+          "otel": {
+            "enabled": true,
+            "protocol": "grpc",
+            "tls": {
+              "insecure": true
+            },
+            "endpoint": "otel-collector:4317",
+            "service_name": "openviking-server",
+            "export_interval_ms": 10000,
+            "headers": {}
+          }
+        }
+      },
+      "traces": {
+        "enabled": true,
+        "protocol": "grpc",
+        "tls": {
+          "insecure": true
+        },
+        "endpoint": "otel-collector:4317",
+        "service_name": "openviking-server",
+        "headers": {}
+      },
+      "logs": {
+        "enabled": true,
+        "protocol": "grpc",
+        "tls": {
+          "insecure": true
+        },
+        "endpoint": "otel-collector:4317",
+        "service_name": "openviking-server",
+        "headers": {}
+      },
+      "dump_body": {
+        "enabled": false,
+        "max_bytes": 4096
+      },
+      "usage_audit": {
+        "enabled": true,
+        "sqlite_path": null,
+        "timezone": "local"
+      }
+    }
+  }
+}
+```
+
+说明：
+
+- `headers` 用于给 OTLP exporter 透传自定义请求头或 gRPC metadata。
+- 常见场景包括直连需要额外鉴权头的 OTLP 后端；请只配置 header key/value，不要把敏感值写入日志或截图中。
+- 对 `traces`、`logs` 和 `metrics.exporters.otel` 三条链路，`headers` 的配置方式保持一致。
+- 当 `protocol="grpc"` 时，`headers` 会作为 gRPC metadata 发送，key 需要使用小写形式，例如 `x-byteapm-appkey`；该限制不适用于 `protocol="http"`。
 
 完整字段、支持范围和更多示例见：
 
@@ -313,8 +522,8 @@ scrape_configs:
 
 OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 
-- [openviking_demo_dashboard.json](../../../examples/grafana/openviking_demo_dashboard.json)
-- [openviking_token_demo_dashboard.json](../../../examples/grafana/openviking_token_demo_dashboard.json) （注意，该 dashboard 依赖 `tim012432-calendarheatmap-panel` grafana 插件，需要先安装才能正常工作）
+- [openviking_demo_dashboard.json](https://github.com/volcengine/OpenViking/blob/main/examples/grafana/openviking_demo_dashboard.json)
+- [openviking_token_demo_dashboard.json](https://github.com/volcengine/OpenViking/blob/main/examples/grafana/openviking_token_demo_dashboard.json) （注意，该 dashboard 依赖 `tim012432-calendarheatmap-panel` grafana 插件，需要先安装才能正常工作）
 
 导入步骤可以按下面做：
 
@@ -365,9 +574,10 @@ OpenViking 仓库里已经提供了可直接导入的 dashboard JSON：
 
 ## 相关文档
 
+- [使用 Prometheus 和 Grafana 查看 OpenViking 指标](11-grafana-prometheus.md) - 从 `/metrics` 到 Prometheus、Grafana dashboard 的完整操作流程
+- [使用真实问答验证 Vikingbot 指标](12-vikingbot-metrics-validation.md) - 用 `/bot/v1/chat`、`/bot/v1/feedback` 和真实 follow-up 场景校验反馈与 outcome 指标
 - [部署](03-deployment.md) - 服务器设置
 - [认证](04-authentication.md) - API Key 设置
 - [操作级 Telemetry 参考](07-operation-telemetry.md) - 请求级结构化追踪
 - [系统 API](../api/07-system.md) - 系统与 observer 接口参考
 - [指标](../concepts/12-metrics.md) - 时序指标与配置
-

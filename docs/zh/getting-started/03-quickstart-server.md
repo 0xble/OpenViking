@@ -7,6 +7,10 @@
 - 已安装 OpenViking（`pip install openviking --upgrade --force-reinstall`）
 - 模型配置已就绪（参见 [快速开始](02-quickstart.md) 了解配置方法）
 
+> Python 3.14 说明（适用于火山方舟 / Volcengine Ark）：
+> 如果你的 `ov.conf` 中使用了 `provider = "volcengine"` / Ark runtime，当前建议优先使用 Python 3.13 及以下版本运行 `openviking-server`。
+> 这是因为 `volcengine-python-sdk[ark]` 仍会在 Python 3.14 下输出 Pydantic V1 兼容性警告，服务通常仍可运行，但启动命令和 `--version` 等输出会带有噪声，直到上游 SDK 去掉这层兼容逻辑。
+
 ## 启动服务
 
 确保 `ov.conf` 已配置好存储路径和模型信息（参见 [快速开始](02-quickstart.md)），然后启动服务：
@@ -47,6 +51,8 @@ curl http://localhost:1933/health
 
 `openviking-server doctor` 用于校验本地配置、模型访问和鉴权状态；`curl /health` 只表示服务进程已经启动。
 
+Web Studio 也会在 `http://localhost:1933/studio` 提供（自 v0.3.21 起 pip/pipx 安装即自带，无需 Docker）。
+
 ## 使用 Python SDK 连接
 
 ```python
@@ -59,9 +65,9 @@ client = ov.SyncHTTPClient(url="http://localhost:1933")
 
 服务端启用认证后，需要传入 `api_key`。OpenViking 使用两层 API Key 体系，请根据场景选择：
 
-**常规数据访问：使用 `user_key`（推荐）**
+**常规数据访问：使用 `user_key` 或 `admin_key`**
 
-大多数场景应使用 `user_key`，可直接调用 `add_resource`、`find`、`ls` 等租户级 API：
+大多数场景应使用 `user_key`，也可以使用绑定到管理员用户的 `admin_key`。两者都可直接调用 `add_resource`、`find`、`ls` 等租户级 API：
 
 ```python
 import openviking as ov
@@ -69,15 +75,14 @@ import openviking as ov
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<user-key>",
-    agent_id="my-agent",      # 可选
 )
 ```
 
-> `user_key` 通过 Admin API 创建（参见 [认证文档](../../guides/04-authentication.md)），服务端可自动识别其所属租户。
+> `user_key` / `admin_key` 通过 Admin API 创建（参见 [认证文档](../guides/04-authentication.md)），服务端可自动识别其所属租户和用户。
 
 **管理操作：使用 `root_key`**
 
-`root_key` 适用于管理操作（创建账户、系统状态等）。如需用 `root_key` 访问租户级 API，**必须**同时传入 `account` 和 `user`，否则服务端会拒绝请求：
+`root_key` 只适用于管理操作（创建账户、系统状态等）和少量 system/monitoring API。常规数据访问不要使用 `root_key`，也不要通过 `account` / `user` header 模拟某个用户；数据面应使用对应的 `user_key` 或 `admin_key`。
 
 ```python
 import openviking as ov
@@ -85,15 +90,12 @@ import openviking as ov
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<root-key>",
-    account="acme",           # 必须：目标租户
-    user="alice",             # 必须：目标用户
 )
 ```
 
-> ⚠️ 使用 `root_key` 调用 `add_resource`、`find` 等租户级 API 时，如果未提供 `account`/`user`，会收到：
-> `ROOT requests to tenant-scoped APIs must include X-OpenViking-Account and X-OpenViking-User headers`
+> 如果确实需要由上游网关注入 `account` / `user` 身份，应使用 `trusted` 模式；在默认 `api_key` 模式下，只有绑定了用户身份的 user/admin key 能访问自己的数据空间。
 
-更多认证细节（trusted 模式、CLI 配置等）请参见 [认证文档](../../guides/04-authentication.md)。
+更多认证细节（trusted 模式、CLI 配置等）请参见 [认证文档](../guides/04-authentication.md)。
 
 **完整示例（使用 `user_key`）：**
 
@@ -107,7 +109,7 @@ try:
 
     # Add a resource
     result = client.add_resource(
-        "https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
+        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
     )
     root_uri = result["root_uri"]
 
@@ -115,9 +117,12 @@ try:
     client.wait_processed()
 
     # Search
-    results = client.find("what is openviking", target_uri=root_uri)
-    for r in results.resources:
-        print(f"  {r.uri} (score: {r.score:.4f})")
+    results = client.find(
+        query="what is openviking",
+        target_uri=root_uri,
+    )
+    for result in results.get("resources", []):
+        print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")
 
 finally:
     client.close()
@@ -290,7 +295,7 @@ vim ~/.openviking/ov.conf
     "api_key"    : "<your-api-key>",     // Model service API Key
     "provider"   : "<provider-type>",    // Provider type (volcengine or openai)
     "max_retries": 2,
-    "model"      : "<model-name>"        // VLM model name (e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview)
+    "model"      : "<model-name>"        // VLM model name (e.g., doubao-seed-2-0-lite-260428 or gpt-4-vision-preview)
   }
 }
 ```

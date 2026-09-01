@@ -137,7 +137,7 @@ Notes:
 
 ## Key Metric Families
 
-The metric summaries below are based on representative metrics currently exposed in `.vscode/.workdir/metric/METRIC_res.md`.
+The metric summaries below are based on representative metrics currently exposed by the collectors in `openviking/metrics/collectors/`.
 
 ### Requests and Operations
 
@@ -186,7 +186,7 @@ Typical `stage` values include:
 | `openviking_vector_passed_total` | Counter | `operation` | total passed candidates |
 | `openviking_vector_returned_total` | Counter | `operation` | total returned candidates |
 | `openviking_vector_scanned_total` | Counter | `operation` | total scanned candidates |
-| `openviking_memory_extracted_total` | Counter | `operation` | total extracted memory items |
+| `openviking_memory_extracted_total` | Counter | `operation`, `memory_type` | total extracted memory items, split by memory schema type |
 | `openviking_semantic_nodes_total` | Counter | `status` | total semantic nodes |
 
 ### Model Calls and Tokens
@@ -261,6 +261,81 @@ These help answer:
 | `openviking_session_contexts_used_total` | Counter | `account_id, action` | session contexts used total |
 | `openviking_session_archive_total` | Counter | `account_id, status` | session archive count |
 
+### Feedback
+
+These metrics summarize persisted VikingBot feedback and outcome data at scrape time. They are exported as gauges because the collector recomputes the current aggregate snapshot from bot session files instead of incrementing counters online.
+
+| Metric Family | Type | Common Labels | Meaning |
+|---------------|------|---------------|---------|
+| `openviking_feedback_sessions_scanned_total` | Gauge | `valid` | number of bot sessions scanned for the current snapshot |
+| `openviking_feedback_responses_total` | Gauge | `valid` | total persisted assistant responses included in the snapshot, including legacy responses outside the new observability contract |
+| `openviking_feedback_tracked_responses_total` | Gauge | `valid` | responses covered by the current feedback observability contract (`metadata.feedback_events` or `metadata.response_outcomes`) |
+| `openviking_feedback_responses_with_feedback_total` | Gauge | `valid` | responses that have at least one explicit feedback event |
+| `openviking_feedback_events_total` | Gauge | `valid` | explicit feedback event count |
+| `openviking_feedback_thumb_up_total` | Gauge | `valid` | thumb-up event count |
+| `openviking_feedback_thumb_down_total` | Gauge | `valid` | thumb-down event count |
+| `openviking_feedback_positive_outcomes_total` | Gauge | `valid` | responses classified as positive feedback outcomes |
+| `openviking_feedback_negative_outcomes_total` | Gauge | `valid` | responses classified as negative feedback outcomes |
+| `openviking_feedback_reasked_outcomes_total` | Gauge | `valid` | responses classified as reasked outcomes |
+| `openviking_feedback_resolved_outcomes_total` | Gauge | `valid` | responses classified as resolved outcomes |
+| `openviking_feedback_follow_up_without_feedback_outcomes_total` | Gauge | `valid` | responses followed up without explicit feedback |
+| `openviking_feedback_coverage` | Gauge | `valid` | fraction of tracked responses with explicit feedback |
+| `openviking_feedback_thumbs_up_rate` | Gauge | `valid` | fraction of feedback events that are thumbs up |
+| `openviking_feedback_thumbs_down_rate` | Gauge | `valid` | fraction of feedback events that are thumbs down |
+| `openviking_feedback_positive_feedback_rate` | Gauge | `valid` | fraction of tracked responses with positive feedback outcomes |
+| `openviking_feedback_negative_feedback_rate` | Gauge | `valid` | fraction of tracked responses with negative feedback outcomes |
+| `openviking_feedback_reask_rate` | Gauge | `valid` | fraction of tracked responses that led to reasking |
+| `openviking_feedback_one_turn_resolution_rate` | Gauge | `valid` | fraction of tracked responses resolved in one turn |
+| `openviking_feedback_channel_*` | Gauge | `channel, valid` | per-channel variants of response volume, feedback volume, negative outcomes, reasks, coverage, thumb rates, and one-turn resolution |
+
+For mixed historical data, use `openviking_feedback_tracked_responses_total` as the denominator reference for rate panels. `openviking_feedback_responses_total` is kept to show overall persisted assistant-response volume, including legacy responses that predate the current feedback metadata contract.
+
+Typical usage:
+
+- build Grafana panels for feedback coverage, thumbs-down rate, and one-turn resolution rate over time
+- compare feedback quality across channels such as `cli__default` and `bot_api__demo`
+- alert when `valid="0"` appears persistently, which indicates the collector is serving the last successful snapshot after a refresh failure
+
+PromQL / Grafana examples:
+
+- overall feedback coverage:
+
+```promql
+openviking_feedback_coverage{valid="1"}
+```
+
+- overall thumbs-down rate:
+
+```promql
+openviking_feedback_thumbs_down_rate{valid="1"}
+```
+
+- one-turn resolution rate:
+
+```promql
+openviking_feedback_one_turn_resolution_rate{valid="1"}
+```
+
+- per-channel coverage and resolution comparison:
+
+```promql
+openviking_feedback_channel_coverage{valid="1"}
+```
+
+```promql
+openviking_feedback_channel_one_turn_resolution_rate{valid="1"}
+```
+
+- detect fallback snapshots:
+
+```promql
+max by (job) (openviking_feedback_events_total{valid="0"})
+```
+
+Because these are scrape-time snapshot gauges, they work well in Grafana time-series panels and side-by-side channel comparison panels.
+
+For `/metrics` endpoint behavior and scrape usage, see [Metrics API](../api/09-metrics.md).
+
 ### Probes and Health State
 
 | Metric Family | Type | Common Labels | Meaning |
@@ -313,6 +388,7 @@ Typical `component` values include:
 - `lock`
 - `retrieval`
 - `vikingdb`
+- `filesystem`
 
 ### VikingDB and Model Usage Statistics
 
@@ -365,6 +441,53 @@ Recommended mental model:
 - `server.observability.metrics.enabled`: master switch for the metrics subsystem
 - `server.observability.metrics.account_dimension`: controls whether `account_id` labels are enabled and where they are allowed
 
+### Exporters
+
+By default, OpenViking exports metrics via Prometheus exposition format at `/metrics`.
+You can also enable additional exporters under `server.observability.metrics.exporters`.
+
+Key fields:
+
+- `server.observability.metrics.exporters.prometheus.enabled`: enable the Prometheus exporter (serves `/metrics`)
+- `server.observability.metrics.exporters.otel.enabled`: enable OTLP export from the same in-process registry
+- `server.observability.metrics.exporters.otel.protocol`: `"grpc"` or `"http"`
+- `server.observability.metrics.exporters.otel.tls.insecure`: OTLP/gRPC only; `true` means plaintext (no TLS)
+- `server.observability.metrics.exporters.otel.endpoint`: OTLP endpoint (for gRPC, use `host:4317`; for HTTP, use a full URL)
+- `server.observability.metrics.exporters.otel.service_name`: OTLP `service.name` resource attribute (default `"openviking-server"`)
+- `server.observability.metrics.exporters.otel.export_interval_ms`: OTLP push interval in milliseconds (default `10000`)
+- `server.observability.metrics.exporters.otel.headers`: optional custom OTLP headers; sent as gRPC metadata for gRPC and HTTP headers for HTTP
+- When using gRPC, header keys in `headers` should be lowercase, for example `x-byteapm-appkey`; HTTP does not have this restriction
+
+Example:
+
+```json
+{
+  "server": {
+    "observability": {
+      "metrics": {
+        "enabled": true,
+        "exporters": {
+          "prometheus": {
+            "enabled": true
+          },
+          "otel": {
+            "enabled": true,
+            "protocol": "grpc",
+            "tls": {
+              "insecure": true
+            },
+            "endpoint": "otel-collector:4317",
+            "service_name": "openviking-server",
+            "export_interval_ms": 10000,
+            "headers": {}
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ### Recommended `account_id` Usage
 
 - enabled by default, but only allowlisted metric families will receive tenant ids (empty allowlist still yields `__unknown__`)
@@ -376,7 +499,8 @@ Recommended mental model:
 ## Related Documentation
 
 - [Architecture Overview](./01-architecture.md) - overall OpenViking architecture
-- [Multi-Tenant](./11-multi-tenant.md) - `account/user/agent` isolation model
+- [Multi-Tenant](./11-multi-tenant.md) - `account/user/peer` isolation model
 - [Data Encryption](./10-encryption.md) - storage-layer encryption and isolation
 - [Metrics API](../api/09-metrics.md) - `/metrics` endpoint usage
+- [VikingBot Feedback Observability Design](https://github.com/volcengine/OpenViking/blob/main/bot/docs/zh/design/vikingbot-feedback-observability-design.md) - feedback observability design background and rollout plan (Chinese)
 - [Metrics Design](../../design/metric-design.md) - metrics system design details

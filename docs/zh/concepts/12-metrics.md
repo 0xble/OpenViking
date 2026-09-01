@@ -137,7 +137,7 @@ scrape_configs:
 
 ## 关键指标说明
 
-下面的指标说明基于当前实际暴露的代表性指标输出（整理自 `.vscode/.workdir/metric/METRIC_res.md`）。
+下面的指标说明基于当前实际暴露的代表性指标输出（整理自 `openviking/metrics/collectors/`）。
 
 ### 请求与操作
 
@@ -186,7 +186,7 @@ scrape_configs:
 | `openviking_vector_passed_total` | Counter | `operation` | 向量候选通过数量累计 |
 | `openviking_vector_returned_total` | Counter | `operation` | 向量候选返回数量累计 |
 | `openviking_vector_scanned_total` | Counter | `operation` | 向量候选扫描数量累计 |
-| `openviking_memory_extracted_total` | Counter | `operation` | memory extracted 数量累计 |
+| `openviking_memory_extracted_total` | Counter | `operation`, `memory_type` | memory extracted 数量累计，按记忆 schema 类型拆分 |
 | `openviking_semantic_nodes_total` | Counter | `status` | semantic nodes 数量累计 |
 
 ### 模型调用与 Token
@@ -264,6 +264,81 @@ scrape_configs:
 | `openviking_session_contexts_used_total` | Counter | `account_id, action` | session contexts used 累计量 |
 | `openviking_session_archive_total` | Counter | `account_id, status` | session archive 次数 |
 
+### Feedback
+
+这组 feedback 指标会在 scrape 时对持久化的 VikingBot session 文件进行聚合，汇总反馈事件与 outcome 数据。它们以 gauge 形式导出，因为 collector 每次都会重新计算当前聚合快照，而不是在线持续累加 counter。
+
+| 指标族 | 类型 | 常见标签 | 含义 |
+|--------|------|----------|------|
+| `openviking_feedback_sessions_scanned_total` | Gauge | `valid` | 当前快照扫描到的 bot session 数量 |
+| `openviking_feedback_responses_total` | Gauge | `valid` | 当前快照纳入统计的 assistant response 总数，包含尚未接入新观测契约的历史 response |
+| `openviking_feedback_tracked_responses_total` | Gauge | `valid` | 已被当前 feedback 观测契约覆盖的 response 总数（来自 `metadata.feedback_events` 或 `metadata.response_outcomes`） |
+| `openviking_feedback_responses_with_feedback_total` | Gauge | `valid` | 至少带有一个显式反馈事件的 response 数量 |
+| `openviking_feedback_events_total` | Gauge | `valid` | 显式反馈事件总数 |
+| `openviking_feedback_thumb_up_total` | Gauge | `valid` | thumb-up 事件数 |
+| `openviking_feedback_thumb_down_total` | Gauge | `valid` | thumb-down 事件数 |
+| `openviking_feedback_positive_outcomes_total` | Gauge | `valid` | 被归类为 positive outcome 的 response 数量 |
+| `openviking_feedback_negative_outcomes_total` | Gauge | `valid` | 被归类为 negative outcome 的 response 数量 |
+| `openviking_feedback_reasked_outcomes_total` | Gauge | `valid` | 被归类为 reask outcome 的 response 数量 |
+| `openviking_feedback_resolved_outcomes_total` | Gauge | `valid` | 被归类为 resolved outcome 的 response 数量 |
+| `openviking_feedback_follow_up_without_feedback_outcomes_total` | Gauge | `valid` | 有 follow-up 但没有显式反馈的 outcome 数量 |
+| `openviking_feedback_coverage` | Gauge | `valid` | 已跟踪 response 中带显式反馈的占比 |
+| `openviking_feedback_thumbs_up_rate` | Gauge | `valid` | feedback event 中 thumb-up 的占比 |
+| `openviking_feedback_thumbs_down_rate` | Gauge | `valid` | feedback event 中 thumb-down 的占比 |
+| `openviking_feedback_positive_feedback_rate` | Gauge | `valid` | 已跟踪 response 中 positive feedback outcome 的占比 |
+| `openviking_feedback_negative_feedback_rate` | Gauge | `valid` | 已跟踪 response 中 negative feedback outcome 的占比 |
+| `openviking_feedback_reask_rate` | Gauge | `valid` | 已跟踪 response 中导致 reask 的占比 |
+| `openviking_feedback_one_turn_resolution_rate` | Gauge | `valid` | 已跟踪 response 中一轮解决的占比 |
+| `openviking_feedback_channel_*` | Gauge | `channel, valid` | 按 channel 细分的 response 数量、feedback 数量、negative outcome、reask、coverage、thumb rate 与 one-turn resolution |
+
+对于新旧历史数据混合的场景，rate 类图表应优先结合 `openviking_feedback_tracked_responses_total` 理解分母。`openviking_feedback_responses_total` 仍然保留，用于观察包含历史遗留 response 在内的整体 assistant 响应体量。
+
+适用场景：
+
+- 在 Grafana 中绘制 feedback coverage、thumbs-down rate、one-turn resolution rate 的时间趋势
+- 对比不同 channel（如 `cli__default`、`bot_api__demo`）之间的反馈质量差异
+- 当 `valid="0"` 持续出现时告警，表示 collector 在刷新失败后回退到了上一次成功快照
+
+PromQL / Grafana 示例：
+
+- 总体 feedback coverage：
+
+```promql
+openviking_feedback_coverage{valid="1"}
+```
+
+- 总体 thumbs-down rate：
+
+```promql
+openviking_feedback_thumbs_down_rate{valid="1"}
+```
+
+- 总体 one-turn resolution rate：
+
+```promql
+openviking_feedback_one_turn_resolution_rate{valid="1"}
+```
+
+- 按 channel 对比 coverage 与 resolution：
+
+```promql
+openviking_feedback_channel_coverage{valid="1"}
+```
+
+```promql
+openviking_feedback_channel_one_turn_resolution_rate{valid="1"}
+```
+
+- 检查 stale / fallback snapshot：
+
+```promql
+max by (job) (openviking_feedback_events_total{valid="0"})
+```
+
+因为这些指标本质上是 scrape-time snapshot gauge，所以很适合直接做 Grafana 时间序列面板，以及按 channel 并排对比的可视化。
+
+关于 `/metrics` 端点行为与抓取方式，可参见 [Metrics API](../api/09-metrics.md)。
+
 ### 探针与健康状态
 
 | 指标族 | 类型 | 常见标签 | 含义 |
@@ -316,6 +391,7 @@ scrape_configs:
 - `lock`
 - `retrieval`
 - `vikingdb`
+- `filesystem`
 
 ### VikingDB 与模型使用统计
 
@@ -368,6 +444,53 @@ scrape_configs:
 - `server.observability.metrics.enabled`：指标体系总开关
 - `server.observability.metrics.account_dimension`：控制 `account_id` 标签是否启用以及启用范围
 
+### Exporters 配置
+
+默认情况下，OpenViking 会通过 Prometheus exposition 格式在 `/metrics` 输出指标。
+如果希望在保留 `/metrics` 的同时把同一份进程内指标导出到 OTLP 后端，可以在 `server.observability.metrics.exporters` 下启用 exporter。
+
+关键字段：
+
+- `server.observability.metrics.exporters.prometheus.enabled`：是否启用 Prometheus exporter（提供 `/metrics`）
+- `server.observability.metrics.exporters.otel.enabled`：是否启用 OTLP 导出（复用同一份 registry）
+- `server.observability.metrics.exporters.otel.protocol`：`"grpc"` 或 `"http"`
+- `server.observability.metrics.exporters.otel.tls.insecure`：仅对 OTLP/gRPC 生效；`true` 表示明文连接（无 TLS）
+- `server.observability.metrics.exporters.otel.endpoint`：OTLP 端点（gRPC 用 `host:4317`；HTTP 必须是完整 URL）
+- `server.observability.metrics.exporters.otel.service_name`：OTLP `service.name` 资源属性（默认 `"openviking-server"`）
+- `server.observability.metrics.exporters.otel.export_interval_ms`：OTLP 推送间隔，单位毫秒（默认 `10000`）
+- `server.observability.metrics.exporters.otel.headers`：可选的自定义 OTLP 请求头；gRPC 会作为 metadata 发送，HTTP 会作为 headers 发送
+- 使用 gRPC 时，`headers` 中的 key 需要使用小写形式，例如 `x-byteapm-appkey`；HTTP 不受该限制
+
+示例：
+
+```json
+{
+  "server": {
+    "observability": {
+      "metrics": {
+        "enabled": true,
+        "exporters": {
+          "prometheus": {
+            "enabled": true
+          },
+          "otel": {
+            "enabled": true,
+            "protocol": "grpc",
+            "tls": {
+              "insecure": true
+            },
+            "endpoint": "otel-collector:4317",
+            "service_name": "openviking-server",
+            "export_interval_ms": 10000,
+            "headers": {}
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ### `account_id` 标签的使用建议
 
 - 默认开启，但仅对白名单指标启用（`metric_allowlist` 为空时仍会输出为 `__unknown__`）
@@ -380,7 +503,8 @@ scrape_configs:
 ## 相关文档
 
 - [架构概述](./01-architecture.md) - OpenViking 总体架构
-- [多租户](./11-multi-tenant.md) - `account/user/agent` 隔离模型
+- [多租户](./11-multi-tenant.md) - `account/user/peer` 隔离模型
 - [数据加密](./10-encryption.md) - 存储层加密与隔离
 - [Metrics API](../api/09-metrics.md) - `/metrics` 端点用法
+- [VikingBot 问答效果反馈观测方案设计](https://github.com/volcengine/OpenViking/blob/main/bot/docs/zh/design/vikingbot-feedback-observability-design.md) - feedback 指标与阶段性落地背景
 - [指标体系设计](../../design/metric-design.md) - 指标体系设计细节

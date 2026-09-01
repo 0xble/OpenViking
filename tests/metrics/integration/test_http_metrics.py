@@ -3,16 +3,11 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
-import openviking.metrics.http_middleware as http_middleware
-from openviking.metrics.account_context import (
-    bind_metric_account_context,
-    reset_metric_account_context,
-)
+import openviking.observability.http_observability_middleware as http_middleware
 from openviking.metrics.collectors.http import HTTPCollector
 from openviking.metrics.core.registry import MetricRegistry
 from openviking.metrics.datasources.base import EventMetricDataSource
@@ -20,14 +15,42 @@ from openviking.metrics.datasources.http import HttpRequestLifecycleDataSource
 from openviking.metrics.datasources.model_usage import VLMEventDataSource
 from openviking.metrics.exporters.prometheus import PrometheusExporter
 from openviking.metrics.global_api import configure_metric_account_dimension, shutdown_metrics
-from openviking.metrics.http_middleware import (
-    _INFLIGHT,
-    _extract_request_account_id,
+from openviking.models.vlm.base import VLMBase
+from openviking.observability.context import (
+    bind_root_observability_context,
+    reset_root_observability_context,
+)
+from openviking.observability.http_observability_middleware import (
+    _INFLIGHT_COUNTER,
     _get_route_template,
     _inflight_delta,
-    create_http_metrics_middleware,
+    create_http_observability_middleware,
 )
-from openviking.models.vlm.base import VLMBase
+from openviking.telemetry.span_models import RootSpanAttributes
+
+
+def _bind_root_context_for_account(account_id: str | None):
+    root = RootSpanAttributes(http_method="GET", http_route="/items", request_id="req-test")
+    root.account_id = account_id
+    return bind_root_observability_context(root)
+
+
+def _build_test_app(middleware_factory, *, route_path: str, method: str, handler):
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def middleware_entry(request, call_next):
+        request.state.request_id = "test-request"
+        return await middleware_factory(request, call_next)
+
+    if method == "GET":
+        app.get(route_path)(handler)
+    elif method == "POST":
+        app.post(route_path)(handler)
+    else:
+        raise ValueError(f"unsupported method: {method}")
+
+    return app
 
 
 def test_http_collector_emits_account_label():
@@ -43,7 +66,7 @@ def test_http_collector_emits_account_label():
     )
     collector = HTTPCollector()
 
-    token = bind_metric_account_context(account_id="acct-1")
+    token = _bind_root_context_for_account("acct-1")
     try:
         collector.receive(
             "http.request",
@@ -56,7 +79,7 @@ def test_http_collector_emits_account_label():
             registry,
         )
     finally:
-        reset_metric_account_context(token)
+        reset_root_observability_context(token)
         shutdown_metrics(app=None)
 
     text = PrometheusExporter(registry=registry).render()
@@ -109,34 +132,6 @@ def test_http_request_datasource_propagates_explicit_account_id(monkeypatch):
     ]
 
 
-def test_extract_request_account_id_prefers_authenticated_request_state():
-    request = Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "path": "/api/v1/resources",
-            "headers": [(b"x-openviking-account", b"header-account")],
-            "state": {},
-        }
-    )
-    request.state.metric_account_id = "state-account"
-
-    assert _extract_request_account_id(request) == "state-account"
-
-
-def test_extract_request_account_id_does_not_trust_raw_header_when_unauthenticated():
-    request = Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "path": "/api/v1/resources",
-            "headers": [(b"x-openviking-account", b"header-account")],
-            "state": {},
-        }
-    )
-    assert _extract_request_account_id(request) is None
-
-
 def test_get_route_template_uses_low_cardinality_fallback_for_unmatched_route():
     request = Request(
         {
@@ -152,51 +147,52 @@ def test_get_route_template_uses_low_cardinality_fallback_for_unmatched_route():
 
 
 def test_inflight_delta_removes_zero_value_entries():
-    _INFLIGHT.clear()
+    _INFLIGHT_COUNTER.clear()
 
     assert _inflight_delta("/api/v1/resources", None, +1) == 1
-    assert _INFLIGHT[("/api/v1/resources", None)] == 1
+    assert _INFLIGHT_COUNTER.get("/api/v1/resources", None) == 1
 
     assert _inflight_delta("/api/v1/resources", None, -1) == 0
-    assert ("/api/v1/resources", None) not in _INFLIGHT
+    assert _INFLIGHT_COUNTER.get("/api/v1/resources", None) == 0
 
 
-@pytest.mark.asyncio
-async def test_http_metrics_middleware_emits_authenticated_account_id(monkeypatch):
+def test_http_metrics_module_exposes_only_unified_middleware_entrypoint():
+    assert not hasattr(http_middleware, "create_http_metrics_middleware")
+
+
+def test_http_metrics_middleware_emits_authenticated_account_id(monkeypatch):
     captured: list[tuple[str, dict]] = []
-    middleware = create_http_metrics_middleware()
+    middleware = create_http_observability_middleware()
 
     def _fake_emit(event_name: str, payload: dict) -> None:
         captured.append((event_name, dict(payload)))
 
     monkeypatch.setattr(EventMetricDataSource, "_emit", staticmethod(_fake_emit), raising=False)
+    monkeypatch.setattr(http_middleware, "maybe_start_root_span", lambda _req, _attrs: None)
 
-    async def _call_next(request: Request):
-        request.state.metric_account_id = "acct-real"
-        return SimpleNamespace(status_code=200)
+    async def resources_handler(request: Request):
+        request.state.root_span_attrs.account_id = "acct-real"
+        return {"ok": True}
 
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/api/v1/resources",
-            "route": SimpleNamespace(path="/api/v1/resources"),
-            "headers": [],
-            "state": {},
-        }
+    app = _build_test_app(
+        middleware,
+        route_path="/api/v1/resources",
+        method="POST",
+        handler=resources_handler,
     )
 
-    await middleware(request, _call_next)
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/resources")
+        assert resp.status_code == 200
 
     request_events = [payload for event_name, payload in captured if event_name == "http.request"]
     assert request_events
-    assert request_events[0] == {
-        "method": "POST",
-        "route": "/api/v1/resources",
-        "status": "200",
-        "duration_seconds": request_events[0]["duration_seconds"],
-        "account_id": "acct-real",
-    }
+    assert request_events[0]["method"] == "POST"
+    assert request_events[0]["route"] == "/api/v1/resources"
+    assert request_events[0]["status"] == "200"
+    assert request_events[0]["account_id"] == "acct-real"
+    assert request_events[0]["request_id"]
+    assert request_events[0]["url_path"] == "/api/v1/resources"
     assert isinstance(request_events[0]["duration_seconds"], float)
     assert request_events[0]["duration_seconds"] >= 0.0
     assert any(
@@ -205,130 +201,125 @@ async def test_http_metrics_middleware_emits_authenticated_account_id(monkeypatc
     )
 
 
-@pytest.mark.asyncio
-async def test_http_metrics_middleware_ignores_internal_metrics_route(monkeypatch):
+def test_http_metrics_middleware_ignores_internal_metrics_route(monkeypatch):
     captured: list[tuple[str, dict]] = []
-    middleware = create_http_metrics_middleware()
+    middleware = create_http_observability_middleware()
 
     def _fake_emit(event_name: str, payload: dict) -> None:
         captured.append((event_name, dict(payload)))
 
     monkeypatch.setattr(EventMetricDataSource, "_emit", staticmethod(_fake_emit), raising=False)
+    monkeypatch.setattr(http_middleware, "maybe_start_root_span", lambda _req, _attrs: None)
 
-    async def _call_next(_request: Request):
-        return SimpleNamespace(status_code=200)
+    async def metrics_handler():
+        return {"ok": True}
 
-    request = Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "path": "/metrics",
-            "headers": [],
-            "state": {},
-        }
+    app = _build_test_app(
+        middleware,
+        route_path="/metrics",
+        method="GET",
+        handler=metrics_handler,
     )
 
-    await middleware(request, _call_next)
+    with TestClient(app) as client:
+        resp = client.get("/metrics")
+        assert resp.status_code == 200
 
     assert captured == []
 
 
-@pytest.mark.asyncio
-async def test_http_metrics_middleware_still_records_business_route(monkeypatch):
+def test_http_metrics_middleware_still_records_business_route(monkeypatch):
     captured: list[tuple[str, dict]] = []
-    middleware = create_http_metrics_middleware()
+    middleware = create_http_observability_middleware()
 
     def _fake_emit(event_name: str, payload: dict) -> None:
         captured.append((event_name, dict(payload)))
 
     monkeypatch.setattr(EventMetricDataSource, "_emit", staticmethod(_fake_emit), raising=False)
+    monkeypatch.setattr(http_middleware, "maybe_start_root_span", lambda _req, _attrs: None)
 
-    async def _call_next(request: Request):
-        request.state.metric_account_id = "acct-real"
-        return SimpleNamespace(status_code=200)
+    async def resources_handler(request: Request):
+        request.state.root_span_attrs.account_id = "acct-real"
+        return {"ok": True}
 
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/api/v1/resources",
-            "route": SimpleNamespace(path="/api/v1/resources"),
-            "headers": [],
-            "state": {},
-        }
+    app = _build_test_app(
+        middleware,
+        route_path="/api/v1/resources",
+        method="POST",
+        handler=resources_handler,
     )
 
-    await middleware(request, _call_next)
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/resources")
+        assert resp.status_code == 200
 
     assert any(event_name == "http.request" for event_name, _payload in captured)
 
 
-@pytest.mark.asyncio
-async def test_http_metrics_middleware_uses_route_bound_during_call_next(monkeypatch):
+def test_http_metrics_middleware_uses_route_bound_during_call_next(monkeypatch):
     captured: list[tuple[str, dict]] = []
-    middleware = create_http_metrics_middleware()
+    middleware = create_http_observability_middleware()
 
     def _fake_emit(event_name: str, payload: dict) -> None:
         captured.append((event_name, dict(payload)))
 
     monkeypatch.setattr(EventMetricDataSource, "_emit", staticmethod(_fake_emit), raising=False)
+    monkeypatch.setattr(http_middleware, "maybe_start_root_span", lambda _req, _attrs: None)
 
-    async def _call_next(request: Request):
-        request.scope["route"] = SimpleNamespace(path="/api/v1/sessions/{session_id}")
-        return SimpleNamespace(status_code=200)
+    async def get_session_handler(session_id: str):
+        return {"session_id": session_id}
 
-    request = Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "path": "/api/v1/sessions/session_123",
-            "headers": [],
-            "state": {},
-        }
+    app = _build_test_app(
+        middleware,
+        route_path="/api/v1/sessions/{session_id}",
+        method="GET",
+        handler=get_session_handler,
     )
 
-    await middleware(request, _call_next)
+    with TestClient(app) as client:
+        resp = client.get("/api/v1/sessions/session_123")
+        assert resp.status_code == 200
 
     request_events = [payload for event_name, payload in captured if event_name == "http.request"]
     assert request_events
     assert request_events[0]["route"] == "/api/v1/sessions/{session_id}"
 
 
-@pytest.mark.asyncio
-async def test_http_metrics_middleware_logs_debug_when_metrics_write_fails(monkeypatch):
-    middleware = create_http_metrics_middleware()
-    debug_calls: list[tuple[str, tuple, dict]] = []
+def test_http_metrics_middleware_logs_error_when_metrics_write_fails(monkeypatch):
+    middleware = create_http_observability_middleware()
+    error_calls: list[tuple[str, tuple, dict]] = []
 
     def _boom(**_kwargs):
         raise RuntimeError("metrics write failed")
 
-    def _debug(message, *args, **kwargs):
-        debug_calls.append((message, args, kwargs))
+    def _error(message, *args, **kwargs):
+        error_calls.append((message, args, kwargs))
 
     monkeypatch.setattr(HttpRequestLifecycleDataSource, "set_inflight", staticmethod(_boom))
     monkeypatch.setattr(http_middleware.logger, "isEnabledFor", lambda _level: True)
-    monkeypatch.setattr(http_middleware.logger, "debug", _debug)
+    monkeypatch.setattr(http_middleware.logger, "error", _error)
+    monkeypatch.setattr(http_middleware, "maybe_start_root_span", lambda _req, _attrs: None)
 
-    async def _call_next(request: Request):
-        request.state.metric_account_id = "acct-real"
-        return SimpleNamespace(status_code=200)
+    async def resources_handler(request: Request):
+        request.state.root_span_attrs.account_id = "acct-real"
+        return {"ok": True}
 
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/api/v1/resources",
-            "headers": [],
-            "state": {},
-        }
+    app = _build_test_app(
+        middleware,
+        route_path="/api/v1/resources",
+        method="POST",
+        handler=resources_handler,
     )
 
-    await middleware(request, _call_next)
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/resources")
+        assert resp.status_code == 200
 
     assert any(
-        message == "http metrics write failed: %s" for message, _args, _kwargs in debug_calls
+        message.startswith("Unexpected error in http.inflight")
+        for message, _args, _kwargs in error_calls
     )
-    assert any("http.inflight" in str(args) for _message, args, _kwargs in debug_calls)
+    assert any("metrics write failed" in str(args) for _message, args, _kwargs in error_calls)
 
 
 class _DummyVLM(VLMBase):
@@ -353,7 +344,7 @@ def test_vlm_base_update_token_usage_propagates_current_account(monkeypatch):
 
     monkeypatch.setattr(VLMEventDataSource, "record_call", staticmethod(_fake_record_call))
 
-    token = bind_metric_account_context(account_id="acct-vlm-callsite")
+    token = _bind_root_context_for_account("acct-vlm-callsite")
     try:
         _DummyVLM({"provider": "volcengine", "model": "m1"}).update_token_usage(
             model_name="m1",
@@ -363,6 +354,6 @@ def test_vlm_base_update_token_usage_propagates_current_account(monkeypatch):
             duration_seconds=0.5,
         )
     finally:
-        reset_metric_account_context(token)
+        reset_root_observability_context(token)
 
     assert captured["account_id"] == "acct-vlm-callsite"

@@ -2,259 +2,11 @@
 
 OpenViking provides Unix-like file system operations for managing context.
 
-## WebDAV (Phase 1)
-
-OpenViking Server also exposes a minimal WebDAV adapter for resource files:
-
-```text
-/webdav/resources
-```
-
-Phase 1 intentionally keeps the scope narrow:
-
-- Resources only. Memories, skills, sessions, and other namespaces are not exposed.
-- Text-first writes. `PUT` currently accepts UTF-8 text content only.
-- WebDAV subset only. `OPTIONS`, `PROPFIND`, `GET`, `HEAD`, `PUT`, `DELETE`, `MKCOL`, and `MOVE` are supported.
-- Semantic sidecars stay internal. Derived files such as `.abstract.md`, `.overview.md`, `.relations.json`, and `.path.ovlock` are hidden from listings and cannot be accessed directly through WebDAV.
-
-Behavior notes:
-
-- Creating a new file through WebDAV triggers OpenViking semantic generation for that file path.
-- Replacing an existing file through WebDAV refreshes related semantics and vectors, same as `write()`.
-- User-created dot-directories and dot-files remain visible unless they match one of the reserved internal filenames above.
+<a id="webdav"></a><a id="webdav-phase-1"></a>
 
 ## API Reference
 
-### abstract()
-
-Read L0 abstract (~100 tokens summary).
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI (must be a directory) |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-abstract = client.abstract("viking://resources/docs/")
-print(f"Abstract: {abstract}")
-# Output: "Documentation for the project API, covering authentication, endpoints..."
-```
-
-**HTTP API**
-
-```
-GET /api/v1/content/abstract?uri={uri}
-```
-
-```bash
-curl -X GET "http://localhost:1933/api/v1/content/abstract?uri=viking://resources/docs/" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-openviking abstract viking://resources/docs/
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": "Documentation for the project API, covering authentication, endpoints...",
-  "time": 0.1
-}
-```
-
----
-
-### overview()
-
-Read L1 overview, applies to directories.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI (must be a directory) |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-overview = client.overview("viking://resources/docs/")
-print(f"Overview:\n{overview}")
-```
-
-**HTTP API**
-
-```
-GET /api/v1/content/overview?uri={uri}
-```
-
-```bash
-curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://resources/docs/" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-openviking overview viking://resources/docs/
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": "## docs/\n\nContains API documentation and guides...",
-  "time": 0.1
-}
-```
-
----
-
-### read()
-
-Read L2 full content.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI |
-| offset | int | No | 0 | Starting line number (0-indexed) |
-| limit | int | No | -1 | Number of lines to read, `-1` means read to end |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-content = client.read("viking://resources/docs/api.md")
-print(f"Content:\n{content}")
-```
-
-**HTTP API**
-
-```
-GET /api/v1/content/read?uri={uri}
-```
-
-```bash
-curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/docs/api.md" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-openviking read viking://resources/docs/api.md
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": "# API Documentation\n\nFull content of the file...",
-  "time": 0.1
-}
-```
-
----
-
-### write()
-
-Update an existing file, or create a new one when `mode="create"`, and automatically refresh related semantics and vectors.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Existing file URI |
-| content | str | Yes | - | New content to write |
-| mode | str | No | `replace` | `replace`, `append`, or `create` |
-| wait | bool | No | `false` | Wait for background semantic/vector refresh |
-| timeout | float | No | `null` | Timeout in seconds when `wait=true` |
-
-**Notes**
-
-- `replace` and `append` require the file to exist; `create` targets a new file and returns `409 Conflict` when the path already exists. Directories are always rejected.
-- `create` only accepts text-writable extensions: `.md`, `.txt`, `.json`, `.yaml`, `.yml`, `.toml`, `.py`, `.js`, `.ts`. Parent directories are created automatically.
-- Derived semantic files cannot be written directly: `.abstract.md`, `.overview.md`, `.relations.json`.
-- The public API no longer accepts `regenerate_semantics` or `revectorize`; write always refreshes related semantics and vectors.
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-result = client.write(
-    "viking://resources/docs/api.md",
-    "# Updated API\n\nFresh content.",
-    mode="replace",
-    wait=True,
-)
-print(result["root_uri"])
-```
-
-**HTTP API**
-
-```
-POST /api/v1/content/write
-```
-
-```bash
-curl -X POST "http://localhost:1933/api/v1/content/write" \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "uri": "viking://resources/docs/api.md",
-    "content": "# Updated API\n\nFresh content.",
-    "mode": "replace",
-    "wait": true
-  }'
-```
-
-**CLI**
-
-```bash
-openviking write viking://resources/docs/api.md \
-  --content "# Updated API\n\nFresh content." \
-  --wait
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "uri": "viking://resources/docs/api.md",
-    "root_uri": "viking://resources/docs",
-    "context_type": "resource",
-    "mode": "replace",
-    "written_bytes": 29,
-    "semantic_updated": true,
-    "vector_updated": true,
-    "queue_status": {
-      "Semantic": {
-        "processed": 1,
-        "error_count": 0,
-        "errors": []
-      },
-      "Embedding": {
-        "processed": 2,
-        "error_count": 0,
-        "errors": []
-      }
-    }
-  }
-}
-```
-
----
+<a id="abstract"></a><a id="overview"></a><a id="read"></a><a id="write"></a>
 
 ### ls()
 
@@ -267,11 +19,13 @@ List directory contents.
 | uri | str | Yes | - | Viking URI |
 | simple | bool | No | False | Return only relative paths |
 | recursive | bool | No | False | List all subdirectories recursively |
-| output | str | No | `agent` | Output format: `agent` or `original` |
+| output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
 | abs_limit | int | No | 256 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
-| node_limit | int | No | 1000 | Maximum number of nodes to return |
-| limit | int | No | None | Alias for `node_limit` |
+| node_limit | int | No | 1000 | Maximum number of results |
+| sort_by | str | No | None | Sort directories and files within their groups by `name` or `mtime` before applying `node_limit`; directories remain first |
+| sort_order | str | No | `asc` | Sort direction: `asc` or `desc` |
+| extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 
 **Entry Structure**
 
@@ -287,13 +41,58 @@ List directory contents.
 }
 ```
 
-**Python SDK (Embedded / HTTP)**
+If the caller can read the parent directory but cannot read one of its direct
+children, `ls` still returns a name placeholder without size, modification
+time, abstract, or storage metadata:
 
 ```python
-entries = client.ls("viking://resources/")
+{
+    "name": "restricted",
+    "isDir": True,
+    "uri": "viking://resources/restricted",
+    "access": "denied"
+}
+```
+
+Content operations such as `stat` and `read` return HTTP 403 `PermissionDenied` for
+that URI. Recursive listing retains the inaccessible directory itself but does
+not descend into it, and search results omit unreadable content. This
+discoverable-name behavior applies only to the shared
+`viking://resources` namespace; private user and peer namespaces retain their
+existing hiding rules.
+
+
+**Python HTTP SDK**
+
+```python
+entries = client.ls(
+    uri="viking://resources/",
+    node_limit=200,
+    sort_by="mtime",
+    sort_order="desc",
+)
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['name']} - {type_str}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const entries = await client.list("viking://resources/docs/", { simple: true });
+console.log(entries);
+```
+
+**Go SDK**
+
+```go
+entries, err := client.List(ctx, "viking://resources/", nil)
+if err != nil {
+    return err
+}
+for _, entry := range entries {
+    fmt.Println(entry)
+}
 ```
 
 **HTTP API**
@@ -319,8 +118,13 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
 **CLI**
 
 ```bash
-openviking ls viking://resources/ [--simple] [--recursive]
+openviking ls viking://resources/ [--simple] [--recursive] [-f FIELDS]
+openviking tree viking://resources/my-project/ [--simple] [-f FIELDS]
+openviking glob "**/*.md" [--uri viking://resources/] [--simple] [-f FIELDS]
 ```
+
+`-f`/`--fields` accepts a comma-separated list of columns to display (ps `-o` style), producing a column-aligned table with a header row. Available fields: `name`, `uri`, `path`, `type`, `size`, `mode`, `mtime`, `locked`, `id`, `count`, `abstract`. Combining `--simple` with `-f` outputs comma-separated values (no header, no tree indentation), one entry per line — suitable for scripting pipelines. When `--simple` is used without `-f`, the previous behavior (bare URI per line) is preserved.
+
 
 **Response**
 
@@ -352,20 +156,40 @@ Get directory tree structure.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
-| output | str | No | `agent` | Output format: `agent` or `original` |
-| abs_limit | int | No | 256 | Abstract length limit for `agent` output |
+| output | str | No | HTTP: `agent`; SDKs: `original` | Output format: `agent` or `original` |
+| abs_limit | int | No | HTTP: 256; SDKs: 128 | Abstract length limit for `agent` output |
 | show_all_hidden | bool | No | False | Include hidden files like `-a` |
-| node_limit | int | No | 1000 | Maximum number of nodes to return |
-| limit | int | No | None | Alias for `node_limit` |
+| node_limit | int | No | 1000 | Maximum number of results |
 | level_limit | int | No | 3 | Maximum directory depth to traverse |
+| extra_fields | list[str] | No | None | Extra fields to include: `locked`, `id`, `count` |
 
-**Python SDK (Embedded / HTTP)**
+
+**Python HTTP SDK**
 
 ```python
-entries = client.tree("viking://resources/")
+entries = client.tree(uri="viking://resources/")
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const tree = await client.tree("viking://resources/docs/", { nodeLimit: 100 });
+console.log(tree);
+```
+
+**Go SDK**
+
+```go
+entries, err := client.Tree(ctx, "viking://resources/", nil)
+if err != nil {
+    return err
+}
+for _, entry := range entries {
+    fmt.Println(entry["rel_path"], entry["isDir"])
+}
 ```
 
 **HTTP API**
@@ -384,6 +208,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/tree?uri=viking://resources/" \
 ```bash
 openviking tree viking://resources/my-project/
 ```
+
 
 **Response**
 
@@ -414,20 +239,43 @@ openviking tree viking://resources/my-project/
 
 ### stat()
 
-Get file or directory status information.
+Get file or directory status information. For directories, returns the count of items under the directory.
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI |
+| uri | str | Yes | - | Viking URI (e.g. `viking://resources/docs/api.md`) or a 32-character hex vector record `id` |
 
-**Python SDK (Embedded / HTTP)**
+
+**Python HTTP SDK**
 
 ```python
-info = client.stat("viking://resources/docs/api.md")
+info = client.stat(uri="viking://resources/docs/api.md")
 print(f"Size: {info['size']}")
 print(f"Is directory: {info['isDir']}")
+
+# For directories, returns item count
+dir_info = client.stat(uri="viking://resources/docs")
+if dir_info.get('isDir'):
+    print(f"Item count: {dir_info.get('count')}")
+```
+
+**TypeScript SDK**
+
+```typescript
+const metadata = await client.stat("viking://resources/docs/api.md");
+console.log(metadata);
+```
+
+**Go SDK**
+
+```go
+info, err := client.Stat(ctx, "viking://resources/docs/api.md")
+if err != nil {
+    return err
+}
+fmt.Println(info["size"], info["isDir"])
 ```
 
 **HTTP API**
@@ -445,9 +293,11 @@ curl -X GET "http://localhost:1933/api/v1/fs/stat?uri=viking://resources/docs/ap
 
 ```bash
 openviking stat viking://resources/my-project/docs/api.md
+openviking stat viking://resources/my-project/docs
 ```
 
-**Response**
+
+**Response (File)**
 
 ```json
 {
@@ -458,11 +308,144 @@ openviking stat viking://resources/my-project/docs/api.md
     "mode": 33188,
     "modTime": "2024-01-01T00:00:00Z",
     "isDir": false,
+    "isLocked": false,
+    "id": "a1b2c3d4e5f678901234567890abcdef",
     "uri": "viking://resources/docs/api.md"
   },
   "time": 0.1
 }
 ```
+
+**Response (Directory)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "name": "docs",
+    "size": 4096,
+    "mode": 16877,
+    "modTime": "2024-01-01T00:00:00Z",
+    "isDir": true,
+    "isLocked": false,
+    "uri": "viking://resources/docs",
+    "count": 42
+  },
+  "time": 0.1
+}
+```
+
+The `isLocked` field reports whether the path is currently held by a path lock: the path itself has a valid lock (including an exact-path lock for the target), or any ancestor directory holds a TreeLock. Returns `false` when the LockManager is unavailable or the lookup fails, so callers can avoid attempting a write only to observe `ResourceBusyError`.
+
+The `id` field (files only) is the deterministic vector record primary key in VikingDB, computed as `md5(f"{account_id}:{uri}")` for level 2 (regular file) records. This value matches the `id` field in the vector collection schema and can be used to cross-reference vector records without an additional lookup. The field is omitted for directories because a directory may have multiple vector records across semantic levels (L0 abstract, L1 overview). Because indexing is asynchronous, a newly returned ID might not be resolvable immediately; lookup by ID can also fail after its vector record is deleted. In either case, `stat(id)` returns `NOT_FOUND` with a reason indicating that the data may not have been indexed yet or may have been deleted.
+
+The `count` field (directories only) contains the estimated number of items (files and subdirectories) under this directory (from vector index).
+
+---
+
+### attrs()
+
+Get logical extended attributes for a file or directory.
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | str | Yes | - | Viking URI |
+
+
+**Python SDK (HTTP)**
+
+```python
+attrs = client.attrs(uri="viking://resources/docs/api.md")
+print(attrs["attrs"]["tags"])
+```
+
+**TypeScript SDK**
+
+```typescript
+const attributes = await client.attrs("viking://resources/docs/api.md");
+console.log(attributes);
+```
+
+**Go SDK**
+
+```go
+attrs, err := client.Attrs(ctx, "viking://resources/docs/api.md")
+if err != nil {
+    return err
+}
+metadata := attrs["attrs"].(map[string]any)
+fmt.Println(metadata["tags"])
+```
+
+**HTTP API**
+
+```
+GET /api/v1/fs/attrs?uri={uri}
+POST /api/v1/fs/attrs/set_tags
+```
+
+```bash
+curl -X GET "http://localhost:1933/api/v1/fs/attrs?uri=viking://resources/docs/api.md" \
+  -H "X-API-Key: your-key"
+
+curl -X POST "http://localhost:1933/api/v1/fs/attrs/set_tags" \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{"uri":"viking://resources/docs","tags":["team=search"],"mode":"append","recursive":true}'
+```
+
+**CLI**
+
+```bash
+openviking attrs get viking://resources/docs/api.md
+openviking attrs get viking://resources/docs/api.md tags
+openviking attrs get viking://user/alice/memories/experiences/foo.md memory.resource_refs
+openviking attrs set-tags viking://resources/docs/api.md --tags team=search,env=prod
+openviking attrs set-tags viking://resources/docs --tags team=search --mode append --recursive
+```
+
+Directory targets update the directory semantic records; `recursive=true` also updates existing descendant files and directory semantic records.
+
+
+**Response (Resource)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/docs/api.md",
+    "context_type": "resource",
+    "attrs": {
+      "tags": ["team=search", "env=prod"]
+    }
+  }
+}
+```
+
+**Response (Memory)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://user/alice/memories/experiences/foo.md",
+    "context_type": "memory",
+    "attrs": {
+      "memory": {
+        "memory_type": "experiences",
+        "name": "foo",
+        "tags": ["ui"],
+        "resource_refs": ["viking://resources/docs/api.md"]
+      },
+      "tags": ["team=search"]
+    }
+  }
+}
+```
+
+`attrs.memory` is parsed from `MEMORY_FIELDS` metadata with content removed. `attrs.tags` is the explicit retrieval tag list used by `attrs set-tags` and search filters.
 
 ---
 
@@ -475,13 +458,28 @@ Create a directory.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI for the new directory |
-| description | str | No | `null` | Initial directory description. When provided, it is written to `.abstract.md` and queued for L0 vectorization. |
+| description | str | No | `null` | Initial directory description. When omitted, the directory name is used as the default L0; when provided, this description is used. Both forms write `.abstract.md` and queue L0 vectorization. |
 
-**Python SDK (Embedded / HTTP)**
+
+**Python HTTP SDK**
 
 ```python
-client.mkdir("viking://resources/new-project/")
-client.mkdir("viking://resources/new-project/", description="API docs directory")
+client.mkdir(uri="viking://resources/new-project/")
+client.mkdir(uri="viking://resources/new-project/", description="API docs directory")
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.mkdir("viking://resources/docs/guides/", "Project guides");
+```
+
+**Go SDK**
+
+```go
+if err := client.Mkdir(ctx, "viking://resources/new-project/", "API docs directory"); err != nil {
+    return err
+}
 ```
 
 **HTTP API**
@@ -507,6 +505,7 @@ openviking mkdir viking://resources/new-project/
 openviking mkdir viking://resources/new-project/ --description "API docs directory"
 ```
 
+
 **Response**
 
 ```json
@@ -523,7 +522,10 @@ openviking mkdir viking://resources/new-project/ --description "API docs directo
 
 ### rm()
 
-Remove file or directory.
+Remove file or directory. When removing directories recursively, returns the estimated number of items deleted.
+
+`rm` is idempotent: removing a valid URI that does not exist still succeeds.
+Invalid URI formats, unsupported schemes, and non-public scopes return `INVALID_URI`.
 
 **Parameters**
 
@@ -532,14 +534,32 @@ Remove file or directory.
 | uri | str | Yes | - | Viking URI to remove |
 | recursive | bool | No | False | Remove directory recursively |
 
-**Python SDK (Embedded / HTTP)**
+
+**Python HTTP SDK**
 
 ```python
 # Remove single file
-client.rm("viking://resources/docs/old.md")
+client.rm(uri="viking://resources/docs/old.md")
 
 # Remove directory recursively
-client.rm("viking://resources/old-project/", recursive=True)
+client.rm(uri="viking://resources/old-project/", recursive=True)
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.remove("viking://resources/docs/old.md", { wait: true });
+```
+
+**Go SDK**
+
+```go
+err := client.Remove(ctx, "viking://resources/old-project/", &openviking.RemoveOptions{
+    Recursive: true,
+})
+if err != nil {
+    return err
+}
 ```
 
 **HTTP API**
@@ -564,7 +584,8 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-proje
 openviking rm viking://resources/old.md [--recursive]
 ```
 
-**Response**
+
+**Response (Single file)**
 
 ```json
 {
@@ -575,6 +596,23 @@ openviking rm viking://resources/old.md [--recursive]
   "time": 0.1
 }
 ```
+
+**Response (Recursive delete)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "uri": "viking://resources/old-project/",
+    "estimated_deleted_count": 42
+  },
+  "time": 0.1
+}
+```
+
+The `estimated_deleted_count` field (for recursive deletes) contains the estimated number of items (files and directories) deleted (from vector index). The CLI will display this information in output.
+
+When deleting `viking://resources/...`, the response may include `memory_cleanup`, indicating that user memories referencing that resource URI were cleaned up before deletion.
 
 ---
 
@@ -589,13 +627,31 @@ Move file or directory.
 | from_uri | str | Yes | - | Source Viking URI |
 | to_uri | str | Yes | - | Destination Viking URI |
 
-**Python SDK (Embedded / HTTP)**
+
+**Python HTTP SDK**
 
 ```python
 client.mv(
-    "viking://resources/old-name/",
-    "viking://resources/new-name/"
+    from_uri="viking://resources/old-name/",
+    to_uri="viking://resources/new-name/",
 )
+```
+
+**TypeScript SDK**
+
+```typescript
+await client.move(
+  "viking://resources/docs/old.md",
+  "viking://resources/docs/new.md",
+);
+```
+
+**Go SDK**
+
+```go
+if err := client.Move(ctx, "viking://resources/old-name/", "viking://resources/new-name/"); err != nil {
+    return err
+}
 ```
 
 **HTTP API**
@@ -620,6 +676,7 @@ curl -X POST http://localhost:1933/api/v1/fs/mv \
 openviking mv viking://resources/old-name/ viking://resources/new-name/
 ```
 
+
 **Response**
 
 ```json
@@ -633,337 +690,9 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
 }
 ```
 
----
+<a id="grep"></a><a id="glob"></a>
 
-### grep()
-
-Search content by pattern.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI to search in |
-| pattern | str | Yes | - | Search pattern (regex) |
-| case_insensitive | bool | No | False | Ignore case |
-| exclude_uri | str | No | None | URI prefix to exclude from search |
-| node_limit | int | No | None | Maximum number of nodes to search |
-| level_limit | int | No | 5 | Maximum directory depth to traverse |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-results = client.grep(
-    "viking://resources/",
-    "authentication",
-    case_insensitive=True
-)
-
-print(f"Found {results['count']} matches")
-for match in results['matches']:
-    print(f"  {match['uri']}:{match['line']}")
-    print(f"    {match['content']}")
-```
-
-**HTTP API**
-
-```
-POST /api/v1/search/grep
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/search/grep \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "uri": "viking://resources/",
-    "pattern": "authentication",
-    "case_insensitive": true
-  }'
-```
-
-**CLI**
-
-```bash
-openviking grep viking://resources/ "authentication" [--ignore-case]
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "matches": [
-      {
-        "uri": "viking://resources/docs/auth.md",
-        "line": 15,
-        "content": "User authentication is handled by..."
-      }
-    ],
-    "count": 1
-  },
-  "time": 0.1
-}
-```
-
----
-
-### glob()
-
-Match files by pattern.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
-| uri | str | No | "viking://" | Starting URI |
-| node_limit | int | No | None | Maximum number of matches to return |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-# Find all markdown files
-results = client.glob("**/*.md", "viking://resources/")
-print(f"Found {results['count']} markdown files:")
-for uri in results['matches']:
-    print(f"  {uri}")
-
-# Find all Python files
-results = client.glob("**/*.py", "viking://resources/")
-print(f"Found {results['count']} Python files")
-```
-
-**HTTP API**
-
-```
-POST /api/v1/search/glob
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/search/glob \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "pattern": "**/*.md",
-    "uri": "viking://resources/"
-  }'
-```
-
-**CLI**
-
-```bash
-openviking glob "**/*.md" [--uri viking://resources/]
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "matches": [
-      "viking://resources/docs/api.md",
-      "viking://resources/docs/guide.md"
-    ],
-    "count": 2
-  },
-  "time": 0.1
-}
-```
-
----
-
-### link()
-
-Create relations between resources.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| from_uri | str | Yes | - | Source URI |
-| to_uris | str or List[str] | Yes | - | Target URI(s) |
-| reason | str | No | "" | Reason for the link |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-# Single link
-client.link(
-    "viking://resources/docs/auth/",
-    "viking://resources/docs/security/",
-    reason="Security best practices for authentication"
-)
-
-# Multiple links
-client.link(
-    "viking://resources/docs/api/",
-    [
-        "viking://resources/docs/auth/",
-        "viking://resources/docs/errors/"
-    ],
-    reason="Related documentation"
-)
-```
-
-**HTTP API**
-
-```
-POST /api/v1/relations/link
-```
-
-```bash
-# Single link
-curl -X POST http://localhost:1933/api/v1/relations/link \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "from_uri": "viking://resources/docs/auth/",
-    "to_uris": "viking://resources/docs/security/",
-    "reason": "Security best practices for authentication"
-  }'
-
-# Multiple links
-curl -X POST http://localhost:1933/api/v1/relations/link \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "from_uri": "viking://resources/docs/api/",
-    "to_uris": ["viking://resources/docs/auth/", "viking://resources/docs/errors/"],
-    "reason": "Related documentation"
-  }'
-```
-
-**CLI**
-
-```bash
-openviking link viking://resources/docs/auth/ viking://resources/docs/security/ --reason "Security best practices"
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "from": "viking://resources/docs/auth/",
-    "to": "viking://resources/docs/security/"
-  },
-  "time": 0.1
-}
-```
-
----
-
-### relations()
-
-Get relations for a resource.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| uri | str | Yes | - | Viking URI |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-relations = client.relations("viking://resources/docs/auth/")
-for rel in relations:
-    print(f"Related: {rel['uri']}")
-    print(f"  Reason: {rel['reason']}")
-```
-
-**HTTP API**
-
-```
-GET /api/v1/relations?uri={uri}
-```
-
-```bash
-curl -X GET "http://localhost:1933/api/v1/relations?uri=viking://resources/docs/auth/" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-openviking relations viking://resources/docs/auth/
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": [
-    {"uri": "viking://resources/docs/security/", "reason": "Security best practices"},
-    {"uri": "viking://resources/docs/errors/", "reason": "Error handling"}
-  ],
-  "time": 0.1
-}
-```
-
----
-
-### unlink()
-
-Remove a relation.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| from_uri | str | Yes | - | Source URI |
-| to_uri | str | Yes | - | Target URI to unlink |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-client.unlink(
-    "viking://resources/docs/auth/",
-    "viking://resources/docs/security/"
-)
-```
-
-**HTTP API**
-
-```
-DELETE /api/v1/relations/link
-```
-
-```bash
-curl -X DELETE http://localhost:1933/api/v1/relations/link \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "from_uri": "viking://resources/docs/auth/",
-    "to_uri": "viking://resources/docs/security/"
-  }'
-```
-
-**CLI**
-
-```bash
-openviking unlink viking://resources/docs/auth/ viking://resources/docs/security/
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "from": "viking://resources/docs/auth/",
-    "to": "viking://resources/docs/security/"
-  },
-  "time": 0.1
-}
-```
-
----
+<a id="export_ovpack"></a><a id="import_ovpack"></a><a id="backup_ovpack"></a><a id="restore_ovpack"></a>
 
 ## Related Documentation
 

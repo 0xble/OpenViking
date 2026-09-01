@@ -2,6 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import type { FindResultItem } from "../client.js";
 import { postProcessMemories, pickMemoriesForInjection } from "../memory-ranking.js";
 import { memoryOpenVikingConfigSchema } from "../config.js";
+import {
+  buildMemoryLines,
+  buildMemoryLinesWithBudget,
+  estimateTokenCount,
+} from "../auto-recall.js";
 
 /** Helper: create a mock FindResultItem */
 function mockMemory(overrides: Partial<FindResultItem> & { uri: string }): FindResultItem {
@@ -53,8 +58,6 @@ describe("Slice A: recallScoreThreshold default", () => {
 
 describe("Slice B: prefer abstract over full content fetch", () => {
   it("should use abstract when available instead of calling read()", async () => {
-    const { buildMemoryLines } = await import("../index.js");
-
     const mockRead = vi.fn().mockResolvedValue("Full long content from read()");
 
     const memories: FindResultItem[] = [
@@ -74,7 +77,6 @@ describe("Slice B: prefer abstract over full content fetch", () => {
 
     const lines = await buildMemoryLines(memories, mockRead, {
       recallPreferAbstract: true,
-      recallMaxContentChars: 500,
     });
 
     // Item 1 has abstract — read() should NOT be called for it
@@ -85,10 +87,8 @@ describe("Slice B: prefer abstract over full content fetch", () => {
   });
 });
 
-describe("Slice D: recallMaxContentChars truncation", () => {
-  it("should truncate content exceeding recallMaxContentChars", async () => {
-    const { buildMemoryLines } = await import("../index.js");
-
+describe("Slice D: individual memory integrity", () => {
+  it("should keep full memory content intact", async () => {
     const longContent = "A".repeat(2000);
     const mockRead = vi.fn().mockResolvedValue(longContent);
 
@@ -103,26 +103,15 @@ describe("Slice D: recallMaxContentChars truncation", () => {
 
     const lines = await buildMemoryLines(memories, mockRead, {
       recallPreferAbstract: false,
-      recallMaxContentChars: 500,
     });
 
-    // Content should be truncated to 500 chars + "..."
     const contentPart = lines[0]!.replace("- [memory] ", "");
-    expect(contentPart.length).toBeLessThanOrEqual(503); // 500 + "..."
-    expect(contentPart.endsWith("...")).toBe(true);
-  });
-
-  it("should have recallMaxContentChars and recallPreferAbstract in parsed config", () => {
-    const cfg = memoryOpenVikingConfigSchema.parse({});
-    expect(cfg.recallMaxContentChars).toBe(500);
-    expect(cfg.recallPreferAbstract).toBe(false);
+    expect(contentPart).toBe(longContent);
   });
 });
 
-describe("Slice E: tokenBudget enforcement", () => {
-  it("should stop injecting when token budget is exhausted", async () => {
-    const { buildMemoryLinesWithBudget } = await import("../index.js");
-
+describe("Slice E: character budget enforcement", () => {
+  it("should stop injecting before the character budget is exceeded", async () => {
     // Each memory ~200 chars -> ~50 tokens per line (200 chars + "- [memory] " prefix)
     const memories: FindResultItem[] = Array.from({ length: 10 }, (_, i) =>
       mockMemory({
@@ -140,30 +129,26 @@ describe("Slice E: tokenBudget enforcement", () => {
       mockRead,
       {
         recallPreferAbstract: true,
-        recallMaxContentChars: 500,
-        recallTokenBudget: 100,
+        recallMaxInjectedChars: 400,
       },
     );
 
-    // Budget = 100 tokens. Each line ~53 tokens ((200 + 13 prefix chars) / 4).
-    // First line is always included even if it exceeds the budget (spec §6.2),
-    // so we expect at most 2 lines (~106 tokens).
-    expect(lines.length).toBeLessThanOrEqual(2);
-    expect(lines.length).toBeGreaterThan(0);
-    expect(estimatedTokens).toBeLessThanOrEqual(106);
+    expect(lines).toHaveLength(1);
+    expect(lines.join("\n").length).toBeLessThanOrEqual(400);
+    expect(estimatedTokens).toBeLessThanOrEqual(53);
   });
 
   it("should estimate tokens as ceil(chars/4)", async () => {
-    const { estimateTokenCount } = await import("../index.js");
     expect(estimateTokenCount("")).toBe(0);
     expect(estimateTokenCount("abcd")).toBe(1);
     expect(estimateTokenCount("abcde")).toBe(2);
     expect(estimateTokenCount("A".repeat(100))).toBe(25);
   });
 
-  it("should have recallTokenBudget in parsed config with default 2000", () => {
+  it("should have recallMaxInjectedChars in parsed config with default 4000-character budget", () => {
     const cfg = memoryOpenVikingConfigSchema.parse({});
-    expect(cfg.recallTokenBudget).toBe(2000);
+    expect(cfg.recallMaxInjectedChars).toBe(4000);
+    expect(cfg.recallTokenBudget).toBe(4000);
   });
 });
 

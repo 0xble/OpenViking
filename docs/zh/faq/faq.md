@@ -20,7 +20,7 @@ OpenViking 通过文件系统范式统一管理所有上下文，实现分层供
 | **存储模型** | 扁平化向量存储 | 层级化文件系统（AGFS） |
 | **检索方式** | 单一向量相似度搜索 | 目录递归检索 + 意图分析 + Rerank |
 | **输出形式** | 原始分块 | 结构化上下文（L0 摘要/L1 概览/L2 详情） |
-| **记忆能力** | 不支持 | 内置 6 种记忆分类，支持自动提取和迭代 |
+| **记忆能力** | 不支持 | 内置多种可扩展的记忆类型，支持自动提取和持续迭代 |
 | **可观测性** | 黑箱 | 检索轨迹完整可追溯 |
 | **上下文类型** | 仅文档 | Resource + Memory + Skill 三种类型 |
 
@@ -44,11 +44,17 @@ Viking URI 是 OpenViking 的统一资源标识符，格式为 `viking://{scope}
 viking://
 ├── resources/              # 知识库：文档、代码、网页等
 │   └── my_project/
-├── user/                   # 用户上下文
-│   └── memories/           # 用户记忆（偏好、实体、事件）
-└── agent/                  # Agent 上下文
-    ├── skills/             # 可调用技能
-    └── memories/           # Agent 记忆（案例、模式）
+├── user/
+│   └── {user_id}/          # 用户私有上下文
+│       ├── memories/       # 用户记忆
+│       ├── resources/      # 用户私有资源
+│       ├── skills/         # 用户私有技能（默认）
+│       ├── peers/{peer_id}/
+│       │   ├── memories/   # Peer 记忆
+│       │   └── resources/  # Peer 资源
+│       └── sessions/       # 会话与历史归档
+└── agent/                  # 可选的 account 全局能力
+    └── skills/             # 共享技能
 ```
 
 ## 安装与配置
@@ -56,24 +62,22 @@ viking://
 ### 环境要求是什么？
 
 - **Python 版本**：3.10 或更高
-- **编译工具**（如果从源码安装或在不支持的平台上）：Go 1.19+, GCC 9+ 或 Clang 11+
+- **编译工具**（如果从源码安装或在不支持的平台上）：Rust/Cargo, GCC 9+ 或 Clang 11+
 - **必需依赖**：Embedding 模型（推荐火山引擎 Doubao）
 - **可选依赖**：
   - VLM（视觉语言模型）：用于多模态内容处理和语义提取
   - Rerank 模型：用于提升检索精度
 
-### 什么是 `binding-client` 和 `http-client`？我该选哪个？
+### OpenViking 是如何访问 AGFS 文件系统的？
 
-- **`binding-client`（默认值）**：通过 CGO 绑定直接在 Python 进程内运行 AGFS 逻辑。优点是性能极高，无网络延迟；缺点是需要本地有编译好的 AGFS 共享库。
-- **`http-client`**：通过 HTTP 协议与独立的 `agfs-server` 通信。优点是部署解耦，不需要本地编译 Go 代码；缺点是有一定的网络通信开销。
+OpenViking 通过 Rust 绑定（`ragfs_python` / `RAGFSBindingClient`）在 Python 进程内直接运行 RAGFS 文件系统逻辑。优点是性能极高、无网络延迟；前提是本地需要有编译好的 RAGFS 共享库（预编译 Wheel 包内置，或从源码编译）。
 
-如果你的环境支持编译 Go 代码，或者安装了包含预编译库的 Wheel 包，推荐使用默认的 `binding-client`。
+> [!WARNING]
+> OpenViking 已不再支持 AGFS HTTP client 模式。当前 AGFS / RAGFS 文件系统访问仅通过 Rust binding（`RAGFSBindingClient`）在进程内完成。这不影响 OpenViking server 的 HTTP API、`ov` CLI，或 `AsyncHTTPClient` / `SyncHTTPClient` 访问 OpenViking 服务端的能力。
 
 ### 遇到 "AGFS binding library not found" 错误怎么办？
 
-这通常是因为本地没有编译好的 AGFS 共享库。你可以：
-1. **重新编译安装**：在项目根目录运行 `pip install -e . --force-reinstall`（需要 Go 环境）。
-2. **切换到 HTTP 模式**：在 `ov.conf` 中设置 `storage.agfs.mode = "http-client"`，并确保有一个正在运行的 `agfs-server`。
+这通常是因为本地没有可用的 RAGFS 共享库。在项目根目录运行 `pip install -e . --force-reinstall` 重新编译安装即可（需要 Rust 工具链）。
 
 ### 如何安装 OpenViking？
 
@@ -99,7 +103,7 @@ pip install openviking --upgrade --force-reinstall
   "vlm": {
     "provider": "volcengine",
     "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-pro-260215",
+    "model": "doubao-seed-2-0-lite-260428",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   },
   "rerank": {
@@ -134,18 +138,13 @@ pip install openviking --upgrade --force-reinstall
 ### 如何初始化客户端？
 
 ```python
-import openviking as ov
+from openviking_sdk import AsyncHTTPClient
 
-# 异步客户端（推荐）- 嵌入模式
-client = ov.AsyncOpenViking(path="./my_data")
-await client.initialize()
-
-# 异步客户端 - 服务模式
-client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 ```
 
-SDK 构造函数仅接受 `url`、`api_key`、`path` 参数。其他配置（embedding、vlm 等）通过 `ov.conf` 配置文件管理。
+Embedding、VLM、存储等服务配置由 OpenViking Server 通过 `ov.conf` 管理。
 
 ### 支持哪些文件格式？
 
@@ -163,20 +162,43 @@ SDK 构造函数仅接受 `url`、`api_key`、`path` 参数。其他配置（emb
 ```python
 # 添加单个文件
 await client.add_resource(
-    "./document.pdf",
-    reason="项目技术文档",  # 描述资源用途，提升检索质量
-    target="viking://resources/docs/"  # 指定存储位置
+    path="./document.pdf",
+    parent="viking://resources/docs",  # 存到这个目录下面，文件名由来源决定
+    options={"reason": "项目技术文档"},  # 描述资源用途，提升检索质量
 )
 
 # 添加网页
 await client.add_resource(
-    "https://example.com/api-docs",
-    reason="API 参考文档"
+    path="https://example.com/api-docs",
+    options={"reason": "API 参考文档"},
 )
 
 # 等待处理完成
 await client.wait_processed()
 ```
+
+### `to` 和 `parent` 有什么区别？该用哪个？
+
+|  | `to` | `parent` |
+|---|---|---|
+| 传什么 | 完整最终 URI，**含叶子名** | 一个**已存在的目录**，叶子名由来源决定 |
+| 撞名怎么办 | 不改名。目标已存在时按新来源同步，来源里没有的可见条目会被删除 | 不覆盖。退到 `name_1`、`name_2`……并返回一条 warning |
+| 什么时候用 | 名字已知且必须逐字生效；或者要原地更新一个已有资源 | 叶子名由服务端派生（URL / 仓库导入、大文件切分），或者目标下已有的内容一点都不能动 |
+
+两个都留空 = 目录和叶子名都从来源推导，撞名行为同 `parent`。
+
+`to` 和 `parent` 不能同时传，会直接报错。
+
+### `to` 指到一个已存在的目录会发生什么？
+
+内容被同步成新来源的样子，metadata 保留。具体是：
+
+- **点号开头的条目原样保留** —— `.abstract.md`、`.overview.md`、`.search_tags.json`、`.image_mappings.json` 等；同步时两侧都不枚举它们，所以既不会被删也不会被覆盖。
+- **其余可见内容和新来源对齐** —— 来源里没有的删掉，变了的覆盖，没变的留在原地（URI 不变，挂在上面的向量和 tags 都还在）。
+
+所以这是「保留 metadata、替换内容本身」，不是把目录删掉重建。不想动目标里已有的东西就用 `parent`。
+
+注意：`processing_mode="vectors_only"` 不跑语义处理，保留下来的 `.abstract.md` / `.overview.md` **不会重算**，会继续描述已经被替换掉的旧内容。需要摘要跟着更新，就用默认的 `semantic_and_vectors`。
 
 ### `find()` 和 `search()` 有什么区别？应该用哪个？
 
@@ -190,14 +212,14 @@ await client.wait_processed()
 ```python
 # find(): 简单直接的语义搜索
 results = await client.find(
-    "OAuth 认证流程",
-    target_uri="viking://resources/"
+    query="OAuth 认证流程",
+    target_uri="viking://resources/",
 )
 
 # search(): 复杂任务，需要意图分析
 results = await client.search(
-    "帮我实现用户登录功能",
-    session_info=session
+    query="帮我实现用户登录功能",
+    session_id=session.session_id,
 )
 ```
 
@@ -210,15 +232,21 @@ results = await client.search(
 会话管理是 OpenViking 的核心能力，支持对话追踪和记忆提取：
 
 ```python
+from openviking_sdk import TextPart
+
 # 创建会话
-session = client.session()
+session_info = await client.create_session()
+session = client.session(session_id=session_info["session_id"])
 
 # 添加对话消息
-await session.add_message("user", [{"type": "text", "text": "帮我分析这段代码的性能问题"}])
-await session.add_message("assistant", [{"type": "text", "text": "我来分析一下..."}])
-
-# 标记使用的上下文（用于追踪）
-await session.used(["viking://resources/code/main.py"])
+await session.add_message(
+    role="user",
+    parts=[TextPart(text="帮我分析这段代码的性能问题")],
+)
+await session.add_message(
+    role="assistant",
+    parts=[TextPart(text="我来分析一下...")],
+)
 
 # 提交会话，触发记忆提取
 await session.commit()
@@ -226,31 +254,24 @@ await session.commit()
 
 ### OpenViking 支持哪些记忆类型？
 
-OpenViking 内置 6 种记忆分类，在会话提交时自动提取：
+OpenViking 内置 `profile`、`preferences`、`entities`、`events`、`identity`、`soul`、`cases`、`trajectories`、`experiences`、`tools` 和 `skills` 等记忆类型。提交会话后，系统会按当前记忆策略提取适用内容；也可以根据业务需要扩展或调整记忆类型。
 
-| 分类 | 归属 | 说明 |
-|------|------|------|
-| **profile** | user | 用户基本信息（姓名、角色等） |
-| **preferences** | user | 用户偏好（代码风格、工具选择等） |
-| **entities** | user | 实体记忆（人物、项目、组织等） |
-| **events** | user | 事件记录（决策、里程碑等） |
-| **cases** | agent | Agent 学习的案例 |
-| **patterns** | agent | Agent 学习的模式 |
+记忆存储在当前用户或 Peer 命名空间，不存在当前可写的 `viking://agent/memories` 目录。完整类型与路径见 [上下文类型](../concepts/02-context-types.md)。
 
 ### 如何使用类 Unix 的文件系统 API？
 
 ```python
 # 列出目录内容
-items = await client.ls("viking://resources/")
+items = await client.ls(uri="viking://resources/")
 
 # 读取完整内容（L2）
-content = await client.read("viking://resources/doc.md")
+content = await client.read(uri="viking://resources/doc.md")
 
 # 获取摘要（L0）
-abstract = await client.abstract("viking://resources")
+abstract = await client.abstract(uri="viking://resources")
 
 # 获取概览（L1）
-overview = await client.overview("viking://resources")
+overview = await client.overview(uri="viking://resources")
 ```
 
 ## 检索优化
@@ -293,7 +314,7 @@ OpenViking 使用分数传播机制：
 
 1. **未等待处理完成**
    ```python
-   await client.add_resource("./doc.pdf")
+   await client.add_resource(path="./doc.pdf")
    await client.wait_processed()  # 必须等待
    ```
 
@@ -318,7 +339,7 @@ OpenViking 使用分数传播机制：
 1. **确认资源已处理完成**
    ```python
    # 检查资源是否存在
-   items = await client.ls("viking://resources/")
+   items = await client.ls(uri="viking://resources/")
    ```
 
 2. **检查 `target_uri` 过滤条件**
@@ -331,7 +352,7 @@ OpenViking 使用分数传播机制：
 
 4. **检查 L0 摘要质量**
    ```python
-   abstract = await client.abstract("viking://resources/your-doc")
+   abstract = await client.abstract(uri="viking://resources/your-doc")
    print(abstract)  # 确认摘要是否准确反映内容
    ```
 
@@ -354,7 +375,10 @@ OpenViking 使用分数传播机制：
 
 4. **查看提取的记忆**
    ```python
-   memories = await client.find("", target_uri="viking://user/memories/")
+   memories = await client.find(
+       query="",
+       target_uri="viking://~/memories/",
+   )
    ```
 
 ### 性能问题
@@ -364,24 +388,9 @@ OpenViking 使用分数传播机制：
 1. **批量处理**：一次添加多个资源比逐个添加更高效
 2. **合理设置 `batch_size`**：Embedding 配置中调整批处理大小
 3. **使用本地存储**：开发阶段使用 `local` 后端减少网络延迟
-4. **异步操作**：充分利用 `AsyncOpenViking` / `AsyncHTTPClient` 的异步特性
+4. **异步操作**：充分利用 `AsyncHTTPClient` 的异步特性
 
 ## 部署相关
-
-### 嵌入式模式和服务模式有什么区别？
-
-| 模式 | 适用场景 | 特点 |
-|------|----------|------|
-| **嵌入式** | 本地开发、单进程应用 | 自动启动 AGFS 子进程，使用本地向量索引 |
-| **服务模式** | 生产环境、分布式部署 | 连接远程服务，支持多实例并发，可独立扩展 |
-
-```python
-# 嵌入式模式
-client = ov.AsyncOpenViking(path="./data")
-
-# 服务模式
-client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-```
 
 ### OpenViking 是开源的吗？
 
