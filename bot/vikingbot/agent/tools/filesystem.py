@@ -3,10 +3,9 @@
 from typing import TYPE_CHECKING, Any
 
 from vikingbot.agent.tools.base import Tool
-from vikingbot.config.schema import SessionKey
 
-
-from vikingbot.sandbox.manager import SandboxManager
+if TYPE_CHECKING:
+    from vikingbot.agent.tools.base import ToolContext
 
 
 class ReadFileTool(Tool):
@@ -27,6 +26,10 @@ class ReadFileTool(Tool):
             "properties": {"path": {"type": "string", "description": "The file path to read"}},
             "required": ["path"],
         }
+
+    @property
+    def resource_inputs(self) -> dict[str, str]:
+        return {"path": "local_file"}
 
     async def execute(self, tool_context: "ToolContext", path: str, **kwargs: Any) -> str:
         try:
@@ -99,6 +102,10 @@ class EditFileTool(Tool):
             "required": ["path", "old_text", "new_text"],
         }
 
+    @property
+    def resource_inputs(self) -> dict[str, str]:
+        return {"path": "local_file"}
+
     async def execute(
         self, tool_context: "ToolContext", path: str, old_text: str, new_text: str, **kwargs: Any
     ) -> str:
@@ -107,7 +114,7 @@ class EditFileTool(Tool):
             content = await sandbox.read_file(path)
 
             if old_text not in content:
-                return f"Error: old_text not found in file. Make sure it matches exactly."
+                return "Error: old_text not found in file. Make sure it matches exactly."
 
             count = content.count(old_text)
             if count > 1:
@@ -143,6 +150,10 @@ class ListDirTool(Tool):
             "properties": {"path": {"type": "string", "description": "The directory path to list"}},
             "required": ["path"],
         }
+
+    @property
+    def resource_inputs(self) -> dict[str, str]:
+        return {"path": "local_directory"}
 
     async def execute(self, tool_context: "ToolContext", path: str, **kwargs: Any) -> str:
         try:

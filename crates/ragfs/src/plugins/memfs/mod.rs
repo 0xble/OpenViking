@@ -65,10 +65,7 @@ impl MemFileSystem {
         let mut entries = HashMap::new();
 
         // Create root directory
-        entries.insert(
-            "/".to_string(),
-            FileEntry::new_dir(0o755),
-        );
+        entries.insert("/".to_string(), FileEntry::new_dir(0o755));
 
         Self {
             entries: Arc::new(RwLock::new(entries)),
@@ -117,11 +114,7 @@ impl MemFileSystem {
         }
 
         let normalized = Self::normalize_path(path);
-        normalized
-            .split('/')
-            .last()
-            .unwrap_or("")
-            .to_string()
+        normalized.split('/').last().unwrap_or("").to_string()
     }
 
     /// List entries in a directory
@@ -287,6 +280,9 @@ impl FileSystem for MemFileSystem {
                     WriteFlag::Create | WriteFlag::Truncate => {
                         entry.data = data.to_vec();
                     }
+                    WriteFlag::CreateNew => {
+                        return Err(Error::AlreadyExists(normalized));
+                    }
                     WriteFlag::Append => {
                         entry.data.extend_from_slice(data);
                     }
@@ -306,8 +302,8 @@ impl FileSystem for MemFileSystem {
                 Ok(data.len() as u64)
             }
             None => {
-                // Create file if Create flag is set
-                if matches!(flags, WriteFlag::Create) {
+                // Create file if Create or CreateNew flag is set
+                if matches!(flags, WriteFlag::Create | WriteFlag::CreateNew) {
                     // Check parent exists
                     if let Some(parent) = Self::parent_path(&normalized) {
                         match entries.get(&parent) {
@@ -326,6 +322,39 @@ impl FileSystem for MemFileSystem {
                 }
             }
         }
+    }
+
+    /// Atomically replace a memory file when its content matches `expected`.
+    async fn compare_and_write(
+        &self,
+        path: &str,
+        expected: &[u8],
+        new_data: &[u8],
+    ) -> Result<bool> {
+        let normalized = Self::normalize_path(path);
+        let mut entries = self.entries.write().await;
+        let Some(entry) = entries.get_mut(&normalized) else {
+            return Ok(false);
+        };
+        if entry.is_dir || entry.data != expected {
+            return Ok(false);
+        }
+        entry.data = new_data.to_vec();
+        entry.touch();
+        Ok(true)
+    }
+
+    /// Atomically remove a memory file when its content matches `expected`.
+    async fn compare_and_remove(&self, path: &str, expected: &[u8]) -> Result<bool> {
+        let normalized = Self::normalize_path(path);
+        let mut entries = self.entries.write().await;
+        let matches = entries
+            .get(&normalized)
+            .is_some_and(|entry| !entry.is_dir && entry.data == expected);
+        if matches {
+            entries.remove(&normalized);
+        }
+        Ok(matches)
     }
 
     async fn read_dir(&self, path: &str) -> Result<Vec<FileInfo>> {
@@ -439,6 +468,40 @@ impl FileSystem for MemFileSystem {
             }
         }
 
+        Ok(())
+    }
+
+    async fn replace(&self, src_path: &str, dst_path: &str) -> Result<()> {
+        let src_normalized = Self::normalize_path(src_path);
+        let dst_normalized = Self::normalize_path(dst_path);
+        let mut entries = self.entries.write().await;
+
+        let src_entry = entries
+            .get(&src_normalized)
+            .ok_or_else(|| Error::not_found(&src_normalized))?
+            .clone();
+
+        if src_entry.is_dir {
+            return Err(Error::invalid_operation(
+                "replace only supports files in memfs",
+            ));
+        }
+
+        if let Some(parent) = Self::parent_path(&dst_normalized) {
+            match entries.get(&parent) {
+                Some(e) if e.is_dir => {}
+                Some(_) => return Err(Error::NotADirectory(parent)),
+                None => return Err(Error::not_found(&parent)),
+            }
+        }
+
+        if entries.get(&dst_normalized).is_some_and(|entry| entry.is_dir) {
+            return Err(Error::IsADirectory(dst_normalized));
+        }
+
+        entries.remove(&dst_normalized);
+        entries.remove(&src_normalized);
+        entries.insert(dst_normalized, src_entry);
         Ok(())
     }
 
@@ -613,6 +676,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_replace_overwrites_existing_file() {
+        let fs = MemFileSystem::new();
+
+        fs.write("/src.txt", b"fresh", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+        fs.write("/dst.txt", b"stale", 0, WriteFlag::Create)
+            .await
+            .unwrap();
+
+        fs.replace("/src.txt", "/dst.txt").await.unwrap();
+
+        assert!(fs.stat("/src.txt").await.is_err());
+        let data = fs.read("/dst.txt", 0, 0).await.unwrap();
+        assert_eq!(data, b"fresh");
+    }
+
+    #[tokio::test]
     async fn test_write_flags() {
         let fs = MemFileSystem::new();
 
@@ -643,11 +724,7 @@ mod tests {
         let plugin = MemFSPlugin;
         assert_eq!(plugin.name(), "memfs");
 
-        let config = PluginConfig {
-            name: "memfs".to_string(),
-            mount_path: "/memfs".to_string(),
-            params: HashMap::new(),
-        };
+        let config = PluginConfig::single_backend("memfs", "/memfs", HashMap::new());
 
         assert!(plugin.validate(&config).await.is_ok());
         assert!(plugin.initialize(config).await.is_ok());

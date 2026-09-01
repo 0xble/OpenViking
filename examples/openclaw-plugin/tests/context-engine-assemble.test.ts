@@ -9,6 +9,8 @@ const cfg = memoryOpenVikingConfigSchema.parse({
   baseUrl: "http://127.0.0.1:1933",
   autoCapture: false,
   autoRecall: false,
+  ingestReplyAssist: false,
+  emitStandardDiagnostics: true,
 });
 
 function roughEstimate(messages: unknown[]): number {
@@ -106,13 +108,13 @@ describe("context-engine assemble()", () => {
 
     const liveMessages = [{ role: "user", content: "fallback live message" }];
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-1",
       messages: liveMessages,
       tokenBudget: 4096,
     });
 
-    expect(resolveAgentId).toHaveBeenCalledWith("session-1", undefined, "session-1");
-    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
+    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096);
     expect(result.estimatedTokens).toBe(
       roughEstimate(result.messages) + systemPromptTokens(result.systemPromptAddition),
     );
@@ -123,19 +125,15 @@ describe("context-engine assemble()", () => {
         content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
       },
       {
-        role: "user",
-        content: "[Archive Index]\narchive_001: Previously discussed repository setup.",
-      },
-      {
         role: "assistant",
         content: [
           { type: "text", text: "I checked the latest context." },
           { type: "text", text: "User prefers concise answers." },
           {
-            type: "toolUse",
+            type: "toolCall",
             id: "tool_123",
             name: "read_file",
-            input: { path: "src/app.ts" },
+            arguments: { path: "src/app.ts" },
           },
         ],
       },
@@ -178,6 +176,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-running",
       messages: [],
     });
@@ -188,10 +187,10 @@ describe("context-engine assemble()", () => {
       role: "assistant",
       content: [
         {
-          type: "toolUse",
+          type: "toolCall",
           id: "tool_running",
           name: "bash",
-          input: { command: "npm test" },
+          arguments: { command: "npm test" },
         },
       ],
     });
@@ -238,6 +237,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-missing-id",
       messages: [],
     });
@@ -254,6 +254,30 @@ describe("context-engine assemble()", () => {
         ],
       },
     ]);
+  });
+
+  it("records senderId from runtimeContext in assemble diagnostics", async () => {
+    const { engine, logger } = makeEngine({
+      latest_archive_overview: "",
+      pre_archive_abstracts: [],
+      messages: [],
+      estimatedTokens: 0,
+      stats: makeStats(),
+    });
+
+    await engine.assemble({
+      prompt: "current user prompt",
+      sessionId: "session-with-sender",
+      messages: [{ role: "user", content: "hello" }],
+      runtimeContext: { senderId: "telegram:12345" },
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderIdFound\":true"),
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("\"senderId\":\"telegram:12345\""),
+    );
   });
 
   it("falls back to live messages when assembled active messages look truncated", async () => {
@@ -281,6 +305,7 @@ describe("context-engine assemble()", () => {
     ];
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-fallback",
       messages: liveMessages,
       tokenBudget: 1024,
@@ -322,6 +347,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-budgeted",
       messages: [],
       tokenBudget: 1024,

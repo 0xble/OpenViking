@@ -1,15 +1,56 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
 
-"""Tests for content endpoints: read, abstract, overview."""
+"""Tests for content endpoints: read, abstract, overview, reindex."""
 
 from types import SimpleNamespace
 
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.server.routers.content import ReindexRequest, reindex
+from openviking.server.routers import content as content_router
+from openviking.server.routers.content import ReindexRequest, WriteContentRequest, reindex
 from openviking_cli.session.user_id import UserIdentifier
+
+
+def test_write_content_request_accepts_processing_mode():
+    request = WriteContentRequest(
+        uri="viking://resources/demo.md",
+        content="updated",
+        processing_mode="vectors_only",
+    )
+
+    assert request.processing_mode == "vectors_only"
+
+
+def test_write_content_request_defaults_processing_mode():
+    request = WriteContentRequest(uri="viking://resources/demo.md", content="updated")
+
+    assert request.processing_mode == "semantic_and_vectors"
+
+
+async def test_write_forwards_processing_mode_to_service(monkeypatch):
+    seen = {}
+
+    async def fake_write(**kwargs):
+        seen.update(kwargs)
+        return {"uri": kwargs["uri"], "semantic_status": "skipped"}
+
+    service = SimpleNamespace(fs=SimpleNamespace(write=fake_write))
+    monkeypatch.setattr(content_router, "get_service", lambda: service)
+    ctx = RequestContext(user=UserIdentifier("account-1", "user-1"), role=Role.USER)
+
+    response = await content_router.write(
+        WriteContentRequest(
+            uri="viking://resources/demo.md",
+            content="updated",
+            processing_mode="vectors_only",
+        ),
+        ctx,
+    )
+
+    assert response["status"] == "ok"
+    assert seen["processing_mode"] == "vectors_only"
 
 
 async def _first_child_uri(client, uri: str) -> str:
@@ -32,6 +73,65 @@ async def test_read_content(client_with_resource):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"] is not None
+
+
+async def test_read_memory_uses_visible_projection_and_raw_bypasses_it(monkeypatch):
+    ctx = RequestContext(user=UserIdentifier.the_default_user("test_user"), role=Role.USER)
+    uri = "viking://user/test_user/memories/notes/private.md"
+    raw = 'line one\nline two\n\n<!-- MEMORY_FIELDS\n{"secret": "do-not-leak"}\n-->'
+    calls = []
+
+    async def fake_read_visible(_uri, *, ctx, offset, limit):
+        calls.append((offset, limit))
+        return "visible slice"
+
+    async def fake_read(_uri, *, ctx, offset, limit):
+        lines = raw.splitlines(keepends=True)
+        return "".join(lines[offset:] if limit == -1 else lines[offset : offset + limit])
+
+    monkeypatch.setattr(
+        content_router,
+        "get_service",
+        lambda: SimpleNamespace(fs=SimpleNamespace(read=fake_read, read_visible=fake_read_visible)),
+    )
+
+    response = await content_router.read(uri=uri, offset=4, limit=1, raw=False, _ctx=ctx)
+    assert response.result == "visible slice"
+    assert calls[-1] == (4, 1)
+
+    raw_response = await content_router.read(uri=uri, offset=4, limit=1, raw=True, _ctx=ctx)
+    assert raw_response.result == '{"secret": "do-not-leak"}\n'
+    assert calls[-1] == (4, 1)
+
+
+async def test_read_directory_uri_returns_invalid_argument(client_with_resource):
+    client, uri = client_with_resource
+
+    resp = await client.get("/api/v1/content/read", params={"uri": uri})
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "Directory URI is not readable as a file" in body["error"]["message"]
+    assert "List it first, then read a file URI." in body["error"]["message"]
+    assert body["error"]["details"] == {
+        "resource": uri,
+        "expected": "file",
+        "actual": "directory",
+    }
+
+
+@pytest.mark.parametrize("uri", ["viking://temp/generated", "viking://queue/tasks"])
+async def test_read_internal_scope_uri_returns_invalid_uri(client, uri: str):
+    resp = await client.get("/api/v1/content/read", params={"uri": uri})
+
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_URI"
+    assert "Must be one of" in body["error"]["message"]
+    assert "frozenset" not in body["error"]["message"]
 
 
 async def test_abstract_content(client_with_resource):
@@ -73,12 +173,12 @@ async def test_overview_missing_uri_returns_not_found(client):
 
 
 async def test_reindex_missing_uri(client):
-    """Test reindex without uri field returns 422."""
+    """Test reindex without uri field returns structured INVALID_ARGUMENT."""
     resp = await client.post(
         "/api/v1/content/reindex",
-        json={"regenerate": False},
+        json={"mode": "vectors_only"},
     )
-    assert resp.status_code == 422
+    assert resp.status_code == 400
 
 
 async def test_reindex_endpoint_registered(client):
@@ -91,15 +191,14 @@ async def test_reindex_request_validation(client):
     """Test reindex validates the request body schema."""
     # Empty body — uri is required
     resp = await client.post("/api/v1/content/reindex", json={})
-    assert resp.status_code == 422
+    assert resp.status_code == 400
 
-    # Invalid type for regenerate
+    # Invalid mode should not be accepted by the endpoint
     resp = await client.post(
         "/api/v1/content/reindex",
-        json={"uri": "viking://resources/test", "regenerate": "not_a_bool"},
+        json={"uri": "viking://resources/test", "mode": "not_a_mode"},
     )
-    # Pydantic coerces strings to bool, so this may or may not fail
-    assert resp.status_code in (200, 422, 500)
+    assert resp.status_code in (200, 400)
 
 
 async def test_reindex_wait_parameter_schema(client):
@@ -119,38 +218,46 @@ async def test_reindex_uses_request_tenant_for_exists(monkeypatch):
     """Reindex must validate URI existence inside the caller's tenant."""
     seen = {}
 
-    class FakeVikingFS:
-        async def exists(self, uri, ctx=None):
+    class FakeService:
+        async def reindex(self, *, uri, mode, wait, ctx, dry_run=False):
             seen["uri"] = uri
+            seen["mode"] = mode
+            seen["wait"] = wait
             seen["ctx"] = ctx
-            return True
-
-    class FakeTracker:
-        def has_running(self, task_type, uri, owner_account_id=None, owner_user_id=None):
-            return False
-
-    async def fake_do_reindex(service, uri, regenerate, ctx):
-        return {"status": "success", "message": "Indexed 1 resources"}
+            return {"status": "completed", "uri": uri, "mode": mode}
 
     ctx = RequestContext(
-        user=UserIdentifier(account_id="test", user_id="alice", agent_id="default"),
+        user=UserIdentifier(account_id="test", user_id="alice"),
         role=Role.ADMIN,
     )
-    request = ReindexRequest(uri="viking://resources/demo/demo-note.md", wait=True)
-
-    monkeypatch.setattr("openviking.storage.viking_fs.get_viking_fs", lambda: FakeVikingFS())
-    monkeypatch.setattr(
-        "openviking.service.task_tracker.get_task_tracker",
-        lambda: FakeTracker(),
+    request = ReindexRequest(
+        uri="viking://resources/demo/demo-note.md",
+        mode="semantic_and_vectors",
+        wait=True,
     )
-    monkeypatch.setattr(
-        "openviking.server.routers.content.get_service",
-        lambda: SimpleNamespace(),
-    )
-    monkeypatch.setattr("openviking.server.routers.content._do_reindex", fake_do_reindex)
 
-    response = await reindex(request=request, _ctx=ctx)
+    monkeypatch.setattr("openviking.server.routers.content.get_service", lambda: FakeService())
+
+    response = await reindex(body=request, ctx=ctx)
 
     assert response.status == "ok"
     assert seen["uri"] == "viking://resources/demo/demo-note.md"
+    assert seen["mode"] == "semantic_and_vectors"
+    assert seen["wait"] is True
     assert seen["ctx"] == ctx
+
+
+async def test_content_rebuild_endpoint_removed(client):
+    response = await client.post(
+        "/api/v1/content/rebuild",
+        json={"uri": "viking://resources/demo", "mode": "vectors_only"},
+    )
+    assert response.status_code == 404
+
+
+async def test_maintenance_reindex_endpoint_removed(client):
+    response = await client.post(
+        "/api/v1/maintenance/reindex",
+        json={"uri": "viking://resources/demo", "wait": True},
+    )
+    assert response.status_code == 404

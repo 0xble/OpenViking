@@ -38,6 +38,12 @@ class ICollection(ABC):
     def drop(self):
         raise NotImplementedError
 
+    def begin_bulk_ingest(self) -> None:
+        """Suspend optional derived-index maintenance across a bulk write scope."""
+
+    def end_bulk_ingest(self) -> None:
+        """Resume optional derived-index maintenance after a bulk write scope."""
+
     @abstractmethod
     def create_index(self, index_name: str, meta_data: Dict[str, Any]) -> IIndex:
         raise NotImplementedError
@@ -152,6 +158,10 @@ class ICollection(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def update_data(self, data_list: List[Dict[str, Any]]):
+        raise NotImplementedError
+
+    @abstractmethod
     def fetch_data(self, primary_keys: List[Any]):
         raise NotImplementedError
 
@@ -239,6 +249,22 @@ class Collection:
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
         return self.__collection.drop()
+
+    def begin_bulk_ingest(self) -> None:
+        """Coalesce derived-index maintenance across multiple write calls.
+
+        This is a maintenance hint, not a transaction or atomicity boundary.
+        Backends that do not maintain derived indexes may treat it as a no-op.
+        """
+        if self.__collection is None:
+            raise RuntimeError("Collection is closed")
+        self.__collection.begin_bulk_ingest()
+
+    def end_bulk_ingest(self) -> None:
+        """End a matching :meth:`begin_bulk_ingest` scope."""
+        if self.__collection is None:
+            raise RuntimeError("Collection is closed")
+        self.__collection.end_bulk_ingest()
 
     def get_meta_data(self) -> Dict[str, Any]:
         """
@@ -578,6 +604,21 @@ class Collection:
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
         return self.__collection.upsert_data(data_list, ttl)
+
+    def update_data(self, data_list: List[Dict[str, Any]]) -> Any:
+        """
+        Update existing data in the collection using only explicitly provided fields.
+
+        Args:
+            data_list (List[Dict[str, Any]]): List of partial data documents to update.
+                Each document must contain the primary key.
+
+        Returns:
+            Any: Implementation-specific result for the updated records.
+        """
+        if self.__collection is None:
+            raise RuntimeError("Collection is closed")
+        return self.__collection.update_data(data_list)
 
     def fetch_data(self, primary_keys: List[Any]) -> List[Dict[str, Any]]:
         """

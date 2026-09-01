@@ -14,20 +14,40 @@
 
 OpenViking 支持通过 Python Package 安装作为本地库使用，也支持通过 Docker 快速启动独立服务。
 
-### 方式一：通过 pip 安装 (作为本地库)
+### 方式一：通过 Python 包安装（作为本地命令和库）
 
-```bash
+选择你常用的 Python 包管理工具安装 OpenViking：
+
+::: code-group
+
+```bash [uv（推荐）]
+uv tool install openviking --upgrade
+```
+
+```bash [pip]
 pip install openviking --upgrade --force-reinstall
 ```
+
+```bash [pipx]
+# 安装
+pipx install openviking
+
+# 更新
+pipx upgrade openviking
+```
+
+:::
+
+安装完成后，可以使用客户端命令 `ov`（`openviking` 是其别名）和服务端命令 `openviking-server`。
 
 ### 方式二：通过 Docker 启动 (作为独立服务)
 
 如果你希望将 OpenViking 作为独立的服务运行，推荐使用 Docker。
 
-1. **准备配置文件与数据目录**
-   在宿主机上创建数据目录，并准备好 `ov.conf` 配置文件（配置项参考下方“配置环境”章节）：
+1. **准备配置目录**
+   在宿主机上创建 OpenViking 目录，并准备好 `ov.conf` 配置文件（配置项参考下方“配置环境”章节）。所有持久化状态 —— 配置和工作区数据 —— 都放在这一个目录下：
    ```bash
-   mkdir -p ~/.openviking/data
+   mkdir -p ~/.openviking
    touch ~/.openviking/ov.conf
    ```
 
@@ -40,10 +60,8 @@ pip install openviking --upgrade --force-reinstall
        container_name: openviking
        ports:
          - "1933:1933"
-         - "8020:8020"
        volumes:
-         - ~/.openviking/ov.conf:/app/ov.conf
-         - ~/.openviking/data:/app/data
+         - ~/.openviking:/app/.openviking
        restart: unless-stopped
    ```
    然后在同目录下执行启动命令：
@@ -51,7 +69,9 @@ pip install openviking --upgrade --force-reinstall
    docker-compose up -d
    ```
 
-   默认情况下，容器会同时启动 OpenViking API 服务（`1933`）、Console 界面（`8020`）以及内置的 `vikingbot` gateway。如果你需要关闭 `vikingbot`，可以在 Compose 里增加 `command: ["--without-bot"]`，或者设置 `environment: ["OPENVIKING_WITH_BOT=0"]`。
+   默认情况下，容器会启动 OpenViking API 服务（`1933`，同时在 `/studio` 提供 Web Studio 前端）以及内置的 `vikingbot` gateway。如果你需要关闭 `vikingbot`，可以在 Compose 里增加 `command: ["--without-bot"]`，或者设置 `environment: ["OPENVIKING_WITH_BOT=0"]`。
+
+   如果运行平台不支持 bind mount，可以通过 `OPENVIKING_CONF_CONTENT` 环境变量传入完整的配置 JSON，或在容器启动后 `docker exec` 进去执行 `openviking-server init`。详见 [部署指南](../guides/03-deployment.md#无法使用-docker--v-时)。
 
 > **💡 Mac 本地网络访问提示 (Connection reset 报错)：**
 >
@@ -64,11 +84,9 @@ pip install openviking --upgrade --force-reinstall
 >   openviking:
 >     image: ghcr.io/volcengine/openviking:latest
 >     ports:
->       - "8020:8020"
 >       - "1933:1934" # 将宿主机 1933 映射到容器 1934
 >     volumes:
->       - ~/.openviking/ov.conf:/app/ov.conf
->       - ~/.openviking/data:/app/data
+>       - ~/.openviking:/app/.openviking
 >     command: /bin/sh -c "apt-get update && apt-get install -y socat && socat TCP-LISTEN:1934,fork,reuseaddr TCP:127.0.0.1:1933 & openviking-server"
 > ```
 > 这样即可完美解决 Mac 宿主机的访问问题。
@@ -82,13 +100,21 @@ OpenViking 需要以下模型能力：
 OpenViking 支持多种模型服务：
 - **火山引擎（豆包模型）**：推荐使用，成本低、性能好，新用户有免费额度。如需购买和开通，请参考：[火山引擎购买指南](../guides/02-volcengine-purchase-guide.md)
 - **OpenAI 模型**：支持 GPT-4V 等 VLM 模型和 OpenAI Embedding 模型
+- **OpenAI Codex**：支持通过 ChatGPT/Codex OAuth 使用 Codex 作为 VLM
 - **其他自定义模型服务**：支持兼容 OpenAI API 格式的模型服务
 
 ## 配置环境
 
 ### 配置文件模版
 
-创建配置文件 `~/.openviking/ov.conf`：
+推荐首次配置使用：
+
+```bash
+openviking-server init
+openviking-server doctor
+```
+
+如果你更希望手动创建，再编写 `~/.openviking/ov.conf`：
 
 ```json
 {
@@ -110,7 +136,11 @@ OpenViking 支持多种模型服务：
 }
 ```
 
+`provider`、`model`、`api_base` 和 `api_key` 取决于你选择的 VLM 服务；部分 provider 可能会使用本地 OAuth 状态，而不是手动填写 API key。
+
 各模型服务的完整配置示例请参见 [配置指南 - 配置示例](../guides/01-configuration.md#配置示例)。
+
+首次配置建议优先使用 `openviking-server init`，它会帮助你选择 provider，并生成对应场景可直接使用的配置模板。
 
 ### 设置环境变量
 
@@ -122,6 +152,21 @@ OpenViking 支持多种模型服务：
 export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 ```
 
+## 启动本地服务
+
+首次在本地运行时，完成初始化并启动服务：
+
+```bash
+openviking-server init
+openviking-server
+```
+
+保持服务运行，然后打开另一个终端执行下面的 Python SDK 示例。
+如果使用自定义配置路径，通过 `openviking-server --config /path/to/ov.conf` 启动。
+
+默认本地模式不需要 API Key；连接启用鉴权的 Server 时，先设置
+`OPENVIKING_API_KEY`。
+
 ## 运行第一个示例
 
 ### 创建 Python 脚本
@@ -129,45 +174,48 @@ export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 创建 `example.py`：
 
 ```python
-import openviking as ov
+from openviking_sdk import SyncHTTPClient
 
-# Initialize OpenViking client with data directory
-client = ov.OpenViking(path="./data")
+# 连接本地 OpenViking Server
+client = SyncHTTPClient(url="http://localhost:1933")
 
 try:
-    # Initialize the client
+    # 检查连接
     client.initialize()
 
     # Add resource (supports URL, file, or directory)
+    # Local directory scans respect .gitignore by default.
+    # Wait until semantic processing completes before inspecting the resource.
+    print("Wait for semantic processing...")
     add_result = client.add_resource(
-        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
+        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
+        wait=True,
     )
     root_uri = add_result['root_uri']
 
     # Explore the resource tree structure
-    ls_result = client.ls(root_uri)
+    ls_result = client.ls(uri=root_uri)
     print(f"Directory structure:\n{ls_result}\n")
 
     # Use glob to find markdown files
     glob_result = client.glob(pattern="**/*.md", uri=root_uri)
     if glob_result['matches']:
-        content = client.read(glob_result['matches'][0])
+        content = client.read(uri=glob_result["matches"][0])
         print(f"Content preview: {content[:200]}...\n")
 
-    # Wait for semantic processing to complete
-    print("Wait for semantic processing...")
-    client.wait_processed()
-
     # Get abstract and overview of the resource
-    abstract = client.abstract(root_uri)
-    overview = client.overview(root_uri)
+    abstract = client.abstract(uri=root_uri)
+    overview = client.overview(uri=root_uri)
     print(f"Abstract:\n{abstract}\n\nOverview:\n{overview}\n")
 
     # Perform semantic search
-    results = client.find("what is openviking", target_uri=root_uri)
+    results = client.find(
+        query="what is openviking",
+        target_uri=root_uri,
+    )
     print("Search results:")
-    for r in results.resources:
-        print(f"  {r.uri} (score: {r.score:.4f})")
+    for result in results.get("resources", []):
+        print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")
 
     # Close the client
     client.close()
@@ -185,12 +233,13 @@ python example.py
 ### 预期输出
 
 ```
+Wait for semantic processing...
+
 Directory structure:
 ...
 
 Content preview: ...
 
-Wait for semantic processing...
 Abstract:
 ...
 

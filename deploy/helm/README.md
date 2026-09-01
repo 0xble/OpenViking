@@ -14,9 +14,23 @@ Deploy OpenViking on Kubernetes using Helm.
 
 ```bash
 helm install openviking ./deploy/helm/openviking \
-  --set config.server.root_api_key="YOUR_ROOT_API_KEY" \
-  --set config.embedding.dense.api_key="YOUR_VOLCENGINE_API_KEY" \
-  --set config.vlm.api_key="YOUR_VOLCENGINE_API_KEY"
+  --set-string config.server.root_api_key="YOUR_ROOT_API_KEY" \
+  --set-string config.embedding.dense.api_key="YOUR_VOLCENGINE_API_KEY" \
+  --set-string config.vlm.api_key="YOUR_VOLCENGINE_API_KEY"
+```
+
+The chart deploys `ghcr.io/volcengine/openviking:latest` by default. To choose
+a different image tag:
+
+```bash
+# newest image from the main branch
+helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=main
+
+# pinned release image
+helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=v0.3.17
+
+# use the default latest image
+helm upgrade --install openviking ./deploy/helm/openviking --set image.tag=
 ```
 
 ### Install with Custom Values
@@ -40,7 +54,7 @@ persistence:
 
 config:
   storage:
-    workspace: /app/data/openviking_workspace
+    workspace: /app/.openviking/openviking_workspace
   log:
     level: INFO
     output: stdout
@@ -62,7 +76,7 @@ config:
     api_base: "https://ark.cn-beijing.volces.com/api/v3"
     api_key: "your-volcengine-api-key"
     provider: "volcengine"
-    model: "doubao-seed-2-0-pro-260215"
+    model: "doubao-seed-2-0-lite-260428"
     temperature: 0.0
     max_retries: 2
     thinking: false
@@ -83,6 +97,7 @@ Kubernetes secrets instead:
 ```bash
 # Create a secret
 kubectl create secret generic openviking-api-keys \
+  --from-literal=root-api-key="YOUR_ROOT_API_KEY" \
   --from-literal=embedding-api-key="YOUR_KEY" \
   --from-literal=vlm-api-key="YOUR_KEY"
 ```
@@ -90,18 +105,36 @@ kubectl create secret generic openviking-api-keys \
 Then reference it in your values:
 
 ```yaml
+config:
+  server:
+    root_api_key: "${OPENVIKING_ROOT_API_KEY}"
+  embedding:
+    dense:
+      api_key: "${OPENVIKING_EMBEDDING_API_KEY}"
+  vlm:
+    api_key: "${OPENVIKING_VLM_API_KEY}"
+
 extraEnv:
-  - name: EMBEDDING_API_KEY
+  - name: OPENVIKING_ROOT_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: openviking-api-keys
+        key: root-api-key
+  - name: OPENVIKING_EMBEDDING_API_KEY
     valueFrom:
       secretKeyRef:
         name: openviking-api-keys
         key: embedding-api-key
-  - name: VLM_API_KEY
+  - name: OPENVIKING_VLM_API_KEY
     valueFrom:
       secretKeyRef:
         name: openviking-api-keys
         key: vlm-api-key
 ```
+
+OpenViking expands environment variables inside `ov.conf` at startup, so the
+ConfigMap can contain placeholders while the actual secrets stay in Kubernetes
+Secrets.
 
 ## Configuration
 
@@ -109,13 +142,15 @@ extraEnv:
 |-----------|-------------|---------|
 | `replicaCount` | Number of replicas | `1` |
 | `image.repository` | Container image repository | `ghcr.io/volcengine/openviking` |
-| `image.tag` | Container image tag | Chart appVersion |
-| `image.pullPolicy` | Image pull policy | `IfNotPresent` |
+| `image.tag` | Container image tag (`latest`, `main`, pinned release, or empty for `latest`) | `latest` |
+| `image.pullPolicy` | Image pull policy | `Always` |
 | `service.type` | Kubernetes service type | `ClusterIP` |
 | `service.port` | Service port | `1933` |
 | `persistence.enabled` | Enable persistent storage | `true` |
 | `persistence.size` | PVC size | `20Gi` |
 | `persistence.storageClass` | Storage class name | `""` (default) |
+| `persistence.mountPath` | Container path for OpenViking persistent state | `/app/.openviking` |
+| `bot.enabled` | Start vikingbot alongside the API server | `false` |
 | `persistence.existingClaim` | Use an existing PVC | `""` |
 | `resources.limits.cpu` | CPU limit | `2` |
 | `resources.limits.memory` | Memory limit | `4Gi` |
@@ -141,8 +176,8 @@ multiple pods accessing the same RocksDB volume simultaneously.
 helm uninstall openviking
 ```
 
-Note: The PersistentVolumeClaim is not deleted automatically. To remove stored
-data:
+Note: The PersistentVolumeClaim is retained by Helm and becomes orphaned after
+uninstall. Delete it explicitly to remove the stored data:
 
 ```bash
 kubectl delete pvc openviking-data

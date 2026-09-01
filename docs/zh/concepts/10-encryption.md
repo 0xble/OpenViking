@@ -85,7 +85,7 @@ OpenViking 支持三种密钥提供程序，适应不同的部署场景：
 
 **初始化命令**：
 ```bash
-ov crypto init-key --output ~/.openviking/master.key
+ov system crypto init-key --output-file ~/.openviking/master.key
 ```
 
 ### Vault（HashiCorp Vault）
@@ -217,4 +217,4 @@ ov crypto init-key --output ~/.openviking/master.key
 
 - [存储架构](./05-storage.md) - VikingFS 和 AGFS 架构
 - [配置指南](../guides/01-configuration.md) - 加密配置详解
-- [技术设计](../../design/multi-tenant-file-encryption-desigin.md) - 加密技术设计文档
+- [多租户](./11-multi-tenant.md) - 账号、用户与 Agent 的隔离模型

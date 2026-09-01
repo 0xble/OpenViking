@@ -14,14 +14,19 @@ from rich.table import Table
 
 import openviking as ov
 
+try:
+    from openviking_live_auth import API_KEY_HELP, resolve_api_key
+except ModuleNotFoundError:  # pytest/package import path
+    from tests.integration.openviking_live_auth import API_KEY_HELP, resolve_api_key
+
 # ── 常量 ───────────────────────────────────────────────────────────────────
 
 DISPLAY_NAME = "小美"
 DEFAULT_URL = "http://localhost:1934"
 PANEL_WIDTH = 78
-DEFAULT_API_KEY = "1cf407c39990e5dc874ccc697942da4892208a86a44c4781396dfdc57aa5c98d"
-DEFAULT_AGENT_ID = "test"
+DEFAULT_API_KEY = None
 DEFAULT_SESSION_ID = "xiaomei-demo"
+ASSISTANT_PEER_ID = "xiaomei-demo-assistant"
 
 
 console = Console()
@@ -131,6 +136,7 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
             role="assistant",
             parts=[{"type": "text", "text": turn["assistant"]}],
             created_at=session_time_str,
+            peer_id=ASSISTANT_PEER_ID,
         )
 
     console.print()
@@ -160,7 +166,7 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
         console.print(f"  Task 详情: {task}")
 
     # 等待向量化队列处理完成
-    console.print(f"  [yellow]等待向量化完成...[/yellow]")
+    console.print("  [yellow]等待向量化完成...[/yellow]")
     client.wait_processed()
 
     if wait_seconds > 0:
@@ -254,8 +260,7 @@ def run_verify(client: ov.SyncHTTPClient):
 def main():
     parser = argparse.ArgumentParser(description=f"OpenViking 记忆演示 — {DISPLAY_NAME}")
     parser.add_argument("--url", default=DEFAULT_URL, help=f"Server URL (默认: {DEFAULT_URL})")
-    parser.add_argument("--api-key", default=DEFAULT_API_KEY, help="API key")
-    parser.add_argument("--agent-id", default=DEFAULT_AGENT_ID, help="Agent ID")
+    parser.add_argument("--api-key", default=DEFAULT_API_KEY, help=API_KEY_HELP)
     parser.add_argument(
         "--phase",
         choices=["all", "ingest", "verify"],
@@ -277,9 +282,7 @@ def main():
         )
     )
 
-    client = ov.SyncHTTPClient(
-        url=args.url, api_key=args.api_key, agent_id=args.agent_id, timeout=180
-    )
+    client = ov.SyncHTTPClient(url=args.url, api_key=resolve_api_key(args.api_key), timeout=180)
 
     try:
         client.initialize()

@@ -51,6 +51,9 @@ class ProviderSpec:
     # per-model param overrides, e.g. (("kimi-k2.5", {"temperature": 1.0}),)
     model_overrides: tuple[tuple[str, dict[str, Any]], ...] = ()
 
+    # Provider-specific way to request reasoning/thinking, if supported by the protocol.
+    thinking_param: str = ""  # volcengine_thinking | dashscope_enable_thinking | openai_reasoning_effort
+
     @property
     def label(self) -> str:
         return self.display_name or self.name.title()
@@ -133,6 +136,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
+        thinking_param="openai_reasoning_effort",
     ),
     # DeepSeek: needs "deepseek/" prefix for LiteLLM routing.
     ProviderSpec(
@@ -167,6 +171,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="https://ark.cn-beijing.volces.com/api/v3",
         strip_model_prefix=False,
         model_overrides=(),
+        thinking_param="volcengine_thinking",
     ),
     # Gemini: needs "gemini/" prefix for LiteLLM.
     ProviderSpec(
@@ -220,6 +225,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         default_api_base="",
         strip_model_prefix=False,
         model_overrides=(),
+        thinking_param="dashscope_enable_thinking",
     ),
     # Moonshot: Kimi models, needs "moonshot/" prefix.
     # LiteLLM requires MOONSHOT_API_BASE env var to find the endpoint.
@@ -242,14 +248,15 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     # MiniMax: needs "minimax/" prefix for LiteLLM routing.
     # Uses OpenAI-compatible API at api.minimax.io/v1.
-    # Recommended models: MiniMax-M2.7 (default), MiniMax-M2.7-highspeed (faster).
+    # Recommended models: MiniMax-M3 (default, flagship), MiniMax-M2.7 (alternative),
+    # MiniMax-M2.7-highspeed (faster).
     # Note: MiniMax does not support system messages; they are merged into the first user message.
     ProviderSpec(
         name="minimax",
         keywords=("minimax",),
         env_key="MINIMAX_API_KEY",
         display_name="MiniMax",
-        litellm_prefix="minimax",  # MiniMax-M2.7 → minimax/MiniMax-M2.7
+        litellm_prefix="minimax",  # MiniMax-M3 → minimax/MiniMax-M3
         skip_prefixes=("minimax/", "openrouter/"),
         env_extras=(),
         is_gateway=False,

@@ -30,6 +30,7 @@ from typing import List, Optional, Union
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import VIDEO_EXTENSIONS
+from openviking.parse.parsers.media.naming import resolve_media_names
 from openviking_cli.utils.config.parser_config import VideoConfig
 
 
@@ -84,10 +85,11 @@ class VideoParser(BaseParser):
 
         from openviking_cli.utils.uri import VikingURI
 
-        # Sanitize original filename (replace spaces with underscores)
-        original_filename = file_path.name.replace(" ", "_")
+        # Resolve the resource name from the caller's resource_name / source_name
+        # (falling back to the temp file name) so the filename, URI and title
+        # reflect the real upload, not the internal temp id — see resolve_media_names.
+        display_stem, stem, original_filename = resolve_media_names(file_path, ext, **kwargs)
         # Root directory name: filename stem + _ + extension (without dot)
-        stem = file_path.stem.replace(" ", "_")
         ext_no_dot = ext[1:] if ext else ""
         root_dir_name = VikingURI.sanitize_segment(f"{stem}_{ext_no_dot}")
         root_dir_uri = f"{temp_uri}/{root_dir_name}"
@@ -132,7 +134,7 @@ class VideoParser(BaseParser):
         # Create ResourceNode - metadata only, no content understanding yet
         root_node = ResourceNode(
             type=NodeType.ROOT,
-            title=file_path.stem,
+            title=display_stem,
             level=0,
             detail_file=None,
             content_path=None,
@@ -144,8 +146,8 @@ class VideoParser(BaseParser):
                 "fps": fps,
                 "format": format_str.lower(),
                 "content_type": "video",
-                "source_title": file_path.stem,
-                "semantic_name": file_path.stem,
+                "source_title": display_stem,
+                "semantic_name": display_stem,
                 "original_filename": original_filename,
             },
         )
@@ -159,82 +161,6 @@ class VideoParser(BaseParser):
             parser_name="VideoParser",
             meta={"content_type": "video", "format": format_str.lower()},
         )
-
-    async def _generate_video_description(self, file_path: Path, config: VideoConfig) -> str:
-        """
-        Generate video description using key frames and audio transcription.
-
-        Args:
-            file_path: Video file path
-            config: Video parsing configuration
-
-        Returns:
-            Video description in markdown format
-
-        TODO: Integrate with actual video processing libraries
-        """
-        # Fallback implementation - returns basic placeholder
-        return "Video description (video processing integration pending)\n\nThis is a video. Video processing feature has not yet integrated external libraries."
-
-    async def _generate_semantic_info(
-        self, node: ResourceNode, description: str, viking_fs, has_key_frames: bool
-    ):
-        """
-        Phase 2: Generate abstract and overview.
-
-        Args:
-            node: ResourceNode to update
-            description: Video description
-            viking_fs: VikingFS instance
-            has_key_frames: Whether key frames directory exists
-        """
-        # Generate abstract (short summary, < 100 tokens)
-        abstract = description[:200] if len(description) > 200 else description
-
-        # Generate overview (content summary + file list + usage instructions)
-        overview_parts = [
-            "## Content Summary\n",
-            description,
-            "\n\n## Available Files\n",
-            f"- {node.meta['original_filename']}: Original video file ({node.meta['duration']}s, {node.meta['width']}x{node.meta['height']}, {node.meta['fps']}fps, {node.meta['format'].upper()} format)\n",
-        ]
-
-        if has_key_frames:
-            overview_parts.append("- keyframes/: Directory containing extracted key frames\n")
-
-        overview_parts.append("\n## Usage\n")
-        overview_parts.append("### Play Video\n")
-        overview_parts.append("```python\n")
-        overview_parts.append("video_bytes = await video_resource.play()\n")
-        overview_parts.append("# Returns: Video file binary data\n")
-        overview_parts.append("# Purpose: Play or save the video\n")
-        overview_parts.append("```\n\n")
-
-        if has_key_frames:
-            overview_parts.append("### Get Key Frames\n")
-            overview_parts.append("```python\n")
-            overview_parts.append("keyframes = await video_resource.keyframes()\n")
-            overview_parts.append("# Returns: List of key frame resources\n")
-            overview_parts.append("# Purpose: Analyze video scenes\n")
-            overview_parts.append("```\n\n")
-
-        overview_parts.append("### Get Video Metadata\n")
-        overview_parts.append("```python\n")
-        overview_parts.append(
-            f"duration = video_resource.get_duration()  # {node.meta['duration']}s\n"
-        )
-        overview_parts.append(
-            f"resolution = video_resource.get_resolution()  # ({node.meta['width']}, {node.meta['height']})\n"
-        )
-        overview_parts.append(f"fps = video_resource.get_fps()  # {node.meta['fps']}\n")
-        overview_parts.append(f'format = video_resource.get_format()  # "{node.meta["format"]}"\n')
-        overview_parts.append("```\n")
-
-        overview = "".join(overview_parts)
-
-        # Store in node meta
-        node.meta["abstract"] = abstract
-        node.meta["overview"] = overview
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs

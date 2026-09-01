@@ -4,11 +4,13 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from openviking.utils.network_guard import (
+    _get_allowed_code_hosting_domains,
     _is_public_ip,
     _normalize_host,
     _resolve_host_addresses,
@@ -17,7 +19,6 @@ from openviking.utils.network_guard import (
     extract_remote_host,
 )
 from openviking_cli.exceptions import PermissionDeniedError
-
 
 # ── extract_remote_host ──────────────────────────────────────────────────────
 
@@ -179,6 +180,25 @@ class TestEnsurePublicRemoteTarget:
         with pytest.raises(PermissionDeniedError, match="valid destination host"):
             ensure_public_remote_target("git@github.com")
 
+    def test_generic_code_hosting_domains_are_allowlisted(self) -> None:
+        domains = [
+            "gitcode.example.com",
+            "gitee.example.com",
+            "bitbucket.example.com",
+            "codeberg.example.com",
+            "gitea.example.com",
+            "atomgit.example.com",
+            "sourcehut.example.com",
+        ]
+        code_config = SimpleNamespace(code_hosting_domains=domains)
+        config = SimpleNamespace(code=code_config)
+
+        with patch(
+            "openviking.utils.network_guard.get_openviking_config",
+            return_value=config,
+        ):
+            assert _get_allowed_code_hosting_domains() == set(domains)
+
     # -- Rejection: localhost variants --
 
     @pytest.mark.parametrize(
@@ -244,6 +264,11 @@ class TestEnsurePublicRemoteTarget:
     def test_allows_public_git_ssh(self, mock_resolve) -> None:
         mock_resolve.return_value = {"140.82.121.4"}
         ensure_public_remote_target("git@github.com:user/repo.git")  # should not raise
+
+    @patch("openviking.utils.network_guard._resolve_host_addresses")
+    def test_allows_azure_devops_domain_from_platform_specific_config(self, mock_resolve) -> None:
+        mock_resolve.return_value = {"127.0.0.1"}
+        ensure_public_remote_target("git@ssh.dev.azure.com:v3/org/project/repo")  # should not raise
 
     @patch("openviking.utils.network_guard._resolve_host_addresses")
     def test_allows_when_dns_returns_empty(self, mock_resolve) -> None:

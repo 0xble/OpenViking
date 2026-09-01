@@ -20,7 +20,7 @@ OpenViking unifies all context management through a filesystem paradigm, enablin
 | **Storage Model** | Flat vector storage | Hierarchical filesystem (AGFS) |
 | **Retrieval Method** | Single vector similarity search | Directory recursive retrieval + Intent analysis + Rerank |
 | **Output Format** | Raw chunks | Structured context (L0 Abstract/L1 Overview/L2 Details) |
-| **Memory Capability** | Not supported | Built-in 6 memory categories with auto-extraction and iteration |
+| **Memory Capability** | Not supported | Multiple extensible memory types with automatic extraction and continuous iteration |
 | **Observability** | Black box | Fully traceable retrieval trajectory |
 | **Context Types** | Documents only | Resource + Memory + Skill three types |
 
@@ -44,11 +44,16 @@ Viking URI is OpenViking's unified resource identifier, formatted as `viking://{
 viking://
 ├── resources/              # Knowledge base: documents, code, web pages, etc.
 │   └── my_project/
-├── user/                   # User context
-│   └── memories/           # User memories (preferences, entities, events)
-└── agent/                  # Agent context
-    ├── skills/             # Callable skills
-    └── memories/           # Agent memories (cases, patterns)
+├── user/
+│   └── {user_id}/          # Private context for a user
+│       ├── memories/       # User memories
+│       ├── resources/      # Private user resources
+│       ├── skills/         # Private user skills (default)
+│       └── peers/{peer_id}/
+│           ├── memories/   # Memories scoped to a peer
+│           └── resources/  # Resources scoped to a peer
+└── agent/                  # Optional account-wide Agent capabilities
+    └── skills/             # Shared skills
 ```
 
 ## Installation & Configuration
@@ -56,24 +61,29 @@ viking://
 ### What are the environment requirements?
 
 - **Python Version**: 3.10 or higher
-- **Build Tools** (if installing from source or on unsupported platforms): Go 1.19+, GCC 9+ or Clang 11+
+- **Build Tools** (if installing from source or on unsupported platforms): Rust/Cargo, GCC 9+ or Clang 11+
 - **Required Dependencies**: Embedding model (Volcengine Doubao recommended)
 - **Optional Dependencies**:
   - VLM (Vision Language Model): For multimodal content processing and semantic extraction
   - Rerank model: For improved retrieval precision
 
-### What are `binding-client` and `http-client`? Which one should I choose?
+### How does OpenViking access the AGFS filesystem?
 
-- **`binding-client` (Default)**: Runs AGFS logic directly within the Python process via CGO bindings. Advantages: extremely high performance, zero network latency; Disadvantages: requires a compiled AGFS shared library locally.
-- **`http-client`**: Communicates with a standalone `agfs-server` via HTTP. Advantages: decoupled deployment, no local Go compilation needed; Disadvantages: some network communication overhead.
+OpenViking runs the RAGFS filesystem in-process through the Rust binding
+(`ragfs_python` / `RAGFSBindingClient`). The binding executes filesystem logic
+directly within the Python process, giving extremely high performance and zero
+network latency. A compiled RAGFS shared library must be available locally
+(shipped in the prebuilt Wheel, or built from source).
 
-If your environment supports Go compilation or you've installed a Wheel package containing pre-compiled libraries, the default `binding-client` is recommended.
+> [!WARNING]
+> OpenViking no longer supports the AGFS HTTP client mode. AGFS / RAGFS filesystem access now happens only through the in-process Rust binding (`RAGFSBindingClient`). This does not affect the OpenViking server HTTP API, the `ov` CLI, or `AsyncHTTPClient` / `SyncHTTPClient` when they connect to an OpenViking server.
 
 ### What should I do if I encounter "AGFS binding library not found"?
 
-This usually means the AGFS shared library is not pre-built in your environment. You can:
-1. **Re-compile and install**: Run `pip install -e . --force-reinstall` in the project root (requires Go environment).
-2. **Switch to HTTP mode**: Set `storage.agfs.mode = "http-client"` in your `ov.conf` and ensure an `agfs-server` is running.
+This usually means the RAGFS shared library is not available in your
+environment. Re-compile and install it by running
+`pip install -e . --force-reinstall` in the project root (requires a Rust
+toolchain).
 
 ### How do I install/upgrade OpenViking?
 
@@ -100,7 +110,7 @@ Create an `~/.openviking/ov.conf` configuration file in your project directory:
   "vlm": {
     "provider": "volcengine",
     "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-pro-260215",
+    "model": "doubao-seed-2-0-lite-260428",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   },
   "rerank": {
@@ -135,18 +145,13 @@ Supports Dense, Sparse, and Hybrid embedding modes.
 ### How do I initialize the client?
 
 ```python
-import openviking as ov
+from openviking_sdk import AsyncHTTPClient
 
-# Async client - embedded mode (recommended)
-client = ov.AsyncOpenViking(path="./my_data")
-await client.initialize()
-
-# Async client - HTTP client mode
-client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 ```
 
-The SDK constructor only accepts `url`, `api_key`, and `path` parameters. Other configuration (embedding, vlm, etc.) is managed through the `ov.conf` config file.
+Embedding, VLM, storage, and other service configuration is managed by the OpenViking Server through `ov.conf`.
 
 ### What file formats are supported?
 
@@ -164,20 +169,43 @@ The SDK constructor only accepts `url`, `api_key`, and `path` parameters. Other 
 ```python
 # Add single file
 await client.add_resource(
-    "./document.pdf",
-    reason="Project technical documentation",  # Describe resource purpose to improve retrieval quality
-    target="viking://resources/docs/"  # Specify storage location
+    path="./document.pdf",
+    parent="viking://resources/docs",  # Store under this directory; the name comes from the source
+    options={"reason": "Project technical documentation"},  # Describe resource purpose to improve retrieval quality
 )
 
 # Add web page
 await client.add_resource(
-    "https://example.com/api-docs",
-    reason="API reference documentation"
+    path="https://example.com/api-docs",
+    options={"reason": "API reference documentation"},
 )
 
 # Wait for processing to complete
 await client.wait_processed()
 ```
+
+### What is the difference between `to` and `parent`? Which should I use?
+
+|  | `to` | `parent` |
+|---|---|---|
+| What you pass | The exact final URI, **including the leaf name** | An **existing directory**; the leaf name comes from the source |
+| On a name collision | No renaming. An existing target is synced to the new source, so visible entries the source does not contain are deleted | Never overwrites. Falls back to `name_1`, `name_2`, … and returns a warning |
+| When to use it | The final name is known and must be honored verbatim, or you want to update an existing resource in place | The leaf name is derived server-side (URL / repository imports, split documents), or nothing already at the destination may be touched |
+
+Leaving both empty derives the directory and the leaf name from the source, with the same collision handling as `parent`.
+
+`to` and `parent` cannot be combined; passing both is an error.
+
+### What happens when `to` points at an existing directory?
+
+The content is synced to match the new source and the metadata is kept:
+
+- **Dot-prefixed entries survive untouched** — `.abstract.md`, `.overview.md`, `.search_tags.json`, `.image_mappings.json` and friends. The sync enumerates neither side's dotfiles, so they are neither deleted nor overwritten.
+- **Everything else visible is aligned with the source** — entries the source does not contain are deleted, changed ones are overwritten, unchanged ones stay in place and keep their URI, vectors and tags.
+
+So this preserves metadata and replaces the content itself; it is not a delete-and-recreate. Use `parent` when nothing already at the destination may be touched.
+
+Note: `processing_mode="vectors_only"` skips semantic processing, so the surviving `.abstract.md` / `.overview.md` are **not** regenerated and keep describing the content that was just replaced. Use the default `semantic_and_vectors` when summaries must follow the content.
 
 ### What's the difference between `find()` and `search()`? Which should I use?
 
@@ -191,14 +219,14 @@ await client.wait_processed()
 ```python
 # find(): Simple direct semantic search
 results = await client.find(
-    "OAuth authentication flow",
-    target_uri="viking://resources/"
+    query="OAuth authentication flow",
+    target_uri="viking://resources/",
 )
 
 # search(): Complex tasks requiring intent analysis
 results = await client.search(
-    "Help me implement user login functionality",
-    session_info=session
+    query="Help me implement user login functionality",
+    session_id=session.session_id,
 )
 ```
 
@@ -211,15 +239,21 @@ results = await client.search(
 Session management is a core capability of OpenViking, supporting conversation tracking and memory extraction:
 
 ```python
+from openviking_sdk import TextPart
+
 # Create session
-session = client.session()
+session_info = await client.create_session()
+session = client.session(session_id=session_info["session_id"])
 
 # Add conversation messages
-await session.add_message("user", [{"type": "text", "text": "Help me analyze performance issues in this code"}])
-await session.add_message("assistant", [{"type": "text", "text": "Let me analyze..."}])
-
-# Mark used context (for tracking)
-await session.used(["viking://resources/code/main.py"])
+await session.add_message(
+    role="user",
+    parts=[TextPart(text="Help me analyze performance issues in this code")],
+)
+await session.add_message(
+    role="assistant",
+    parts=[TextPart(text="Let me analyze...")],
+)
 
 # Commit session to trigger memory extraction
 await session.commit()
@@ -227,31 +261,24 @@ await session.commit()
 
 ### What memory types does OpenViking support?
 
-OpenViking has 6 built-in memory categories, automatically extracted during session commit:
+OpenViking includes memory types such as `profile`, `preferences`, `entities`, `events`, `identity`, `soul`, `cases`, `trajectories`, `experiences`, `tools`, and `skills`. After a session is committed, the active memory policy determines which useful information to extract. Applications can also extend or adjust the memory types for their own needs.
 
-| Category | Belongs To | Description |
-|----------|------------|-------------|
-| **profile** | user | User basic info (name, role, etc.) |
-| **preferences** | user | User preferences (code style, tool choices, etc.) |
-| **entities** | user | Entity memories (people, projects, organizations, etc.) |
-| **events** | user | Event records (decisions, milestones, etc.) |
-| **cases** | agent | Cases learned by Agent |
-| **patterns** | agent | Patterns learned by Agent |
+Memories are stored in the current User or Peer namespace; there is no current writable `viking://agent/memories` directory. See [Context Types](../concepts/02-context-types.md) for the complete type and path mapping.
 
 ### How do I use Unix-like filesystem APIs?
 
 ```python
 # List directory contents
-items = await client.ls("viking://resources/")
+items = await client.ls(uri="viking://resources/")
 
 # Read full content (L2)
-content = await client.read("viking://resources/doc.md")
+content = await client.read(uri="viking://resources/doc.md")
 
 # Get abstract (L0)
-abstract = await client.abstract("viking://resources")
+abstract = await client.abstract(uri="viking://resources")
 
 # Get overview (L1)
-overview = await client.overview("viking://resources")
+overview = await client.overview(uri="viking://resources")
 ```
 
 ## Retrieval Optimization
@@ -294,7 +321,7 @@ This strategy finds semantically matching fragments while understanding the comp
 
 1. **Didn't wait for processing to complete**
    ```python
-   await client.add_resource("./doc.pdf")
+   await client.add_resource(path="./doc.pdf")
    await client.wait_processed()  # Must wait
    ```
 
@@ -319,7 +346,7 @@ This strategy finds semantically matching fragments while understanding the comp
 1. **Confirm resources have been processed**
    ```python
    # Check if resources exist
-   items = await client.ls("viking://resources/")
+   items = await client.ls(uri="viking://resources/")
    ```
 
 2. **Check `target_uri` filter condition**
@@ -332,7 +359,7 @@ This strategy finds semantically matching fragments while understanding the comp
 
 4. **Check L0 abstract quality**
    ```python
-   abstract = await client.abstract("viking://resources/your-doc")
+   abstract = await client.abstract(uri="viking://resources/your-doc")
    print(abstract)  # Confirm abstract accurately reflects content
    ```
 
@@ -355,7 +382,10 @@ This strategy finds semantically matching fragments while understanding the comp
 
 4. **View extracted memories**
    ```python
-   memories = await client.find("", target_uri="viking://user/memories/")
+   memories = await client.find(
+       query="",
+       target_uri="viking://~/memories/",
+   )
    ```
 
 ### Performance issues
@@ -365,24 +395,9 @@ This strategy finds semantically matching fragments while understanding the comp
 1. **Batch processing**: Adding multiple resources at once is more efficient than one by one
 2. **Set appropriate `batch_size`**: Adjust batch processing size in Embedding configuration
 3. **Use local storage**: Use `local` backend during development to reduce network latency
-4. **Async operations**: Fully utilize `AsyncOpenViking` / `AsyncHTTPClient`'s async capabilities
+4. **Async operations**: Fully utilize `AsyncHTTPClient`'s async capabilities
 
 ## Deployment
-
-### What's the difference between embedded mode and service mode?
-
-| Mode | Use Case | Characteristics |
-|------|----------|-----------------|
-| **Embedded** | Local development, single-process apps | Auto-starts AGFS subprocess, uses local vector index |
-| **Service Mode** | Production, distributed deployment | Connects to remote services, supports multi-instance concurrency, independently scalable |
-
-```python
-# Embedded mode
-client = ov.AsyncOpenViking(path="./data")
-
-# HTTP client mode (connects to a remote server)
-client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
-```
 
 ### Is OpenViking open source?
 

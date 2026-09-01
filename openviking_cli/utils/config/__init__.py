@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: AGPL-3.0
+from . import embedding_config
 from .agfs_config import AGFSConfig
+from .cache_config import CacheConfig
 from .config_loader import (
     load_json_config,
     require_config,
@@ -11,7 +13,6 @@ from .consts import (
     DEFAULT_OV_CONF,
     DEFAULT_OVCLI_CONF,
     OPENVIKING_ACCOUNT_ENV,
-    OPENVIKING_AGENT_ID_ENV,
     OPENVIKING_ALLOW_BREAK_SYSTEM_PACKAGES_ENV,
     OPENVIKING_API_KEY_ENV,
     OPENVIKING_ARK_API_KEY_ENV,
@@ -51,6 +52,8 @@ from .consts import (
     SYSTEM_CONFIG_DIR,
 )
 from .embedding_config import EmbeddingConfig
+from .git_config import GitConfig, GitLocalConfig, GitS3Config
+from .grep_config import GrepConfig, GrepEngine
 from .log_config import LogConfig
 from .open_viking_config import (
     OpenVikingConfig,
@@ -63,6 +66,7 @@ from .open_viking_config import (
 from .ovcli_config import OVCLIConfig, load_ovcli_config
 from .parser_config import (
     PARSER_CONFIG_REGISTRY,
+    AnydocConfig,
     AudioConfig,
     CodeConfig,
     HTMLConfig,
@@ -77,6 +81,7 @@ from .parser_config import (
 )
 from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
+from .retrieval_config import RetrievalConfig
 from .storage_config import StorageConfig
 from .telemetry_config import TelemetryConfig, TracerConfig
 from .vectordb_config import VectorDBBackendConfig
@@ -84,6 +89,7 @@ from .vlm_config import VLMConfig
 
 __all__ = [
     "AGFSConfig",
+    "CacheConfig",
     "SYSTEM_CONFIG_DIR",
     "DEFAULT_OV_CONF",
     "DEFAULT_OVCLI_CONF",
@@ -97,7 +103,6 @@ __all__ = [
     "OPENVIKING_API_KEY_ENV",
     "OPENVIKING_ACCOUNT_ENV",
     "OPENVIKING_USER_ENV",
-    "OPENVIKING_AGENT_ID_ENV",
     "OPENVIKING_EMBEDDING_API_KEY_ENV",
     "OPENVIKING_VLM_API_KEY_ENV",
     "OPENVIKING_ARK_API_KEY_ENV",
@@ -130,7 +135,10 @@ __all__ = [
     "OpenVikingConfig",
     "OpenVikingConfigSingleton",
     "OVCLIConfig",
+    "GrepConfig",
+    "GrepEngine",
     "RerankConfig",
+    "RetrievalConfig",
     "StorageConfig",
     "VectorDBBackendConfig",
     "VLMConfig",
@@ -141,6 +149,7 @@ __all__ = [
     "AudioConfig",
     "VideoConfig",
     "MarkdownConfig",
+    "AnydocConfig",
     "HTMLConfig",
     "TextConfig",
     "get_parser_config",
@@ -157,4 +166,7 @@ __all__ = [
     "is_valid_openviking_config",
     "TelemetryConfig",
     "TracerConfig",
+    "GitConfig",
+    "GitLocalConfig",
+    "GitS3Config",
 ]

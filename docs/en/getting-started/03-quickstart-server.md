@@ -7,9 +7,23 @@ Run OpenViking as a standalone HTTP server and connect from any client.
 - OpenViking installed (`pip install openviking --upgrade --force-reinstall`)
 - Model configuration ready (see [Quick Start](02-quickstart.md) for setup)
 
+> Python 3.14 note for Volcengine Ark users:
+> if your `ov.conf` uses `provider = "volcengine"` / Ark runtime, prefer Python 3.13 or lower for `openviking-server` right now.
+> `volcengine-python-sdk[ark]` still emits a Pydantic V1 compatibility warning on Python 3.14, so the server works but startup/version commands may print noisy warnings until the upstream SDK removes that compatibility layer.
+
 ## Start the Server
 
 Make sure you have a config file at `~/.openviking/ov.conf` with your model and storage settings (see [Configuration](../guides/01-configuration.md)).
+
+For first-time setup, run `openviking-server init` first.
+
+Before startup, validate local setup:
+
+```bash
+openviking-server doctor
+```
+
+`openviking-server doctor` validates that the configured local setup is usable, including provider-specific auth when required.
 
 ```bash
 # Config file at default path ~/.openviking/ov.conf — just start
@@ -35,6 +49,10 @@ curl http://localhost:1933/health
 # {"status": "ok"}
 ```
 
+`openviking-server doctor` checks local configuration, model access, and auth readiness. `curl /health` only confirms that the server process is already running.
+
+Web Studio is also served at `http://localhost:1933/studio` (bundled with pip/pipx installs since v0.3.21 — no Docker required).
+
 ## Connect with Python SDK
 
 ```python
@@ -57,7 +75,6 @@ import openviking as ov
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="<user-key>",
-    agent_id="my-agent",      # optional
 )
 ```
 
@@ -65,21 +82,22 @@ client = ov.SyncHTTPClient(
 
 **Administrative operations: use a `root_key`**
 
-`root_key` is for management operations (creating accounts, system status, etc.). To access tenant-scoped APIs with `root_key`, you **must** also pass `account` and `user`:
+`root_key` is for management operations (creating accounts, system status, etc.).
+Tenant-scoped data APIs such as `add_resource`, `find`, and sessions need a key
+that is bound to an account/user, such as a user key or admin key:
 
 ```python
 import openviking as ov
 
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
-    api_key="<root-key>",
-    account="acme",           # required: target tenant
-    user="alice",             # required: target user
+    api_key="<user-or-admin-key>",
 )
 ```
 
-> ⚠️ Using `root_key` for `add_resource`, `find`, etc. without `account`/`user` will return:
-> `ROOT requests to tenant-scoped APIs must include X-OpenViking-Account and X-OpenViking-User headers`
+> Using `root_key` for tenant-scoped data APIs in `api_key` mode returns
+> `PERMISSION_DENIED`. Use a user/admin key for data access, or trusted mode for
+> upstream identity assertion.
 
 See [Authentication](../guides/04-authentication.md) for details (trusted mode, CLI config, etc.).
 
@@ -95,7 +113,7 @@ try:
 
     # Add a resource
     result = client.add_resource(
-        "https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
+        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md",
     )
     root_uri = result["root_uri"]
 
@@ -103,9 +121,12 @@ try:
     client.wait_processed()
 
     # Search
-    results = client.find("what is openviking", target_uri=root_uri)
-    for r in results.resources:
-        print(f"  {r.uri} (score: {r.score:.4f})")
+    results = client.find(
+        query="what is openviking",
+        target_uri=root_uri,
+    )
+    for result in results.get("resources", []):
+        print(f"  {result['uri']} (score: {result.get('score', 0.0):.4f})")
 
 finally:
     client.close()
@@ -277,11 +298,11 @@ vim ~/.openviking/ov.conf
     }
   },
   "vlm": {
-    "api_base"   : "<api-endpoint>",   
-    "api_key"    : "<your-api-key>",   
-    "provider"   : "<provider-type>",  
+    "api_base"   : "<api-endpoint>",
+    "api_key"    : "<your-api-key>",
+    "provider"   : "<provider-type>",
     "max_retries": 2,
-    "model"      : "<model-name>"      // e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview
+    "model"      : "<model-name>"      // e.g., doubao-seed-2-0-lite-260428 or gpt-4-vision-preview
   }
 }
 

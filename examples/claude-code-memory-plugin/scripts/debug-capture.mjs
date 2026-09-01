@@ -194,8 +194,10 @@ async function fetchJSON(path, init = {}) {
   const timer = setTimeout(() => controller.abort(), cfg.captureTimeoutMs);
   try {
     const headers = { "Content-Type": "application/json" };
-    if (cfg.apiKey) headers["X-API-Key"] = cfg.apiKey;
-    if (cfg.agentId) headers["X-OpenViking-Agent"] = cfg.agentId;
+    if (cfg.apiKey) headers["Authorization"] = `Bearer ${cfg.apiKey}`;
+    if (cfg.accountId) headers["X-OpenViking-Account"] = cfg.accountId;
+    if (cfg.userId) headers["X-OpenViking-User"] = cfg.userId;
+    if (cfg.userAgent) headers["User-Agent"] = cfg.userAgent;
     const res = await fetch(url, { ...init, headers, signal: controller.signal });
     const body = await res.json();
     dim(`  ${init.method || "GET"} ${path} -> ${res.status}`);
@@ -237,9 +239,11 @@ async function captureToOpenViking(text) {
   try {
     // Step 2: Add message
     console.log("\nStep 2: Adding message...");
+    const body = { role: "user", content: text };
+    if (cfg.peerId) body.peer_id = cfg.peerId;
     const addResult = await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
       method: "POST",
-      body: JSON.stringify({ role: "user", content: text }),
+      body: JSON.stringify(body),
     });
     if (addResult) {
       ok("Message added to session");
@@ -332,7 +336,6 @@ async function main() {
   console.log(`  captureTimeoutMs: ${cfg.captureTimeoutMs}`);
   console.log(`  captureAssistant: ${cfg.captureAssistantTurns}`);
   console.log(`  debug:            ${cfg.debug}`);
-  console.log(`  agentId:          ${cfg.agentId}`);
   console.log(`  timeoutMs:        ${cfg.timeoutMs}`);
 
   let allTurns;

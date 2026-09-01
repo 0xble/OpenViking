@@ -1,20 +1,43 @@
-# System and Monitoring
+# System Status
 
-OpenViking provides system health, observability, and debug APIs for monitoring component status.
+The OpenViking System API provides health, readiness, consistency, and multi-write backend synchronization status. Component observers and Prometheus metrics are documented separately.
 
 ## API Reference
 
-### health()
+### health
 
-Basic health check endpoint. No authentication required.
+#### 1. API Implementation Overview
 
-**Python SDK (Embedded / HTTP)**
+Basic health check endpoint. No authentication required. Returns service version and health status. If authentication is provided, also returns auth mode and identity information.
 
-```python
-# Check if system is healthy
-if client.observer.is_healthy():
-    print("System OK")
-```
+**Code Entry Points**:
+- `openviking/server/routers/system.py:health_check` - HTTP route
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.health` - SDK entry
+- `crates/ov_cli/src/commands/system.rs` - CLI command
+
+#### 2. Interface and Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| profile | string | No | - | When set to `1`, `true`, `yes`, or `on`, enables request-scoped `cProfile` and appends a `profile` field to JSON responses |
+
+**`profile` behavior**:
+- `profile` is implemented at the HTTP middleware layer and works for any OpenViking endpoint that returns JSON, not just `/health`.
+- The request flag only takes effect when the server enables `server.profile_enabled = true` in `ov.conf`; otherwise the server ignores `profile=1`.
+- `profile` only applies to the current request and is automatically disabled when the request completes, so later requests do not inherit it.
+- The middleware only injects a `profile` field into JSON responses; plain text, file, and streaming responses are left unchanged.
+- The returned value is `list[string]`, where each element is one formatted `pstats` line. This makes browser JSON viewers and line-by-line UI rendering easier.
+- The `ov` CLI displays the returned `profile`. The Python HTTP client can trigger server-side profiling via `ovcli.conf.profile = true`, but most SDK methods still return only the business `result` and do not expose the top-level `profile` field directly.
+
+**`profile` column meanings**:
+- `ncalls`: Number of calls. When shown as `total/primitive`, the first value is total calls and the second is primitive calls.
+- `tottime`: Total time spent in the function body itself, excluding time in subcalls.
+- `percall` (first): `tottime / ncalls`, the average self time per call.
+- `cumtime`: Cumulative time including the current function and all of its subcalls.
+- `percall` (second): `cumtime / primitive calls`, the average cumulative time per primitive call.
+- `filename:lineno(function)`: Function location. Regular Python code shows the trimmed module path; entries like `~:0(...)` usually represent builtin or native-extension calls.
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -26,27 +49,103 @@ GET /health
 curl -X GET http://localhost:1933/health
 ```
 
+```bash
+curl -G http://localhost:1933/health \
+  --data-urlencode "profile=1"
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(url="http://localhost:1933")
+client.initialize()
+
+healthy = client.health()
+print(f"Healthy: {healthy}")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.health());
+```
+
+**Go SDK**
+
+```go
+healthy, err := client.Health(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(healthy)
+```
+
 **CLI**
 
 ```bash
-openviking health
+ov system health
 ```
 
-**Response**
+```bash
+ov --profile health
+```
+
+**Response Example**
 
 ```json
 {
   "status": "ok",
   "healthy": true,
-  "version": "0.1.x"
+  "version": "0.1.x",
+  "auth_mode": "api_key"
+}
+```
+
+**Response Example With `profile`**
+
+```json
+{
+  "status": "ok",
+  "healthy": true,
+  "version": "0.1.x",
+  "profile": [
+    "         325 function calls (310 primitive calls) in 0.004 seconds",
+    "",
+    "   Ordered by: cumulative time",
+    "   List reduced from 87 to 87 due to restriction <100>",
+    "",
+    "   ncalls  tottime  percall  cumtime  percall filename:lineno(function)",
+    "        1    0.000    0.000    0.003    0.003 starlette/middleware/base.py:112(call_next)",
+    "        1    0.000    0.000    0.001    0.001 openviking/server/routers/system.py:39(health_check)",
+    "        3    0.000    0.000    0.000    0.000 ~:0(<method 'read' of 'builtins.RAGFSBindingClient' objects>)"
+  ]
 }
 ```
 
 ---
 
-### ready()
+### ready
 
-Readiness probe for deployment environments. Returns `200` when core subsystems are ready and `503` otherwise.
+#### 1. API Implementation Overview
+
+Readiness probe for deployment environments. Checks AGFS, VectorDB, APIKeyManager, and Ollama (if configured) status. Returns 200 when all configured subsystems are ready and 503 otherwise. No authentication required (designed for Kubernetes probes).
+
+**Code Entry Points**:
+- `openviking/server/routers/system.py:readiness_check` - HTTP route
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+**Check Item Descriptions**:
+- `agfs`: Whether Viking filesystem is accessible
+- `vectordb`: Whether vector database is healthy
+- `api_key_manager`: Whether API key manager is loaded
+- `ollama`: Whether Ollama service is reachable (only if configured)
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -58,7 +157,7 @@ GET /ready
 curl -X GET http://localhost:1933/ready
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -74,15 +173,22 @@ curl -X GET http://localhost:1933/ready
 
 ---
 
-### status()
+### status
 
-Get system status including initialization state and user info.
+#### 1. API Implementation Overview
 
-**Python SDK (Embedded / HTTP)**
+Get system status including initialization state and authenticated user info. `result.user` is the authenticated request's `user_id` (from API key or headers), not the process-level service default - clients can use this to resolve multi-tenant paths.
 
-```python
-print(client.observer.system())
-```
+**Code Entry Points**:
+- `openviking/server/routers/system.py:system_status` - HTTP route
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.get_status` - SDK entry
+- `crates/ov_cli/src/commands/system.rs` - CLI command
+
+#### 2. Interface and Parameters
+
+No parameters.
+
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -95,13 +201,26 @@ curl -X GET http://localhost:1933/api/v1/system/status \
   -H "X-API-Key: your-key"
 ```
 
+**Python SDK**
+
+```python
+status = client.get_status()
+print(status)
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.getStatus());
+```
+
 **CLI**
 
 ```bash
-openviking status
+ov system status
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -116,26 +235,121 @@ openviking status
 
 ---
 
-### wait_processed()
+### consistency
 
-Wait for all asynchronous processing (embedding, semantic generation) to complete.
+#### 1. API Implementation Overview
+
+Check filesystem/vector-index consistency for a URI subtree. This is a general
+data consistency API for debugging missing index records, failed vector snapshot
+exports, and related issues. It is not an OVPack-private API;
+`ov export --include-vectors` and `ov backup --include-vectors` reuse the same
+check.
+
+The response returns only a summary and missing records. It does not return the
+full expected-record list. `missing_records` includes at most the first 20
+records; `missing_records_truncated` is `true` when more missing records exist.
+
+**Code Entry Points**:
+- `openviking/server/routers/system.py:check_consistency` - HTTP route
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.check_consistency` - SDK entry
+- `crates/ov_cli/src/commands/system.rs:consistency` - CLI command
+
+#### 2. Interface and Parameters
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | string | Yes | - | Viking URI subtree to check |
+
+#### 3. Usage Examples
+
+**HTTP API**
+
+```
+POST /api/v1/system/consistency
+Content-Type: application/json
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/system/consistency \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"uri":"viking://resources/my-project"}'
+```
+
+**Python SDK**
+
+```python
+report = client.check_consistency(uri="viking://resources/my-project")
+print(report["ok"])
+print(report["missing_records"])
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.checkConsistency("viking://resources/"));
+```
+
+**Go SDK**
+
+```go
+report, err := client.CheckConsistency(ctx, "viking://resources/my-project")
+if err != nil {
+    return err
+}
+fmt.Println(report["ok"])
+```
+
+**CLI**
+
+```bash
+ov system consistency viking://resources/my-project
+```
+
+**Response Example**
+
+```json
+{
+  "status": "ok",
+  "result": {
+	    "ok": false,
+	    "expected_count": 3,
+	    "missing_record_count": 1,
+	    "missing_records_truncated": false,
+	    "missing_records": [
+      {
+        "uri": "viking://resources/my-project/README.md",
+        "path": "README.md",
+        "level": 2,
+        "key": "README.md#level=2"
+      }
+    ]
+  }
+}
+```
+
+---
+
+### wait_processed
+
+#### 1. API Implementation Overview
+
+Wait for all asynchronous processing (embedding, semantic generation) to complete. This method blocks until all queued tasks are processed or timeout occurs.
+
+**Code Entry Points**:
+- `openviking/server/routers/system.py:wait_processed` - HTTP route
+- `openviking_cli/client/sync_http.py:SyncHTTPClient.wait_processed` - SDK entry
+- `crates/ov_cli/src/commands/system.rs` - CLI command
+
+#### 2. Interface and Parameters
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| timeout | float | No | None | Timeout in seconds |
+| timeout | float | No | None | Timeout in seconds. None means wait indefinitely |
 
-**Python SDK (Embedded / HTTP)**
-
-```python
-# Add resources
-client.add_resource("./docs/")
-
-# Wait for all processing to complete
-status = client.wait_processed()
-print(f"Processing complete: {status}")
-```
+#### 3. Usage Examples
 
 **HTTP API**
 
@@ -152,13 +366,42 @@ curl -X POST http://localhost:1933/api/v1/system/wait \
   }'
 ```
 
+**Python SDK**
+
+```python
+# Add resources
+client.add_resource(path="./docs/")
+
+# Wait for all processing to complete
+status = client.wait_processed(timeout=60.0)
+print(f"Processing complete: {status}")
+```
+
+**TypeScript SDK**
+
+```typescript
+console.log(await client.waitProcessed(60));
+```
+
+**Go SDK**
+
+```go
+status, err := client.WaitProcessed(ctx, &openviking.WaitProcessedOptions{
+    Timeout: openviking.Float64(60),
+})
+if err != nil {
+    return err
+}
+fmt.Println(status)
+```
+
 **CLI**
 
 ```bash
-openviking wait [--timeout 60]
+ov system wait --timeout 60
 ```
 
-**Response**
+**Response Example**
 
 ```json
 {
@@ -183,306 +426,105 @@ openviking wait [--timeout 60]
 
 ---
 
-## Observer API
+### backend_sync_status()
 
-The observer API provides detailed component-level monitoring.
-
-### observer.queue
-
-Get queue system status (embedding and semantic processing queues).
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-print(client.observer.queue)
-# Output:
-# [queue] (healthy)
-# Queue                 Pending  In Progress  Processed  Errors  Total
-# Embedding             0        0            10         0       10
-# Semantic              0        0            10         0       10
-# TOTAL                 0        0            20         0       20
-```
+Return multi-write backend synchronization status for a Viking URI subtree. This endpoint requires ROOT or ADMIN permission.
 
 **HTTP API**
 
-```
-GET /api/v1/observer/queue
+```http
+POST /api/v1/system/backend/sync-status
+Content-Type: application/json
 ```
 
 ```bash
-curl -X GET http://localhost:1933/api/v1/observer/queue \
-  -H "X-API-Key: your-key"
+curl -X POST http://localhost:1933/api/v1/system/backend/sync-status \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d '{"uri":"viking://resources"}'
+```
+
+The URI-path form is also available:
+
+```http
+GET /api/v1/system/sync/{sync_path}
 ```
 
 **CLI**
 
 ```bash
-openviking observer queue
+ov system backend sync-status viking://resources
 ```
 
-**Response**
+**Response example**
 
 ```json
 {
   "status": "ok",
   "result": {
-    "name": "queue",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "Queue  Pending  In Progress  Processed  Errors  Total\nEmbedding  0  0  10  0  10\nSemantic  0  0  10  0  10\nTOTAL  0  0  20  0  20"
-  },
-  "time": 0.1
+    "path": "viking://resources",
+    "entry_count": 12
+  }
 }
 ```
 
----
+`result` is supplied by the active filesystem backend. `path` identifies the queried scope and `entry_count` is the number of sync records in that scope. A backend may add diagnostics such as pending or failed records.
 
-### observer.vikingdb
+### backend_sync_retry()
 
-Get VikingDB status (collections, indexes, vector counts).
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-print(client.observer.vikingdb())
-# Output:
-# [vikingdb] (healthy)
-# Collection  Index Count  Vector Count  Status
-# context     1            55            OK
-# TOTAL       1            55
-
-# Access specific attributes
-print(client.observer.vikingdb().is_healthy)  # True
-print(client.observer.vikingdb().status)      # Status table string
-```
+Retry incomplete multi-write backend synchronization work for a URI subtree. This endpoint requires ROOT or ADMIN permission.
 
 **HTTP API**
 
-```
-GET /api/v1/observer/vikingdb
+```http
+POST /api/v1/system/backend/sync-retry
+Content-Type: application/json
 ```
 
 ```bash
-curl -X GET http://localhost:1933/api/v1/observer/vikingdb \
-  -H "X-API-Key: your-key"
+curl -X POST http://localhost:1933/api/v1/system/backend/sync-retry \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-admin-key" \
+  -d '{"uri":"viking://resources"}'
+```
+
+The URI-path form is:
+
+```http
+POST /api/v1/system/sync/{sync_path}/retry
 ```
 
 **CLI**
 
 ```bash
-openviking observer vikingdb
+ov system backend sync-retry viking://resources
 ```
 
-**Response**
+**Response example**
 
 ```json
 {
   "status": "ok",
   "result": {
-    "name": "vikingdb",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "Collection  Index Count  Vector Count  Status\ncontext  1  55  OK\nTOTAL  1  55"
-  },
-  "time": 0.1
+    "path": "viking://resources",
+    "retried": 2,
+    "failed": 0
+  }
 }
 ```
 
----
+`retried` is the number of records rescheduled by this request, and `failed` is the number that could not be scheduled. A backend may include additional diagnostic fields.
 
-### observer.models
-
-Get aggregated model subsystem status (VLM, embedding, rerank).
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-print(client.observer.models)
-# Output:
-# [models] (healthy)
-# provider_model         healthy  detail
-# dense_embedding        yes      ...
-# rerank                 yes      ...
-# vlm                    yes      ...
-```
-
-**HTTP API**
-
-```
-GET /api/v1/observer/models
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/models \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-openviking observer models
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "name": "models",
-    "is_healthy": true,
-    "has_errors": false,
-    "status": "provider_model  healthy  detail\ndense_embedding  yes  ...\nrerank  yes  ...\nvlm  yes  ..."
-  },
-  "time": 0.1
-}
-```
+The public Python, TypeScript, and Go SDKs do not currently expose multi-write backend synchronization methods, so the sections above show only HTTP and CLI tabs.
 
 ---
 
-Additional HTTP observer endpoints are also available:
-
-- `GET /api/v1/observer/lock`
-- `GET /api/v1/observer/retrieval`
-
-### observer.system
-
-Get overall system status including all components.
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-print(client.observer.system())
-# Output:
-# [queue] (healthy)
-# ...
-#
-# [vikingdb] (healthy)
-# ...
-#
-# [models] (healthy)
-# ...
-#
-# [system] (healthy)
-```
-
-**HTTP API**
-
-```
-GET /api/v1/observer/system
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/observer/system \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-openviking observer system
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "is_healthy": true,
-    "errors": [],
-    "components": {
-      "queue": {
-        "name": "queue",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      },
-      "vikingdb": {
-        "name": "vikingdb",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      },
-      "vlm": {
-        "name": "vlm",
-        "is_healthy": true,
-        "has_errors": false,
-        "status": "..."
-      }
-    }
-  },
-  "time": 0.1
-}
-```
-
----
-
-### is_healthy()
-
-Quick health check for the entire system.
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-if client.observer.is_healthy():
-    print("System OK")
-else:
-    print(client.observer.system())
-```
-
-**HTTP API**
-
-```
-GET /api/v1/debug/health
-```
-
-```bash
-curl -X GET http://localhost:1933/api/v1/debug/health \
-  -H "X-API-Key: your-key"
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "healthy": true
-  },
-  "time": 0.1
-}
-```
-
----
-
-## Data Structures
-
-### ComponentStatus
-
-Status information for a single component.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| name | str | Component name |
-| is_healthy | bool | Whether the component is healthy |
-| has_errors | bool | Whether the component has errors |
-| status | str | Status table string |
-
-### SystemStatus
-
-Overall system status including all components.
-
-| Field | Type | Description |
-|-------|------|-------------|
-| is_healthy | bool | Whether the entire system is healthy |
-| components | Dict[str, ComponentStatus] | Status of each component |
-| errors | List[str] | List of error messages |
-
----
+<a id="reindex"></a><a id="observer-api"></a>
 
 ## Related Documentation
 
 - [Resources](02-resources.md) - Resource management
 - [Retrieval](06-retrieval.md) - Search and retrieval
 - [Sessions](05-sessions.md) - Session management
+- [Runtime Observability](18-observer.md) - immediate component status
+- [Metrics](09-metrics.md) - Prometheus metrics

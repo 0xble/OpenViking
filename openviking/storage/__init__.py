@@ -8,6 +8,8 @@ native C++ engine extension is loaded while ``storage/__init__`` is
 still executing.
 """
 
+from typing import TYPE_CHECKING
+
 from openviking.storage.errors import (
     CollectionNotFoundError,
     ConnectionError,
@@ -15,7 +17,15 @@ from openviking.storage.errors import (
     RecordNotFoundError,
     SchemaError,
     StorageException,
+    VikingDBException,
 )
+
+if TYPE_CHECKING:
+    from openviking.storage.observers import BaseObserver, QueueObserver
+    from openviking.storage.queuefs import QueueManager, get_queue_manager, init_queue_manager
+    from openviking.storage.viking_fs import VikingFS, get_viking_fs, init_viking_fs
+    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+    from openviking.storage.vikingdb_manager import VikingDBManager, VikingDBManagerProxy
 
 _LAZY_IMPORTS = {
     "BaseObserver": "openviking.storage.observers",
@@ -46,6 +56,7 @@ def __getattr__(name: str):
 
 __all__ = [
     # Exceptions
+    "VikingDBException",
     "StorageException",
     "CollectionNotFoundError",
     "RecordNotFoundError",

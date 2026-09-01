@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenVikingClient } from "../../client.js";
 import { memoryOpenVikingConfigSchema } from "../../config.js";
 import { createMemoryOpenVikingContextEngine } from "../../context-engine.js";
+import { RuntimeQueryConfigStore } from "../../query-config.js";
+import { RecallTraceMemoryStore } from "../../recall-trace.js";
 
 const cfg = memoryOpenVikingConfigSchema.parse({
   mode: "remote",
@@ -42,12 +44,16 @@ function makeEngine(
   contextResult: unknown,
   opts?: {
     cfgOverrides?: Record<string, unknown>;
-    quickPrecheck?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
+    traceRecorder?: RecallTraceMemoryStore;
+    queryConfigStore?: RuntimeQueryConfigStore;
   },
 ) {
   const logger = makeLogger();
   const client = {
+    healthCheck: vi.fn().mockResolvedValue(undefined),
     getSessionContext: vi.fn().mockResolvedValue(contextResult),
+    find: vi.fn().mockResolvedValue({ memories: [], resources: [], total: 0 }),
+    read: vi.fn().mockResolvedValue(""),
   } as unknown as OpenVikingClient;
   const getClient = vi.fn().mockResolvedValue(client);
   const resolveAgentId = vi.fn((sessionId: string) => `agent:${sessionId}`);
@@ -65,13 +71,19 @@ function makeEngine(
     cfg: localCfg,
     logger,
     getClient,
-    quickPrecheck: opts?.quickPrecheck,
     resolveAgentId,
+    traceRecorder: opts?.traceRecorder,
+    queryConfigStore: opts?.queryConfigStore,
   });
 
   return {
     engine,
-    client: client as unknown as { getSessionContext: ReturnType<typeof vi.fn> },
+    client: client as unknown as {
+      getSessionContext: ReturnType<typeof vi.fn>;
+      healthCheck: ReturnType<typeof vi.fn>;
+      find: ReturnType<typeof vi.fn>;
+      read: ReturnType<typeof vi.fn>;
+    },
     getClient,
     logger,
     resolveAgentId,
@@ -79,6 +91,334 @@ function makeEngine(
 }
 
 describe("context-engine assemble()", () => {
+  it("prepends auto-recall to the latest user message during transformContext", async () => {
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "This OV context must not be rebuilt during transformContext.",
+          pre_archive_abstracts: [],
+          messages: [
+            {
+              id: "stored-current-user",
+              role: "user",
+              created_at: "2026-04-30T00:00:00Z",
+              parts: [{ type: "text", text: "stale stored prompt" }],
+            },
+          ],
+          estimatedTokens: 12,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            recallPreferAbstract: true,
+          },
+        },
+      );
+      client.find
+        .mockResolvedValueOnce({
+          memories: [
+            {
+              uri: "viking://user/default/memories/rust-pref",
+              level: 2,
+              category: "preferences",
+              abstract: "User prefers Rust for backend tasks.",
+              score: 0.93,
+            },
+          ],
+          total: 1,
+        })
+        .mockResolvedValueOnce({ memories: [], total: 0 });
+
+      const sourceMessages = [
+        { role: "user", content: "[Session History Summary]\nOlder archive summary." },
+        { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+        { role: "user", content: "what backend language should we use?" },
+      ];
+
+      const result = await engine.assemble({
+        sessionId: "session-transform",
+        messages: sourceMessages,
+      });
+
+      expect(client.getSessionContext).not.toHaveBeenCalled();
+      expect(result.messages).toHaveLength(sourceMessages.length);
+      expect(result.messages[0]).toBe(sourceMessages[0]);
+      expect(result.messages[1]).toBe(sourceMessages[1]);
+      expect(result.messages[2]?.role).toBe("user");
+      expect(result.messages[2]?.content).toMatch(/^<relevant-memories>/);
+      expect(result.messages[2]?.content).toContain("Source: openviking-auto-recall");
+      expect(result.messages[2]?.content).toContain("User prefers Rust for backend tasks.");
+      expect(result.messages[2]?.content).toContain("what backend language should we use?");
+      expect(result.systemPromptAddition).toBeUndefined();
+  });
+
+  it("passes session metadata into auto-recall trace recording during transformContext", async () => {
+      const traces = new RecallTraceMemoryStore(10);
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "unused",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          traceRecorder: traces,
+          cfgOverrides: {
+            autoRecall: true,
+            recallPreferAbstract: true,
+            recallTargetTypes: ["user"],
+          },
+        },
+      );
+      client.find.mockResolvedValueOnce({
+        memories: [
+          {
+            uri: "viking://user/default/memories/typescript-pref",
+            level: 2,
+            category: "preferences",
+            abstract: "Use TypeScript for gateway plugins.",
+            score: 0.9,
+          },
+        ],
+        total: 1,
+      });
+
+      await engine.assemble({
+        sessionId: "session-transform-trace",
+        messages: [{ role: "user", content: "which language should the gateway plugin use?" }],
+      });
+
+      const recorded = traces.query({ turn: "latest", sessionId: "session-transform-trace", limit: 10 }).entries[0]!;
+      expect(recorded.sessionId).toBe("session-transform-trace");
+      expect(recorded.ovSessionId).toBe("session-transform-trace");
+      expect(recorded.agentId).toBe("agent:session-transform-trace");
+      expect(recorded.trigger.query).toBe("which language should the gateway plugin use?");
+      expect(recorded.resourceTypes).toEqual(["user"]);
+  });
+
+  it("uses backward-compatible user and agent auto-recall by default during transformContext", async () => {
+      const traces = new RecallTraceMemoryStore(10);
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "unused",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          traceRecorder: traces,
+          cfgOverrides: {
+            autoRecall: true,
+            recallPreferAbstract: true,
+          },
+        },
+      );
+      client.find.mockImplementation(async (_query: string, options: { contextType?: string }) => ({
+        resources: [],
+        memories: options.contextType === "memory"
+          ? [{
+              uri: "viking://user/memories/project-docs",
+              level: 2,
+              category: "memory",
+              abstract: "Memory docs for the gateway plugin.",
+              score: 0.9,
+            }]
+          : [],
+        total: options.contextType === "memory" ? 1 : 0,
+      }));
+
+      await engine.assemble({
+        sessionId: "session-transform-resource-default",
+        messages: [{ role: "user", content: "where are the gateway plugin docs?" }],
+      });
+
+      expect(client.find).toHaveBeenCalledTimes(1);
+      expect(client.find.mock.calls[0]?.[1]).toMatchObject({
+        contextType: "memory",
+        targetUri: undefined,
+      });
+      const recorded = traces.query({ turn: "latest", sessionId: "session-transform-resource-default", limit: 10 }).entries[0]!;
+      expect(recorded.resourceTypes).toEqual(["user", "agent"]);
+  });
+
+  it("applies session effective query config to transformContext auto-recall", async () => {
+      const localCfg = memoryOpenVikingConfigSchema.parse({
+        ...cfg,
+        autoRecall: true,
+        recallPreferAbstract: true,
+      });
+      const queryConfigStore = RuntimeQueryConfigStore.createInMemory(localCfg);
+      await queryConfigStore.set(
+        "session",
+        { agentId: "agent:session-dynamic-query", sessionId: "session-dynamic-query" },
+        {
+          recallLimit: 1,
+          candidateLimit: 3,
+          scoreThreshold: 0.5,
+          resourceTypes: ["user"],
+          maxInjectedChars: 1000,
+        },
+      );
+      const { engine, client } = makeEngine(
+        {
+          latest_archive_overview: "unused",
+          pre_archive_abstracts: [],
+          messages: [],
+          estimatedTokens: 0,
+          stats: makeStats(),
+        },
+        {
+          cfgOverrides: {
+            autoRecall: true,
+            recallPreferAbstract: true,
+          },
+          queryConfigStore,
+        },
+      );
+      client.find.mockResolvedValueOnce({
+        memories: [
+          {
+            uri: "viking://user/default/memories/high",
+            level: 2,
+            category: "preferences",
+            abstract: "High-confidence dynamic query memory.",
+            score: 0.9,
+          },
+          {
+            uri: "viking://user/default/memories/low",
+            level: 2,
+            category: "facts",
+            abstract: "Low-confidence memory should be filtered.",
+            score: 0.1,
+          },
+        ],
+        total: 2,
+      });
+
+      const result = await engine.assemble({
+        sessionId: "session-dynamic-query",
+        messages: [{ role: "user", content: "which dynamic query memory applies?" }],
+      });
+
+      expect(client.find).toHaveBeenCalledTimes(1);
+      expect(client.find.mock.calls[0]?.[1]).toMatchObject({
+        contextType: "memory",
+        targetUri: undefined,
+        limit: 3,
+      });
+      expect(String(result.messages[0]?.content)).toContain("High-confidence dynamic query memory.");
+      expect(String(result.messages[0]?.content)).not.toContain("Low-confidence memory should be filtered.");
+  });
+
+  it("passes through transformContext messages when the latest message is not user", async () => {
+    const { engine, getClient } = makeEngine(
+      {
+        latest_archive_overview: "unused",
+        pre_archive_abstracts: [],
+        messages: [],
+        estimatedTokens: 0,
+        stats: makeStats(),
+      },
+      {
+        cfgOverrides: {
+          autoRecall: true,
+        },
+      },
+    );
+    const sourceMessages = [
+      { role: "user", content: "run the tool" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool_1", name: "bash", arguments: {} }],
+      },
+    ];
+
+    const result = await engine.assemble({
+      sessionId: "session-tool-loop",
+      messages: sourceMessages,
+    });
+
+    expect(getClient).not.toHaveBeenCalled();
+    expect(result.messages).toBe(sourceMessages);
+    expect(result.estimatedTokens).toBe(0);
+  });
+
+  it("passes through transformContext latest user messages when auto-recall is disabled", async () => {
+    const { engine, getClient } = makeEngine({
+      latest_archive_overview: "unused",
+      pre_archive_abstracts: [],
+      messages: [],
+      estimatedTokens: 0,
+      stats: makeStats(),
+    });
+    const sourceMessages = [
+      { role: "assistant", content: [{ type: "text", text: "Previous answer." }] },
+      { role: "user", content: "what backend language should we use?" },
+    ];
+
+    const result = await engine.assemble({
+      sessionId: "session-auto-recall-disabled",
+      messages: sourceMessages,
+    });
+
+    expect(getClient).not.toHaveBeenCalled();
+    expect(result.messages).toBe(sourceMessages);
+    expect(result.estimatedTokens).toBe(roughEstimate(sourceMessages));
+  });
+
+  it("treats prompt-less assemble with availableTools as main assemble", async () => {
+    const { engine, client, resolveAgentId } = makeEngine({
+      latest_archive_overview: "# Session Summary\nPreviously discussed repository setup.",
+      pre_archive_abstracts: [
+        {
+          archive_id: "archive_001",
+          abstract: "Previously discussed repository setup.",
+        },
+      ],
+      messages: [
+        {
+          id: "msg_main_no_prompt",
+          role: "assistant",
+          created_at: "2026-03-24T00:00:00Z",
+          parts: [{ type: "text", text: "Stored answer from OpenViking." }],
+        },
+      ],
+      estimatedTokens: 120,
+      stats: {
+        ...makeStats(),
+        totalArchives: 1,
+        includedArchives: 1,
+        archiveTokens: 40,
+        activeTokens: 80,
+      },
+    });
+
+    const liveMessages = [{ role: "user", content: "fallback live message" }];
+    const result = await engine.assemble({
+      sessionId: "session-main-no-prompt",
+      messages: liveMessages,
+      tokenBudget: 4096,
+      availableTools: new Set(),
+    });
+
+    expect(client.getSessionContext).toHaveBeenCalledWith(
+      "session-main-no-prompt",
+      4096,
+    );
+    expect(client.find).not.toHaveBeenCalled();
+    expect(result.messages[0]).toEqual({
+      role: "user",
+      content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
+    });
+    expect(result.messages[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "Stored answer from OpenViking." }],
+    });
+    expect(result.systemPromptAddition).toContain("Session Context Guide");
+  });
+
   it("assembles summary archive and completed tool parts into agent messages", async () => {
     const { engine, client, resolveAgentId } = makeEngine({
       latest_archive_overview: "# Session Summary\nPreviously discussed repository setup.",
@@ -119,13 +459,13 @@ describe("context-engine assemble()", () => {
 
     const liveMessages = [{ role: "user", content: "fallback live message" }];
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-1",
       messages: liveMessages,
       tokenBudget: 4096,
     });
 
-    expect(resolveAgentId).toHaveBeenCalledWith("session-1", undefined, "session-1");
-    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
+    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096);
     expect(result.estimatedTokens).toBe(
       roughEstimate(result.messages) + systemPromptTokens(result.systemPromptAddition),
     );
@@ -135,23 +475,19 @@ describe("context-engine assemble()", () => {
       content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
     });
     expect(result.messages[1]).toEqual({
-      role: "user",
-      content: "[Archive Index]\narchive_001: Previously discussed repository setup.",
-    });
-    expect(result.messages[2]).toEqual({
       role: "assistant",
       content: [
         { type: "text", text: "I checked the latest context." },
         { type: "text", text: "User prefers concise answers." },
         {
-          type: "toolUse",
+          type: "toolCall",
           id: "tool_123",
           name: "read_file",
-          input: { path: "src/app.ts" },
+          arguments: { path: "src/app.ts" },
         },
       ],
     });
-    expect(result.messages[3]).toEqual({
+    expect(result.messages[2]).toEqual({
       role: "toolResult",
       toolCallId: "tool_123",
       toolName: "read_file",
@@ -178,6 +514,7 @@ describe("context-engine assemble()", () => {
 
     const liveMessages = [{ role: "user", content: "fallback live message" }];
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "runtime-session",
       sessionKey: "agent:main:cron:nightly:run:1",
       messages: liveMessages,
@@ -190,47 +527,6 @@ describe("context-engine assemble()", () => {
       messages: liveMessages,
       estimatedTokens: roughEstimate(liveMessages),
     });
-  });
-
-  it("falls back immediately when local precheck reports OpenViking unavailable", async () => {
-    const quickPrecheck = vi.fn().mockResolvedValue({
-      ok: false as const,
-      reason: "local process is not running",
-    });
-    const { engine, client, getClient, logger } = makeEngine(
-      {
-        latest_archive_overview: "unused",
-        pre_archive_abstracts: [],
-        messages: [],
-        estimatedTokens: 123,
-        stats: makeStats(),
-      },
-      {
-        cfgOverrides: {
-          mode: "local",
-          port: 1933,
-        },
-        quickPrecheck,
-      },
-    );
-
-    const liveMessages = [{ role: "user", content: "fallback live message" }];
-    const result = await engine.assemble({
-      sessionId: "session-local",
-      messages: liveMessages,
-      tokenBudget: 4096,
-    });
-
-    expect(quickPrecheck).toHaveBeenCalledTimes(1);
-    expect(getClient).not.toHaveBeenCalled();
-    expect(client.getSessionContext).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      messages: liveMessages,
-      estimatedTokens: roughEstimate(liveMessages),
-    });
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("assemble precheck failed"),
-    );
   });
 
   it("emits a non-error toolResult for a running tool (not a synthetic error)", async () => {
@@ -262,6 +558,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-running",
       messages: [],
     });
@@ -272,10 +569,10 @@ describe("context-engine assemble()", () => {
       role: "assistant",
       content: [
         {
-          type: "toolUse",
+          type: "toolCall",
           id: "tool_running",
           name: "bash",
-          input: { command: "npm test" },
+          arguments: { command: "npm test" },
         },
       ],
     });
@@ -322,6 +619,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-missing-id",
       messages: [],
     });
@@ -365,6 +663,7 @@ describe("context-engine assemble()", () => {
     ];
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-fallback",
       messages: liveMessages,
       tokenBudget: 1024,
@@ -391,6 +690,7 @@ describe("context-engine assemble()", () => {
     ];
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-new-user",
       messages: liveMessages,
     });
@@ -426,6 +726,7 @@ describe("context-engine assemble()", () => {
     ];
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-empty-parts",
       messages: liveMessages,
     });
@@ -470,6 +771,7 @@ describe("context-engine assemble()", () => {
     });
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-budgeted",
       messages: [],
       tokenBudget: 1024,
@@ -500,6 +802,7 @@ describe("context-engine assemble()", () => {
     ];
 
     const result = await engine.assemble({
+      prompt: "current user prompt",
       sessionId: "session-error",
       messages: liveMessages,
     });
@@ -534,7 +837,11 @@ describe("context-engine assemble()", () => {
       stats: { ...makeStats(), activeTokens: 50 },
     });
 
-    const result = await engine.assemble({ sessionId: "session-tool-only", messages: [] });
+    const result = await engine.assemble({
+      prompt: "current user prompt",
+      sessionId: "session-tool-only",
+      messages: [],
+    });
 
     const emptyContentMsg = result.messages.find(
       (m) => typeof m.content === "string" && m.content === "",

@@ -17,6 +17,10 @@ from pydantic import (
 )
 
 from openviking.storage.vectordb.utils.id_generator import generate_auto_id
+from openviking.storage.vectordb.utils.json_safety import (
+    safe_json_dumps,
+    sanitize_unicode_for_json,
+)
 
 
 def get_pydantic_type(field_type: str) -> Type:
@@ -53,8 +57,8 @@ class DataProcessor:
         "float32": "float32",
         "string": "string",
         "bool": "bool",
-        "list<string>": "string",
-        "list<int64>": "string",
+        "list<string>": "list<string>",
+        "list<int64>": "list<int64>",
         "vector": None,
         "sparse_vector": None,
         "text": "string",
@@ -158,7 +162,7 @@ class DataProcessor:
         # Pydantic Validation (Type check, Defaults, Unknown fields, Custom format checks)
         # model_validate will raise ValidationError on failure
         validated_obj = self._validator_model.model_validate(data)
-        processed_data = validated_obj.model_dump()
+        processed_data = sanitize_unicode_for_json(validated_obj.model_dump())
 
         return processed_data
 
@@ -256,10 +260,10 @@ class DataProcessor:
             lat = float(parts[1].strip())
         except ValueError as exc:
             raise ValueError("geo_point lon/lat must be float") from exc
-        if not (-180.0 < lon < 180.0):
-            raise ValueError("geo_point longitude out of range (-180, 180)")
-        if not (-90.0 < lat < 90.0):
-            raise ValueError("geo_point latitude out of range (-90, 90)")
+        if not (-180.0 <= lon <= 180.0):
+            raise ValueError("geo_point longitude out of range [-180, 180]")
+        if not (-90.0 <= lat <= 90.0):
+            raise ValueError("geo_point latitude out of range [-90, 90]")
         return lon, lat
 
     def parse_radius(self, value: Any) -> float:
@@ -334,9 +338,9 @@ class DataProcessor:
     def convert_fields_for_index(self, fields_json: str) -> str:
         if not fields_json:
             return fields_json
-        data = json.loads(fields_json)
+        data = sanitize_unicode_for_json(json.loads(fields_json))
         converted = self.convert_fields_dict_for_index(data)
-        return json.dumps(converted, ensure_ascii=False)
+        return safe_json_dumps(converted, ensure_ascii=False)
 
     def _convert_time_range_node(self, node: Dict[str, Any], field_type: str) -> Dict[str, Any]:
         if field_type != "date_time":

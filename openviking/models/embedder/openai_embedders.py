@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0
 """OpenAI Embedder Implementation"""
 
-import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import openai
 
@@ -15,8 +14,10 @@ from openviking.models.embedder.base import (
 )
 from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.async_client_cache import LoopScopedAsyncClientCache
+from openviking_cli.utils import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class OpenAIDenseEmbedder(DenseEmbedderBase):
@@ -76,6 +77,8 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         input_type: Optional[str] = None,
         provider: str = "openai",
         configured_provider: Optional[str] = None,
+        encoding_format: Optional[Literal["float", "base64"]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
     ):
         """Initialize OpenAI-Compatible Dense Embedder
 
@@ -100,6 +103,15 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             config: Additional configuration dict
             extra_headers: Extra HTTP headers to include in API requests (e.g., for OpenRouter:
                           {'HTTP-Referer': 'https://your-site.com', 'X-Title': 'Your App'})
+            encoding_format: Wire format for embedding values. ``None`` (default) lets the
+                            OpenAI Python SDK pick its default (currently ``base64``). Set to
+                            ``"float"`` to send/receive plain JSON arrays — the recommended
+                            workaround when the upstream gateway cannot deserialize base64
+                            embedding payloads correctly.
+            extra_body: Extra JSON body fields merged into every embeddings request
+                       (e.g., OpenRouter provider routing:
+                       {'provider': {'sort': 'latency'}}). Keys set explicitly via
+                       query_param/document_param take precedence on conflict.
 
         Raises:
             ValueError: If api_key is not provided and env vars are not set
@@ -118,6 +130,8 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.dimension = dimension
         self.query_param = query_param
         self.document_param = document_param
+        self.encoding_format = encoding_format
+        self.extra_body = extra_body
         self._provider = provider.lower()
         self.provider = (configured_provider or provider).lower()
         self._client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
@@ -140,7 +154,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             if extra_headers:
                 self._client_kwargs["default_headers"] = extra_headers
             self.client = openai.OpenAI(**self._client_kwargs)
-        self._async_client = None
+        self._async_client_cache = LoopScopedAsyncClientCache()
 
         # Auto-detect dimension
         self._dimension = dimension
@@ -228,15 +242,21 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
     def _build_extra_body(self, is_query: bool = False) -> Optional[Dict[str, Any]]:
         """Build extra_body dict for OpenAI-compatible parameters
 
+        Starts from the configured ``extra_body`` (a general passthrough for
+        OpenAI-compatible gateways, e.g. OpenRouter provider routing), then
+        applies the query/document parameters on top so explicit
+        query_param/document_param keys always win on conflict.
+
         Args:
             is_query: Flag to indicate if this is for query embeddings
 
         Returns:
-            Dict containing input_type and other parameters if non-symmetric mode is active.
-            Supports key=value format for multiple parameters (e.g., "input_type=query,task=search").
+            Dict containing the configured extra body plus input_type and other
+            parameters if non-symmetric mode is active. Supports key=value
+            format for multiple parameters (e.g., "input_type=query,task=search").
             Only supported by OpenAI-compatible third-party models.
         """
-        extra_body = {}
+        extra_body = dict(self.extra_body) if self.extra_body else {}
 
         # Determine which parameter to use based on is_query flag
         active_param = None
@@ -260,6 +280,8 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         kwargs: Dict[str, Any] = {"input": text_input, "model": self.model_name}
         if self.dimension and self._should_send_dimensions():
             kwargs["dimensions"] = self.dimension
+        if self.encoding_format is not None:
+            kwargs["encoding_format"] = self.encoding_format
 
         extra_body = self._build_extra_body(is_query=is_query)
         if extra_body:
@@ -274,12 +296,12 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         return bool(self.api_base)
 
     def _get_async_client(self):
-        if self._async_client is None:
+        def _build_async_client():
             if self._provider == "azure":
-                self._async_client = openai.AsyncAzureOpenAI(**self._client_kwargs)
-            else:
-                self._async_client = openai.AsyncOpenAI(**self._client_kwargs)
-        return self._async_client
+                return openai.AsyncAzureOpenAI(**self._client_kwargs)
+            return openai.AsyncOpenAI(**self._client_kwargs)
+
+        return self._async_client_cache.get(_build_async_client)
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text
@@ -335,72 +357,6 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
-        """Batch embedding (OpenAI native support)
-
-        Args:
-            texts: List of texts
-            is_query: Flag to indicate if these are query embeddings
-
-        Returns:
-            List[EmbedResult]: List of embedding results
-
-        Raises:
-            RuntimeError: When API call fails
-        """
-        if not texts:
-            return []
-
-        def _call() -> List[EmbedResult]:
-            response = self.client.embeddings.create(**self._build_kwargs(texts, is_query=is_query))
-            self._update_telemetry_token_usage(response)
-
-            # Truncate vectors if needed
-            return [
-                EmbedResult(dense_vector=self._truncate_vector(item.embedding))
-                for item in response.data
-            ]
-
-        try:
-            return self._run_with_retry(
-                _call,
-                logger=logger,
-                operation_name="OpenAI batch embedding",
-            )
-        except openai.APIError as e:
-            raise RuntimeError(f"OpenAI API error: {e.message}") from e
-        except Exception as e:
-            raise RuntimeError(f"Batch embedding failed: {str(e)}") from e
-
-    async def embed_batch_async(
-        self, texts: List[str], is_query: bool = False
-    ) -> List[EmbedResult]:
-        if not texts:
-            return []
-
-        client = self._get_async_client()
-
-        async def _call() -> List[EmbedResult]:
-            response = await client.embeddings.create(
-                **self._build_kwargs(texts, is_query=is_query)
-            )
-            self._update_telemetry_token_usage(response)
-            return [
-                EmbedResult(dense_vector=self._truncate_vector(item.embedding))
-                for item in response.data
-            ]
-
-        try:
-            return await self._run_with_async_retry(
-                _call,
-                logger=logger,
-                operation_name="OpenAI async batch embedding",
-            )
-        except openai.APIError as e:
-            raise RuntimeError(f"OpenAI API error: {e.message}") from e
-        except Exception as e:
-            raise RuntimeError(f"Batch embedding failed: {str(e)}") from e
-
     def get_dimension(self) -> int:
         """Get embedding dimension
 
@@ -417,6 +373,10 @@ class OpenAISparseEmbedder(SparseEmbedderBase):
     """
 
     def __init__(self, *args, **kwargs):
+        model_name = kwargs.get("model_name")
+        if model_name is None and args:
+            model_name = str(args[0])
+        super().__init__(model_name=model_name or "openai-sparse-unsupported")
         raise NotImplementedError(
             "OpenAI does not support sparse embeddings. "
             "Consider using VolcengineSparseEmbedder or other providers."
@@ -433,6 +393,10 @@ class OpenAIHybridEmbedder(HybridEmbedderBase):
     """
 
     def __init__(self, *args, **kwargs):
+        model_name = kwargs.get("model_name")
+        if model_name is None and args:
+            model_name = str(args[0])
+        super().__init__(model_name=model_name or "openai-hybrid-unsupported")
         raise NotImplementedError(
             "OpenAI does not support hybrid embeddings. "
             "Consider using VolcengineHybridEmbedder or other providers."

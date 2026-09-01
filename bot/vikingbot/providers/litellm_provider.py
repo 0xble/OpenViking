@@ -1,17 +1,33 @@
 """LiteLLM provider implementation for multi-provider support."""
 
-import json
 import os
-from typing import Any
+from typing import Any, AsyncIterator
 
 import litellm
 from litellm import acompletion
 from loguru import logger
 
+from openviking.utils.multimodal import redact_image_data_urls
 from vikingbot.integrations.langfuse import LangfuseClient
-from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from vikingbot.providers.base import (
+    LLMProvider,
+    LLMResponse,
+    LLMStreamEvent,
+    ToolCallRequest,
+    build_stream_response,
+    merge_stream_tool_call_delta,
+    parse_tool_arguments,
+    stream_delta_value,
+)
 from vikingbot.providers.registry import find_by_model, find_gateway
 from vikingbot.utils.helpers import cal_str_tokens
+from vikingbot.utils.tracing import get_current_response_id
+
+_OPENAI_REASONING_MODEL_PREFIXES = ("gpt-5", "openai/gpt-5", "o1", "o3", "o4")
+
+
+def _is_openai_reasoning_model(model: str) -> bool:
+    return model.lower().startswith(_OPENAI_REASONING_MODEL_PREFIXES)
 
 
 class LiteLLMProvider(LLMProvider):
@@ -30,11 +46,15 @@ class LiteLLMProvider(LLMProvider):
         default_model: str = "anthropic/claude-opus-4-5",
         extra_headers: dict[str, str] | None = None,
         provider_name: str | None = None,
+        timeout: float | None = None,
+        thinking: bool = True,
         langfuse_client: LangfuseClient | None = None,
     ):
         super().__init__(api_key, api_base)
         self.default_model = default_model
         self.extra_headers = extra_headers or {}
+        self.timeout = timeout
+        self.thinking = thinking
         self.langfuse = langfuse_client or LangfuseClient.get_instance()
 
         # Detect gateway / local deployment.
@@ -104,6 +124,32 @@ class LiteLLMProvider(LLMProvider):
                     kwargs.update(overrides)
                     return
 
+    def _apply_thinking_overrides(self, model: str, kwargs: dict[str, Any]) -> None:
+        """Attach explicit thinking params only for providers that support them."""
+        if not self.thinking:
+            return
+
+        spec = self._gateway or find_by_model(model)
+        thinking_param = spec.thinking_param if spec else ""
+        model_lower = model.lower()
+
+        if thinking_param == "volcengine_thinking" or model_lower.startswith("volcengine/"):
+            kwargs["thinking"] = {"type": "enabled"}
+            return
+
+        if thinking_param == "dashscope_enable_thinking" or model_lower.startswith("dashscope/"):
+            extra_body = dict(kwargs.get("extra_body") or {})
+            extra_body["enable_thinking"] = True
+            kwargs["extra_body"] = extra_body
+            return
+
+        if (
+            (thinking_param == "openai_reasoning_effort" or not spec)
+            and _is_openai_reasoning_model(model)
+            and "reasoning_effort" not in kwargs
+        ):
+            kwargs["reasoning_effort"] = "low"
+
     def _handle_system_message(
         self, model: str, messages: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
@@ -167,7 +213,7 @@ class LiteLLMProvider(LLMProvider):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         model: str | None = None,
-        max_tokens: int = 4096,
+        max_tokens: int | None = None,
         temperature: float = 0.7,
         session_id: str | None = None,
     ) -> LLMResponse:
@@ -178,7 +224,7 @@ class LiteLLMProvider(LLMProvider):
             messages: List of message dicts with 'role' and 'content'.
             tools: Optional list of tool definitions in OpenAI format.
             model: Model identifier (e.g., 'anthropic/claude-sonnet-4-5').
-            max_tokens: Maximum tokens in response.
+            max_tokens: Maximum tokens in response. None uses the model provider default.
             temperature: Sampling temperature.
             session_id: Optional session ID for tracing.
 
@@ -193,12 +239,14 @@ class LiteLLMProvider(LLMProvider):
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
 
         # Apply model-specific overrides (e.g. kimi-k2.5 temperature)
         self._apply_model_overrides(model, kwargs)
+        self._apply_thinking_overrides(model, kwargs)
 
         # Pass api_key directly — more reliable than env vars alone
         if self.api_key:
@@ -207,6 +255,9 @@ class LiteLLMProvider(LLMProvider):
         # Pass api_base for custom endpoints
         if self.api_base:
             kwargs["api_base"] = self.api_base
+
+        if self.timeout is not None:
+            kwargs["timeout"] = self.timeout
 
         # Pass extra headers (e.g. APP-Code for AiHubMix)
         if self.extra_headers:
@@ -222,6 +273,9 @@ class LiteLLMProvider(LLMProvider):
         try:
             if self.langfuse.enabled and self.langfuse._client:
                 metadata = {"has_tools": tools is not None}
+                response_id = get_current_response_id()
+                if response_id:
+                    metadata["response_id"] = response_id
                 client = self.langfuse._client
                 # Use start_observation with generation type
                 if hasattr(client, "start_observation"):
@@ -229,9 +283,13 @@ class LiteLLMProvider(LLMProvider):
                         name="llm-chat",
                         as_type="generation",
                         model=model,
-                        input=messages,
+                        input=redact_image_data_urls(messages),
                         metadata=metadata,
                     )
+                    if response_id:
+                        self.langfuse.register_generation(
+                            response_id, langfuse_observation, metadata=metadata
+                        )
 
             response = await acompletion(**kwargs)
             llm_response = self._parse_response(response)
@@ -248,7 +306,14 @@ class LiteLLMProvider(LLMProvider):
                 # Update observation with output and usage
                 update_kwargs: dict[str, Any] = {
                     "output": output_text,
-                    "metadata": {"finish_reason": llm_response.finish_reason},
+                    "metadata": {
+                        "finish_reason": llm_response.finish_reason,
+                        **(
+                            {"response_id": get_current_response_id()}
+                            if get_current_response_id()
+                            else {}
+                        ),
+                    },
                 }
 
                 if llm_response.usage:
@@ -266,6 +331,13 @@ class LiteLLMProvider(LLMProvider):
                         usage_details["cache_read_input_tokens"] = cache_read_tokens
 
                     update_kwargs["usage_details"] = usage_details
+
+                response_id = get_current_response_id()
+                if response_id:
+                    update_kwargs["metadata"] = self.langfuse.update_generation_metadata(
+                        response_id,
+                        update_kwargs.get("metadata", {}),
+                    )
 
                 # Update the observation
                 if hasattr(langfuse_observation, "update"):
@@ -294,7 +366,14 @@ class LiteLLMProvider(LLMProvider):
                     if hasattr(langfuse_observation, "update"):
                         langfuse_observation.update(
                             output=f"Error: {str(e)}",
-                            metadata={"error": str(e)},
+                            metadata={
+                                "error": str(e),
+                                **(
+                                    {"response_id": get_current_response_id()}
+                                    if get_current_response_id()
+                                    else {}
+                                ),
+                            },
                         )
                     if hasattr(langfuse_observation, "end"):
                         langfuse_observation.end()
@@ -306,9 +385,129 @@ class LiteLLMProvider(LLMProvider):
                     pass
             # Return error as content for graceful handling
             return LLMResponse(
-                content=f"Error calling LLM: {str(e)}",
+                content=f"Error calling LLM in LiteLLM: {str(e)}",
                 finish_reason="error",
             )
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float = 0.7,
+        session_id: str | None = None,
+    ) -> AsyncIterator[LLMStreamEvent]:
+        """Send a streaming chat completion request via LiteLLM."""
+        model = self._resolve_model(model or self.default_model)
+        messages = self._handle_system_message(model, messages)
+
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        self._apply_model_overrides(model, kwargs)
+        self._apply_thinking_overrides(model, kwargs)
+
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        if self.timeout is not None:
+            kwargs["timeout"] = self.timeout
+        if self.extra_headers:
+            kwargs["extra_headers"] = self.extra_headers
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        tool_calls: dict[int, dict[str, Any]] = {}
+        finish_reason = "stop"
+        usage: dict[str, int] = {}
+
+        try:
+            response = await acompletion(**kwargs)
+            async for chunk in response:
+                if getattr(chunk, "usage", None):
+                    usage = self._parse_usage(chunk.usage)
+
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                choice = choices[0]
+                if getattr(choice, "finish_reason", None):
+                    finish_reason = choice.finish_reason or finish_reason
+
+                delta = getattr(choice, "delta", None)
+                if delta is None:
+                    continue
+
+                reasoning_delta = stream_delta_value(delta, "reasoning_content")
+                if reasoning_delta:
+                    reasoning_parts.append(reasoning_delta)
+                    yield LLMStreamEvent(type="reasoning_delta", content=reasoning_delta)
+
+                content_delta = stream_delta_value(delta, "content")
+                if content_delta:
+                    content_parts.append(content_delta)
+                    yield LLMStreamEvent(type="content_delta", content=content_delta)
+
+                for fallback_index, delta_tool_call in enumerate(
+                    getattr(delta, "tool_calls", None) or []
+                ):
+                    merge_stream_tool_call_delta(
+                        tool_calls,
+                        delta_tool_call,
+                        fallback_index=fallback_index,
+                    )
+
+            response_obj = build_stream_response(
+                content="".join(content_parts),
+                reasoning_content="".join(reasoning_parts),
+                raw_tool_calls=tool_calls,
+                finish_reason=finish_reason,
+                usage=usage,
+                token_counter=self._stream_tool_tokens,
+            )
+            yield LLMStreamEvent(type="response", response=response_obj)
+        except Exception as e:
+            yield LLMStreamEvent(
+                type="response",
+                response=LLMResponse(
+                    content=f"Error calling LLM in LiteLLM stream: {str(e)}",
+                    finish_reason="error",
+                ),
+            )
+
+    @staticmethod
+    def _parse_usage(raw_usage: Any) -> dict[str, int]:
+        if not raw_usage:
+            return {}
+        usage = {
+            "prompt_tokens": int(getattr(raw_usage, "prompt_tokens", 0) or 0),
+            "completion_tokens": int(getattr(raw_usage, "completion_tokens", 0) or 0),
+            "total_tokens": int(getattr(raw_usage, "total_tokens", 0) or 0),
+        }
+        details = getattr(raw_usage, "prompt_tokens_details", None)
+        cached = getattr(details, "cached_tokens", 0) if details else 0
+        if not cached:
+            cached = getattr(raw_usage, "cache_read_input_tokens", 0) or 0
+        if cached:
+            usage["cache_read_input_tokens"] = int(cached)
+        return usage
+
+    @staticmethod
+    def _stream_tool_tokens(name: str, raw_arguments: str) -> int:
+        tokens = cal_str_tokens(name, text_type="en")
+        if raw_arguments:
+            tokens += cal_str_tokens(raw_arguments, text_type="mixed")
+        return tokens
 
     def _parse_response(self, response: Any) -> LLMResponse:
         """Parse LiteLLM response into our standard format."""
@@ -322,11 +521,8 @@ class LiteLLMProvider(LLMProvider):
                 args = tc.function.arguments
                 tokens = cal_str_tokens(tc.function.name, text_type="en")
                 if isinstance(args, str):
-                    try:
-                        tokens += cal_str_tokens(args, text_type="mixed")
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = {"raw": args}
+                    tokens += cal_str_tokens(args, text_type="mixed")
+                args = parse_tool_arguments(args)
 
                 tool_calls.append(
                     ToolCallRequest(id=tc.id, name=tc.function.name, arguments=args, tokens=tokens)

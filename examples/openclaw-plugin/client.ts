@@ -1,5 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
-import type { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { createWriteStream } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
@@ -7,6 +6,12 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 
 import { Zip, ZipDeflate } from "fflate";
+
+import { defaultHttpTransport, type HttpTransport } from "./adapters/http-transport.js";
+import {
+  defaultResourcePackager,
+  type ResourcePackager,
+} from "./adapters/resource-packager.js";
 
 export type FindResultItem = {
   uri: string;
@@ -25,26 +30,26 @@ export type FindResult = {
   total?: number;
 };
 
-export type CaptureMode = "semantic" | "keyword";
-export type ScopeName = "user" | "agent";
-export type RuntimeIdentity = {
-  userId: string;
-  agentId: string;
-};
-export type LocalClientCacheEntry = {
-  client: OpenVikingClient;
-  process: ReturnType<typeof spawn> | null;
-};
+export type FsListEntry = string | Record<string, unknown>;
 
-export type PendingClientEntry = {
-  promise: Promise<OpenVikingClient>;
-  resolve: (c: OpenVikingClient) => void;
-  reject: (err: unknown) => void;
+export type FsListResult = FsListEntry[];
+
+export type CaptureMode = "semantic" | "keyword";
+function userSessionUri(sessionId: string): string {
+  return `viking://~/sessions/${encodeURIComponent(sessionId)}`;
+}
+
+export type OpenVikingClientOptions = {
+  transport?: HttpTransport;
+  headers?: Record<string, string>;
+  resourcePackager?: ResourcePackager;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
 };
 
 export type CommitSessionResult = {
   session_id: string;
-  /** "accepted" (async), "completed", "failed", or "timeout" (wait mode). */
+  /** "accepted" (async), "skipped" (no archive), "completed", "failed", or "timeout" (wait mode). */
   status: string;
   task_id?: string;
   archive_uri?: string;
@@ -53,6 +58,16 @@ export type CommitSessionResult = {
   memories_extracted?: Record<string, number>;
   error?: string;
   trace_id?: string;
+};
+
+export type OVMemoryPolicySwitch = {
+  enabled?: boolean;
+};
+
+export type OVMemoryPolicy = {
+  self?: OVMemoryPolicySwitch;
+  peer?: OVMemoryPolicySwitch;
+  memory_types?: string[];
 };
 
 export type TaskResult = {
@@ -78,6 +93,24 @@ export type OVMessagePart = {
   tool_output?: string;
   tool_status?: string;
   skill_uri?: string;
+  duration_ms?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  tool_output_ref?: string;
+  tool_output_truncated?: boolean;
+  tool_output_original_chars?: number;
+  tool_output_preview_chars?: number;
+  tool_output_sha256?: string;
+  tool_output_storage_uri?: string;
+  tool_output_mime_type?: string;
+  tool_output_source_ref?: string;
+  tool_output_source_offset?: number;
+  tool_output_source_limit?: number;
+  tool_output_externalization_error?: string;
+  tool_output_group_id?: string;
+  tool_output_externalized_reason?: string;
+  tool_output_group_original_chars?: number;
+  tool_output_group_budget_chars?: number;
 };
 
 export type OVMessage = {
@@ -105,6 +138,30 @@ export type SessionContextResult = {
     activeTokens: number;
     archiveTokens: number;
   };
+};
+
+export type ToolResultReadResult = {
+  tool_result_id: string;
+  content: string;
+  offset: number;
+  limit: number;
+  offset_unit: "unicode_code_point";
+  total_chars: number;
+  has_more: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+export type ToolResultSearchResult = {
+  tool_result_id: string;
+  matches: Array<{
+    offset: number;
+    offset_unit: "unicode_code_point";
+    snippet: string;
+  }>;
+};
+
+export type ToolResultListResult = {
+  tool_results: Array<Record<string, unknown>>;
 };
 
 export type SessionArchiveResult = {
@@ -163,24 +220,10 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export const localClientCache = new Map<string, LocalClientCacheEntry>();
-
-// Module-level pending promise map: shared across all plugin registrations so
-// that both [gateway] and [plugins] contexts await the same promise and
-// don't create duplicate pending promises that never resolve.
-export const localClientPendingPromises = new Map<string, PendingClientEntry>();
-
 const MEMORY_URI_PATTERNS = [
   /^viking:\/\/user\/(?:[^/]+\/)?memories(?:\/|$)/,
-  /^viking:\/\/agent\/(?:[^/]+\/)?memories(?:\/|$)/,
 ];
-const USER_STRUCTURE_DIRS = new Set(["memories"]);
-const AGENT_STRUCTURE_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
 const REMOTE_RESOURCE_PREFIXES = ["http://", "https://", "git@", "ssh://", "git://"];
-
-function md5Short(input: string): string {
-  return createHash("md5").update(input).digest("hex").slice(0, 12);
-}
 
 export function isMemoryUri(uri: string): boolean {
   return MEMORY_URI_PATTERNS.some((pattern) => pattern.test(uri));
@@ -211,45 +254,83 @@ async function cleanupUploadTempPath(path?: string): Promise<void> {
 }
 
 export class OpenVikingClient {
-  private spaceCache = new Map<string, Partial<Record<ScopeName, string>>>();
-  private identityCache = new Map<string, RuntimeIdentity>();
+  private readonly transport: HttpTransport;
+  private readonly configuredHeaders: Record<string, string>;
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly resourcePackager: ResourcePackager;
 
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
     private readonly defaultAgentId: string,
     private readonly timeoutMs: number,
-    /** When set (or defaulted), sent so ROOT key can access tenant-scoped APIs. */
+    /** When set, sent so ROOT keys or trusted deployments can select tenant identity. */
     private readonly accountId: string = "",
     private readonly userId: string = "",
     /** When set, logs routing for find + session writes (tenant headers + paths; never apiKey). */
     private readonly routingDebugLog?: (message: string) => void,
-  ) {}
+	    optionsOrLegacyUserScope: OpenVikingClientOptions | boolean = {},
+	    _legacyAgentScope?: boolean,
+	    legacyOptions?: OpenVikingClientOptions,
+	  ) {
+	    const options =
+	      typeof optionsOrLegacyUserScope === "object" && optionsOrLegacyUserScope !== null
+	        ? optionsOrLegacyUserScope
+	        : (legacyOptions ?? {});
+	    this.transport = options.transport ?? defaultHttpTransport;
+    this.configuredHeaders = options.headers ?? {};
+	    this.now = options.now ?? Date.now;
+	    this.sleep = options.sleep ?? sleep;
+    this.resourcePackager = options.resourcePackager ?? defaultResourcePackager;
+  }
 
   getDefaultAgentId(): string {
     return this.defaultAgentId;
   }
 
+  private resolveTenantHeaders():
+    | { apiKey?: string; accountId?: string; userId?: string }
+  {
+    const apiKey = this.apiKey.trim();
+    const accountId = this.accountId.trim();
+    const userId = this.userId.trim();
+    return {
+      ...(apiKey ? { apiKey } : {}),
+      ...(accountId ? { accountId } : {}),
+      ...(userId ? { userId } : {}),
+    };
+  }
+
+  private resolveActorPeerHeader(actorPeerId?: string): string | undefined {
+    const value = actorPeerId?.trim();
+    return value || undefined;
+  }
+
+  private resolveDefaultActorPeerHeader(): string {
+    const peerPrefix = this.defaultAgentId.trim();
+    return peerPrefix ? `${peerPrefix}_main` : "main";
+  }
+
   private async emitRoutingDebug(
     label: string,
     detail: Record<string, unknown>,
-    agentId?: string,
+    actorPeerId?: string,
   ): Promise<void> {
     if (!this.routingDebugLog) {
       return;
     }
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
-    const identity = await this.getRuntimeIdentity(agentId);
+    const tenantHeaders = this.resolveTenantHeaders();
+    const actorPeerHeader = this.resolveActorPeerHeader(actorPeerId);
     this.routingDebugLog(
       `openviking: ${label} ` +
         JSON.stringify({
           ...detail,
-          X_OpenViking_Agent: effectiveAgentId,
-          X_OpenViking_Account: this.accountId.trim() || "default",
-          X_OpenViking_User: this.userId.trim() || "default",
-          resolved_user_id: identity.userId,
+          X_OpenViking_Account: tenantHeaders.accountId ?? null,
+          X_OpenViking_User: tenantHeaders.userId ?? null,
+          X_OpenViking_Actor_Peer: actorPeerHeader ?? null,
           session_vfs_hint: detail.sessionId
-            ? `viking://session/${identity.userId}/${String(detail.sessionId)}`
+            ? userSessionUri(String(detail.sessionId))
             : undefined,
         }),
     );
@@ -258,27 +339,37 @@ export class OpenVikingClient {
   private async request<T>(
     path: string,
     init: RequestInit = {},
-    agentId?: string,
     requestTimeoutMs?: number,
+    actorPeerId?: string,
   ): Promise<T> {
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), requestTimeoutMs ?? this.timeoutMs);
     try {
       const headers = new Headers(init.headers ?? {});
-      if (this.apiKey) {
-        headers.set("X-API-Key", this.apiKey);
+      const tenantHeaders = this.resolveTenantHeaders();
+      if (tenantHeaders.apiKey) {
+        headers.set("X-API-Key", tenantHeaders.apiKey);
       }
-      headers.set("X-OpenViking-Account", this.accountId.trim() || "default");
-      headers.set("X-OpenViking-User", this.userId.trim() || "default");
-      if (effectiveAgentId) {
-        headers.set("X-OpenViking-Agent", effectiveAgentId);
+      if (tenantHeaders.accountId) {
+        headers.set("X-OpenViking-Account", tenantHeaders.accountId);
+      }
+      if (tenantHeaders.userId) {
+        headers.set("X-OpenViking-User", tenantHeaders.userId);
+      }
+      const actorPeerHeader = this.resolveActorPeerHeader(actorPeerId);
+      if (actorPeerHeader) {
+        headers.set("X-OpenViking-Actor-Peer", actorPeerHeader);
+      }
+      for (const [key, value] of Object.entries(this.configuredHeaders)) {
+        if (key && typeof value === "string" && value.trim()) {
+          headers.set(key, value);
+        }
       }
       if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
       }
 
-      const response = await fetch(`${this.baseUrl}${path}`, {
+      const response = await this.transport(`${this.baseUrl}${path}`, {
         ...init,
         headers,
         signal: controller.signal,
@@ -287,13 +378,17 @@ export class OpenVikingClient {
       const payload = (await response.json().catch(() => ({}))) as {
         status?: string;
         result?: T;
-        error?: { code?: string; message?: string };
+        error?: { code?: string; message?: string; trace_id?: string };
       };
 
       if (!response.ok || payload.status === "error") {
         const code = payload.error?.code ? ` [${payload.error.code}]` : "";
         const message = payload.error?.message ?? `HTTP ${response.status}`;
-        throw new Error(`OpenViking request failed${code}: ${message}`);
+        const traceId = payload.error?.trace_id;
+        throw new Error(
+          `OpenViking request failed${code}: ${message}` +
+            (traceId ? ` (trace_id=${traceId})` : ""),
+        );
       }
 
       return (payload.result ?? payload) as T;
@@ -302,139 +397,81 @@ export class OpenVikingClient {
     }
   }
 
-  async healthCheck(): Promise<void> {
-    await this.request<{ status: string }>("/health");
-  }
-
-  private async ls(uri: string, agentId?: string): Promise<Array<Record<string, unknown>>> {
-    return this.request<Array<Record<string, unknown>>>(
-      `/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&output=original`,
+  async healthCheck(requestTimeoutMs?: number, actorPeerId?: string): Promise<void> {
+    await this.request<{ status: string }>(
+      "/health",
       {},
-      agentId,
+      requestTimeoutMs,
+      actorPeerId ?? this.resolveDefaultActorPeerHeader(),
     );
   }
 
-  private async getRuntimeIdentity(agentId?: string): Promise<RuntimeIdentity> {
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
-    const cached = this.identityCache.get(effectiveAgentId);
-    if (cached) {
-      return cached;
+  async createSession(
+    sessionId: string,
+    options?: { memoryPolicy?: OVMemoryPolicy },
+  ): Promise<{ session_id: string; user?: unknown }> {
+    const body: Record<string, unknown> = { session_id: sessionId };
+    if (options?.memoryPolicy) {
+      body.memory_policy = options.memoryPolicy;
     }
-    const fallback: RuntimeIdentity = { userId: "default", agentId: effectiveAgentId || "default" };
-    try {
-      const status = await this.request<{ user?: unknown }>("/api/v1/system/status", {}, agentId);
-      const userId =
-        typeof status.user === "string" && status.user.trim() ? status.user.trim() : "default";
-      const identity: RuntimeIdentity = { userId, agentId: effectiveAgentId || "default" };
-      this.identityCache.set(effectiveAgentId, identity);
-      return identity;
-    } catch {
-      this.identityCache.set(effectiveAgentId, fallback);
-      return fallback;
-    }
+    return this.request<{ session_id: string; user?: unknown }>(
+      "/api/v1/sessions",
+      { method: "POST", body: JSON.stringify(body) },
+    );
   }
 
-  private async resolveScopeSpace(scope: ScopeName, agentId?: string): Promise<string> {
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
-    const agentScopes = this.spaceCache.get(effectiveAgentId);
-    const cached = agentScopes?.[scope];
-    if (cached) {
-      return cached;
-    }
-
-    const identity = await this.getRuntimeIdentity(agentId);
-    const fallbackSpace =
-      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
-    const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
-    const preferredSpace =
-      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
-
-    const saveSpace = (space: string) => {
-      const existing = this.spaceCache.get(effectiveAgentId) ?? {};
-      existing[scope] = space;
-      this.spaceCache.set(effectiveAgentId, existing);
-    };
-
+  async ensureSession(
+    sessionId: string,
+    options?: { memoryPolicy?: OVMemoryPolicy },
+  ): Promise<boolean> {
     try {
-      const entries = await this.ls(`viking://${scope}`, agentId);
-      const spaces = entries
-        .filter((entry) => entry?.isDir === true)
-        .map((entry) => (typeof entry.name === "string" ? entry.name.trim() : ""))
-        .filter((name) => name && !name.startsWith(".") && !reservedDirs.has(name));
-
-      if (spaces.length > 0) {
-        if (spaces.includes(preferredSpace)) {
-          saveSpace(preferredSpace);
-          return preferredSpace;
-        }
-        if (scope === "user" && spaces.includes("default")) {
-          saveSpace("default");
-          return "default";
-        }
-        if (spaces.length === 1) {
-          saveSpace(spaces[0]!);
-          return spaces[0]!;
-        }
+      await this.createSession(sessionId, options);
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message.includes("[ALREADY_EXISTS]")) {
+        return false;
       }
-    } catch {
-      // Fall back to identity-derived space when listing fails.
+      throw err;
     }
-
-    saveSpace(fallbackSpace);
-    return fallbackSpace;
-  }
-
-  private async normalizeTargetUri(targetUri: string, agentId?: string): Promise<string> {
-    const trimmed = targetUri.trim().replace(/\/+$/, "");
-    const match = trimmed.match(/^viking:\/\/(user|agent)(?:\/(.*))?$/);
-    if (!match) {
-      return trimmed;
-    }
-    const scope = match[1] as ScopeName;
-    const rawRest = (match[2] ?? "").trim();
-    if (!rawRest) {
-      return trimmed;
-    }
-    const parts = rawRest.split("/").filter(Boolean);
-    if (parts.length === 0) {
-      return trimmed;
-    }
-
-    const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
-    if (!reservedDirs.has(parts[0]!)) {
-      return trimmed;
-    }
-
-    const space = await this.resolveScopeSpace(scope, agentId);
-    return `viking://${scope}/${space}/${parts.join("/")}`;
   }
 
   async find(
     query: string,
     options: {
-      targetUri: string;
-      limit: number;
+      targetUri?: string;
+      limit?: number;
       scoreThreshold?: number;
+      contextType?: string | string[];
+      actorPeerId?: string;
     },
-    agentId?: string,
+    legacyActorPeerId?: string,
   ): Promise<FindResult> {
-    const normalizedTargetUri = await this.normalizeTargetUri(options.targetUri, agentId);
-    const body = {
+    const targetUri = options.targetUri?.trim().replace(/\/+$/, "") ?? "";
+    const body: {
+      query: string;
+      target_uri?: string;
+      limit?: number;
+      score_threshold?: number;
+      context_type?: string | string[];
+    } = {
       query,
-      target_uri: normalizedTargetUri,
       limit: options.limit,
       score_threshold: options.scoreThreshold,
+      context_type: options.contextType,
     };
-    const effectiveAgentId = agentId ?? this.defaultAgentId;
-    const identity = await this.getRuntimeIdentity(agentId);
+    if (targetUri) {
+      body.target_uri = targetUri;
+    }
+    const actorPeerId = this.resolveActorPeerHeader(options.actorPeerId ?? legacyActorPeerId);
+    const tenantHeaders = this.resolveTenantHeaders();
     this.routingDebugLog?.(
       `openviking: find POST ${this.baseUrl}/api/v1/search/find ` +
         JSON.stringify({
-          X_OpenViking_Agent: effectiveAgentId,
-          X_OpenViking_Account: this.accountId.trim() || "default",
-          X_OpenViking_User: this.userId.trim() || "default",
-          resolved_user_id: identity.userId,
-          target_uri: normalizedTargetUri,
+          X_OpenViking_Account: tenantHeaders.accountId ?? null,
+          X_OpenViking_User: tenantHeaders.userId ?? null,
+          X_OpenViking_Actor_Peer: actorPeerId ?? null,
+          target_uri: targetUri || null,
           target_uri_input: options.targetUri,
           query:
             query.length > 4000
@@ -442,34 +479,110 @@ export class OpenVikingClient {
               : query,
           limit: body.limit,
           score_threshold: body.score_threshold ?? null,
+          context_type: body.context_type ?? null,
         }),
     );
     return this.request<FindResult>("/api/v1/search/find", {
       method: "POST",
       body: JSON.stringify(body),
-    }, agentId);
+    }, undefined, actorPeerId);
   }
 
-  async read(uri: string, agentId?: string): Promise<string> {
+  async read(uri: string, actorPeerId?: string): Promise<string> {
     return this.request<string>(
       `/api/v1/content/read?uri=${encodeURIComponent(uri)}`,
       {},
-      agentId,
+      undefined,
+      actorPeerId,
     );
   }
 
-  async uploadTempFile(filePath: string, agentId?: string): Promise<string> {
-    const fileBytes = await readFile(filePath);
-    const form = new FormData();
-    form.append(
-      "file",
-      new Blob([toBlobPart(fileBytes)], { type: "application/octet-stream" }),
-      basename(filePath),
+  async list(
+    uri: string,
+    options?: {
+      recursive?: boolean;
+      simple?: boolean;
+      output?: "agent" | "original";
+      absLimit?: number;
+      showAllHidden?: boolean;
+      nodeLimit?: number;
+      actorPeerId?: string;
+    },
+  ): Promise<FsListResult> {
+    const normalizedUri = uri.trim().replace(/\/+$/, "");
+    const params = new URLSearchParams({
+      uri: normalizedUri,
+      recursive: String(options?.recursive ?? false),
+      simple: String(options?.simple ?? false),
+      output: options?.output ?? "agent",
+      abs_limit: String(options?.absLimit ?? 256),
+      show_all_hidden: String(options?.showAllHidden ?? false),
+      node_limit: String(options?.nodeLimit ?? 1000),
+    });
+    return this.request<FsListResult>(
+      `/api/v1/fs/ls?${params.toString()}`,
+      {},
+      undefined,
+      options?.actorPeerId,
     );
+  }
+
+  async readToolResult(
+    sessionId: string,
+    toolResultId: string,
+    options?: { offset?: number; limit?: number; includeMetadata?: boolean },
+  ): Promise<ToolResultReadResult> {
+    const params = new URLSearchParams();
+    if (options?.offset !== undefined) params.set("offset", String(options.offset));
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    if (options?.includeMetadata !== undefined) {
+      params.set("include_metadata", String(options.includeMetadata));
+    }
+    const query = params.toString();
+    return this.request<ToolResultReadResult>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(toolResultId)}${query ? `?${query}` : ""}`,
+      {},
+    );
+  }
+
+  async searchToolResult(
+    sessionId: string,
+    toolResultId: string,
+    queryText: string,
+    options?: { limit?: number; contextChars?: number },
+  ): Promise<ToolResultSearchResult> {
+    const params = new URLSearchParams({ q: queryText });
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    if (options?.contextChars !== undefined) {
+      params.set("context_chars", String(options.contextChars));
+    }
+    return this.request<ToolResultSearchResult>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/tool-results/${encodeURIComponent(toolResultId)}/search?${params.toString()}`,
+      {},
+    );
+  }
+
+  async listToolResults(
+    sessionId: string,
+    options?: { toolName?: string; limit?: number },
+  ): Promise<ToolResultListResult> {
+    const params = new URLSearchParams();
+    if (options?.toolName) params.set("tool_name", options.toolName);
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return this.request<ToolResultListResult>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/tool-results${query ? `?${query}` : ""}`,
+      {},
+    );
+  }
+
+  async uploadTempFile(filePath: string, actorPeerId?: string): Promise<string> {
+    const form = await this.resourcePackager.createTempUploadBody(filePath);
     const result = await this.request<{ temp_file_id: string }>(
       "/api/v1/resources/temp_upload",
       { method: "POST", body: form },
-      agentId,
+      undefined,
+      actorPeerId,
     );
     if (!result.temp_file_id) {
       throw new Error("OpenViking temp upload did not return temp_file_id");
@@ -534,7 +647,7 @@ export class OpenVikingClient {
     return zipPath;
   }
 
-  async addResource(input: AddResourceInput, agentId?: string): Promise<AddResourceResult> {
+  async addResource(input: AddResourceInput, actorPeerId?: string): Promise<AddResourceResult> {
     const pathOrUrl = input.pathOrUrl.trim();
     if (!pathOrUrl) {
       throw new Error("pathOrUrl is required");
@@ -559,36 +672,31 @@ export class OpenVikingClient {
       body.preserve_structure = input.preserveStructure;
     }
 
-    let cleanupPath: string | undefined;
+    let packagedSource: Awaited<ReturnType<ResourcePackager["prepareResourceSource"]>> | undefined;
     const requestTimeoutMs =
       input.wait ? resolveWaitRequestTimeoutMs(this.timeoutMs, input.timeout) : undefined;
     try {
-      if (isRemoteResourceSource(pathOrUrl)) {
-        body.path = pathOrUrl;
+      packagedSource = await this.resourcePackager.prepareResourceSource(pathOrUrl);
+      if (packagedSource.kind === "remote") {
+        body.path = packagedSource.path;
       } else {
-        const localStats = await stat(pathOrUrl);
-        let uploadPath = pathOrUrl;
-        if (localStats.isDirectory()) {
-          uploadPath = await this.zipDirectoryForUpload(pathOrUrl);
-          cleanupPath = uploadPath;
-          body.source_name = basename(pathOrUrl);
-        } else if (!localStats.isFile()) {
-          throw new Error(`Path is not a file or directory: ${pathOrUrl}`);
+        if (packagedSource.sourceName) {
+          body.source_name = packagedSource.sourceName;
         }
-        body.temp_file_id = await this.uploadTempFile(uploadPath, agentId);
+        body.temp_file_id = await this.uploadTempFile(packagedSource.uploadPath, actorPeerId);
       }
       return this.request<AddResourceResult>(
         "/api/v1/resources",
         { method: "POST", body: JSON.stringify(body) },
-        agentId,
         requestTimeoutMs,
+        actorPeerId,
       );
     } finally {
-      await cleanupUploadTempPath(cleanupPath);
+      await this.resourcePackager.cleanup(packagedSource);
     }
   }
 
-  async addSkill(input: AddSkillInput, agentId?: string): Promise<AddSkillResult> {
+  async addSkill(input: AddSkillInput, actorPeerId?: string): Promise<AddSkillResult> {
     const hasPath = typeof input.path === "string" && input.path.trim().length > 0;
     const hasData = input.data !== undefined && input.data !== null;
     if (hasPath === hasData) {
@@ -599,32 +707,28 @@ export class OpenVikingClient {
       wait: input.wait ?? false,
       timeout: input.timeout,
     };
-    let cleanupPath: string | undefined;
+    let packagedSource: Awaited<ReturnType<ResourcePackager["prepareLocalUploadSource"]>> | undefined;
     const requestTimeoutMs =
       input.wait ? resolveWaitRequestTimeoutMs(this.timeoutMs, input.timeout) : undefined;
     try {
       if (hasPath) {
         const skillPath = input.path!.trim();
-        const localStats = await stat(skillPath);
-        let uploadPath = skillPath;
-        if (localStats.isDirectory()) {
-          uploadPath = await this.zipDirectoryForUpload(skillPath);
-          cleanupPath = uploadPath;
-        } else if (!localStats.isFile()) {
+        packagedSource = await this.resourcePackager.prepareLocalUploadSource(skillPath);
+        if (packagedSource.kind !== "upload") {
           throw new Error(`Path is not a file or directory: ${skillPath}`);
         }
-        body.temp_file_id = await this.uploadTempFile(uploadPath, agentId);
+        body.temp_file_id = await this.uploadTempFile(packagedSource.uploadPath, actorPeerId);
       } else {
         body.data = input.data;
       }
       return this.request<AddSkillResult>(
         "/api/v1/skills",
         { method: "POST", body: JSON.stringify(body) },
-        agentId,
         requestTimeoutMs,
+        actorPeerId,
       );
     } finally {
-      await cleanupUploadTempPath(cleanupPath);
+      await this.resourcePackager.cleanup(packagedSource);
     }
   }
 
@@ -639,20 +743,39 @@ export class OpenVikingClient {
       tool_status?: string;
       tool_input?: Record<string, unknown>;
       tool_id?: string;
+      tool_output_ref?: string;
+      tool_output_truncated?: boolean;
+      tool_output_original_chars?: number;
+      tool_output_preview_chars?: number;
+      tool_output_sha256?: string;
+      tool_output_storage_uri?: string;
+      tool_output_mime_type?: string;
+      tool_output_source_ref?: string;
+      tool_output_source_offset?: number;
+      tool_output_source_limit?: number;
+      tool_output_group_id?: string;
+      tool_output_externalized_reason?: string;
+      tool_output_group_original_chars?: number;
+      tool_output_group_budget_chars?: number;
       uri?: string;
       abstract?: string;
       context_type?: "memory" | "resource" | "skill";
     }>,
-    agentId?: string,
+    actorPeerId?: string,
     createdAt?: string,
+    peerId?: string,
   ): Promise<void> {
     const body: {
       role: string;
+      peer_id?: string;
       parts: typeof parts;
       created_at?: string;
     } = { role, parts };
     if (createdAt) {
       body.created_at = createdAt;
+    }
+    if (peerId) {
+      body.peer_id = peerId;
     }
     await this.emitRoutingDebug(
       "session message POST (with parts)",
@@ -660,10 +783,11 @@ export class OpenVikingClient {
         path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
         sessionId,
         role,
+        peer_id: peerId ?? null,
         partCount: parts.length,
         created_at: createdAt ?? null,
       },
-      agentId,
+      actorPeerId,
     );
     await this.request<{ session_id: string }>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
@@ -671,12 +795,13 @@ export class OpenVikingClient {
         method: "POST",
         body: JSON.stringify(body),
       },
-      agentId,
+      undefined,
+      actorPeerId,
     );
   }
 
   /** GET session — server auto-creates if absent; returns session meta including message stats and token usage. */
-  async getSession(sessionId: string, agentId?: string): Promise<{
+  async getSession(sessionId: string, actorPeerId?: string): Promise<{
     message_count?: number;
     commit_count?: number;
     last_commit_at?: string;
@@ -692,7 +817,8 @@ export class OpenVikingClient {
     }>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       { method: "GET" },
-      agentId,
+      undefined,
+      actorPeerId,
     );
   }
 
@@ -705,20 +831,40 @@ export class OpenVikingClient {
    */
   async commitSession(
     sessionId: string,
-    options?: { wait?: boolean; timeoutMs?: number; agentId?: string },
+    options?: {
+      wait?: boolean;
+      timeoutMs?: number;
+      /**
+       * WM v2: number of most-recent messages to keep live after commit.
+       * Forwarded as `keep_recent_count` in the POST body. 0 (default)
+       * preserves the pre-v2 "archive everything" behavior.
+      */
+      keepRecentCount?: number;
+      agentId?: string;
+    },
   ): Promise<CommitSessionResult> {
+    const keepRecentCount =
+      options?.keepRecentCount != null && Number.isFinite(options.keepRecentCount)
+        ? Math.max(0, Math.floor(options.keepRecentCount))
+        : 0;
     await this.emitRoutingDebug(
       "session commit POST (archive + memory extraction)",
       {
         path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
         sessionId,
         wait: options?.wait ?? false,
+        keepRecentCount,
       },
       options?.agentId,
     );
+    const body: Record<string, unknown> = {};
+    if (keepRecentCount > 0) {
+      body.keep_recent_count = keepRecentCount;
+    }
     const result = await this.request<CommitSessionResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
-      { method: "POST", body: JSON.stringify({}) },
+      { method: "POST", body: JSON.stringify(body) },
+      undefined,
       options?.agentId,
     );
 
@@ -727,10 +873,10 @@ export class OpenVikingClient {
     }
 
     // Client-side poll until Phase 2 finishes
-    const deadline = Date.now() + (options.timeoutMs ?? DEFAULT_PHASE2_POLL_TIMEOUT_MS);
+    const deadline = this.now() + (options.timeoutMs ?? DEFAULT_PHASE2_POLL_TIMEOUT_MS);
     const pollInterval = 500;
-    while (Date.now() < deadline) {
-      await sleep(pollInterval);
+    while (this.now() < deadline) {
+      await this.sleep(pollInterval);
       const task = await this.getTask(result.task_id, options.agentId).catch(() => null);
       if (!task) break;
       if (task.status === "completed") {
@@ -751,44 +897,79 @@ export class OpenVikingClient {
   }
 
   /** Poll a background task by ID. */
-  async getTask(taskId: string, agentId?: string): Promise<TaskResult> {
+  async getTask(taskId: string, actorPeerId?: string): Promise<TaskResult> {
     return this.request<TaskResult>(
       `/api/v1/tasks/${encodeURIComponent(taskId)}`,
       { method: "GET" },
-      agentId,
+      undefined,
+      actorPeerId,
     );
   }
 
   async getSessionContext(
     sessionId: string,
     tokenBudget: number = 128_000,
-    agentId?: string,
+    actorPeerId?: string,
   ): Promise<SessionContextResult> {
     return this.request(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/context?token_budget=${tokenBudget}`,
       { method: "GET" },
-      agentId,
+      undefined,
+      actorPeerId,
     );
   }
 
   async getSessionArchive(
     sessionId: string,
     archiveId: string,
-    agentId?: string,
+    actorPeerId?: string,
   ): Promise<SessionArchiveResult> {
     return this.request(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/archives/${encodeURIComponent(archiveId)}`,
       { method: "GET" },
-      agentId,
+      undefined,
+      actorPeerId,
     );
   }
 
-  async deleteSession(sessionId: string, agentId?: string): Promise<void> {
-    await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }, agentId);
+  async grepSessionArchives(
+    sessionId: string,
+    pattern: string,
+    options: {
+      archiveId?: string;
+      caseInsensitive?: boolean;
+      nodeLimit?: number;
+      levelLimit?: number;
+    } = {},
+  ): Promise<{
+    matches: Array<{ line: number; uri: string; content: string }>;
+    count: number;
+    match_count?: number;
+    files_scanned?: number;
+  }> {
+    const baseUri = `${userSessionUri(sessionId)}/history`;
+    const uri = options.archiveId ? `${baseUri}/${options.archiveId}` : baseUri;
+    return this.request(
+      "/api/v1/search/grep",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          uri,
+          pattern,
+          case_insensitive: options.caseInsensitive ?? true,
+          ...(options.nodeLimit !== undefined ? { node_limit: options.nodeLimit } : {}),
+          ...(options.levelLimit !== undefined ? { level_limit: options.levelLimit } : {}),
+        }),
+      },
+    );
   }
-  async deleteUri(uri: string, agentId?: string): Promise<void> {
+
+  async deleteSession(sessionId: string): Promise<void> {
+    await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  }
+  async deleteUri(uri: string, actorPeerId?: string): Promise<void> {
     await this.request(`/api/v1/fs?uri=${encodeURIComponent(uri)}&recursive=false`, {
       method: "DELETE",
-    }, agentId);
+    }, undefined, actorPeerId);
   }
 }

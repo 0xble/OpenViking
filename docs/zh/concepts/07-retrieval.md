@@ -25,20 +25,21 @@ OpenViking 采用两阶段检索：意图分析 + 层级检索 + Rerank。
 ```python
 # find(): 简单查询
 results = await client.find(
-    "OAuth 认证",
-    target_uri="viking://resources/"
+    query="OAuth 认证",
+    target_uri="viking://resources/",
 )
 
 # search(): 复杂任务（需要会话上下文）
+session_info = await client.create_session()
 results = await client.search(
-    "帮我创建一个 RFC 文档",
-    session_info=session
+    query="帮我创建一个 RFC 文档",
+    session_id=session_info["session_id"],
 )
 ```
 
 ## 意图分析
 
-IntentAnalyzer 使用 LLM 分析查询意图，生成 0-5 个 TypedQuery。
+IntentAnalyzer 使用 LLM 分析查询意图，生成 0-5 个 TypedQuery。该阶段使用的模型可通过 [`query_planner`](../guides/01-configuration.md#query_planner) 配置项单独指定，未设置时回退到 `vlm`。
 
 ### 输入
 
@@ -92,9 +93,9 @@ Step 5: 转换为 MatchedContext
 
 | context_type | 根目录 |
 |--------------|--------|
-| MEMORY | `viking://user/memories`, `viking://agent/memories` |
+| MEMORY | `viking://~/memories` |
 | RESOURCE | `viking://resources` |
-| SKILL | `viking://agent/skills` |
+| SKILL | `viking://~/skills` |
 
 ### 递归搜索算法
 
@@ -107,7 +108,7 @@ while dir_queue:
 
     for r in results:
         # 分数传播
-        final_score = 0.5 * embedding_score + 0.5 * parent_score
+        final_score = score_propagation_alpha * embedding_score + (1 - score_propagation_alpha) * parent_score
 
         if final_score > threshold:
             collected.append(r)
@@ -124,10 +125,9 @@ while dir_queue:
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
-| `SCORE_PROPAGATION_ALPHA` | 0.5 | 50% embedding + 50% parent |
+| `retrieval.score_propagation_alpha` | 1.0 | 分数传播混合中子节点自身分数的权重；`1.0` 表示仅使用子节点自身分数，忽略父节点分数 |
 | `MAX_CONVERGENCE_ROUNDS` | 3 | 收敛检测轮数 |
-| `GLOBAL_SEARCH_TOPK` | 3 | 全局搜索候选数 |
-| `MAX_RELATIONS` | 5 | 每资源最大关联数 |
+| `GLOBAL_SEARCH_TOPK` | 10 | 全局搜索候选数 |
 
 ## Rerank 策略
 
@@ -171,7 +171,6 @@ class MatchedContext:
     is_leaf: bool           # 是否文件
     abstract: str           # L0 摘要
     score: float            # 最终分数
-    relations: List[RelatedContext]  # 关联上下文
 ```
 
 ### FindResult

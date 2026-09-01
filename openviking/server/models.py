@@ -22,6 +22,7 @@ class Response(BaseModel):
     result: Optional[Any] = None
     error: Optional[ErrorInfo] = None
     telemetry: Optional[Dict[str, Any]] = None
+    profile: Optional[list[str]] = None
 
 
 # Error code to HTTP status code mapping
@@ -46,5 +47,19 @@ ERROR_CODE_TO_HTTP_STATUS = {
     "EMBEDDING_FAILED": 500,
     "VLM_FAILED": 500,
     "SESSION_EXPIRED": 410,
+    "UNSUPPORTED_URI": 400,
+    "UNSUPPORTED_MODE": 400,
+    "RESTORE_WRITEBACK_PARTIAL": 500,
+    "SKILL_INVALID": 400,
+    "SKILL_CAPABILITY_UNAVAILABLE": 400,
+    "AGENT_OUTPUT_INVALID": 500,
+    "MODEL_UNAVAILABLE": 503,
+    "WRITE_CONFLICT": 409,
+    "WRITE_FAILED": 500,
+    "REFRESH_FAILED": 500,
+    "BOT_RESTARTED": 503,
+    "INTERNAL_ERROR": 500,
+    "NO_VECTOR_DB": 503,
+    "INVALID_FILTER": 400,
     "UNKNOWN": 500,
 }

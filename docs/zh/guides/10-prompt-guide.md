@@ -29,7 +29,7 @@ OpenViking 当前的 prompt 主要分为两类：
 | `parsing` | `parsing.context_generation` | 文档结构划分与节点语义生成 | 资源导入与解析 | 文档章节结构、节点摘要、图像摘要 |
 | `semantic` | `semantic.document_summary` | 文件与目录级摘要 | 语义索引构建 | 文件摘要、目录概览、后续检索质量 |
 | `retrieval` | `retrieval.intent_analysis` | 检索意图分析与查询规划 | 检索前分析 | 搜索 query 规划、上下文召回方向 |
-| `compression` | `compression.memory_extraction` | 记忆提取、合并、压缩、摘要 | session commit / memory 管线 | 长期记忆抽取、session 压缩、记忆合并结果 |
+| `compression` | `compression.ov_wm_v2` | 工作记忆压缩与 session archive 摘要 | session commit / memory 管线 | session 压缩质量和工作记忆质量 |
 | `memory` | `profile` | 记忆类型定义 | 记忆落盘与更新 | 不同记忆类型的组织方式和最终内容 |
 | `processing` | `processing.tool_chain_analysis` | 从交互或资源背景中提炼经验 | 后处理与经验沉淀 | 策略提炼、工具链经验、交互学习结果 |
 | `indexing` | `indexing.relevance_scoring` | 评估候选内容相关性 | 检索与索引辅助 | 相关性打分质量 |
@@ -108,9 +108,13 @@ fields:
 filename_template: "profile.md"
 content_template: |
   ...
+embedding_template: |
+  ...
 directory: "viking://user/{{ user_space }}/memories/..."
 enabled: true
 operation_mode: "upsert"
+stage: "user"
+peer_enabled: true
 ```
 
 字段含义：
@@ -125,12 +129,18 @@ operation_mode: "upsert"
   - 生成文件名时使用的模板
 - `content_template`
   - 落盘时使用的正文模板
+- `embedding_template`
+  - 用于渲染参与语义检索的向量化（embedding）文本的模板；未设置时使用默认表示
 - `directory`
   - 该类记忆写入的目录
 - `enabled`
   - 是否启用该类记忆
 - `operation_mode`
   - 该类记忆的更新模式，例如 `upsert`
+- `stage`
+  - 抽取阶段。默认是 `user`，参与会话用户记忆抽取；`agent` 用于 trajectories、experiences 这类执行派生 schema。
+- `peer_enabled`
+  - 当 `peer_id` 或消息 ranges 指向某个 peer 时，是否将该类记忆按 peer 分目录存储。默认是 `true`；如果该类记忆必须保留在当前 user 目录下，设置为 `false`。
 
 编写 memory schema 时，建议重点关注：
 
@@ -150,37 +160,19 @@ operation_mode: "upsert"
 
 ### Compression
 
-这一类 prompt 主要用于 session 压缩、记忆提取、记忆合并和字段压缩，是长期记忆质量的核心部分。
+这一类 prompt 主要用于 session 压缩和 working memory 更新。长期记忆抽取使用 `memory` 类别下的 v2 schema-driven memory templates。
 
-- `compression.dedup_decision`
-  - 生效环节：记忆候选去重与决策阶段
-  - 影响能力：长期记忆去重、创建或合并策略
-  - 作用：决定新候选记忆应跳过、创建，还是与已有记忆合并
-  - 关键输入：`candidate_content`、`candidate_abstract`、`candidate_overview`、`existing_memories`
+- `compression.ov_wm_v2`
+  - 生效环节：首次 working memory 生成阶段
+  - 影响能力：session archive 概览和当前 working memory 质量
+  - 作用：为 session 创建初始结构化 working memory 文档
+  - 关键输入：`messages`
 
-- `compression.field_compress`
-  - 生效环节：记忆字段压缩阶段
-  - 影响能力：工具记忆等长字段内容的可控长度与可读性
-  - 作用：在保留关键信息的前提下压缩字段内容
-  - 关键输入：`field_name`、`content`、`max_length`
-
-- `compression.memory_extraction`
-  - 生效环节：会话压缩后的记忆提取阶段
-  - 影响能力：长期记忆抽取质量、后续 recall 命中率
-  - 作用：从会话摘要和最近消息中提取值得长期保存的记忆候选
-  - 关键输入：`summary`、`recent_messages`、`user`、`feedback`、`output_language`
-
-- `compression.memory_merge`
-  - 生效环节：单条记忆合并阶段
-  - 影响能力：已有记忆更新后的内容质量
-  - 作用：将已有记忆与新信息合并成更完整的版本
-  - 关键输入：`existing_content`、`new_content`、`category`、`output_language`
-
-- `compression.memory_merge_bundle`
-  - 生效环节：结构化记忆合并阶段
-  - 影响能力：L0/L1/L2 三层记忆合并结果
-  - 作用：一次性输出 abstract、overview、content 三层合并结果
-  - 关键输入：`existing_abstract`、`existing_overview`、`existing_content`、`new_abstract`、`new_overview`、`new_content`、`category`、`output_language`
+- `compression.ov_wm_v2_update`
+  - 生效环节：增量 working memory 更新阶段
+  - 影响能力：session archive 概览和 working memory 连续性
+  - 作用：基于 keep、update、append 操作更新已有 working memory 文档
+  - 关键输入：`previous_working_memory`、`messages`
 
 - `compression.structured_summary`
   - 生效环节：session archive 摘要生成阶段
@@ -200,13 +192,13 @@ operation_mode: "upsert"
 
 ### Memory
 
-这一类 YAML 定义不同记忆类型的结构，不是单次推理 prompt。它们共同决定用户记忆和 agent 记忆如何落盘、如何更新、如何被后续检索使用。
+这一类 YAML 定义不同记忆类型的结构，不是单次推理 prompt。它们共同决定当前用户或 Peer 的记忆如何落盘、如何更新、如何被后续检索使用。
 
 - `cases`
   - 生效环节：案例型记忆落盘与更新阶段
-  - 影响能力：问题到解决方案的案例沉淀与复用
-  - 作用：定义“遇到了什么问题、如何解决”的案例型记忆
-  - 关键字段：`case_name`、`problem`、`solution`、`content`
+  - 影响能力：可训练、可评估的任务案例沉淀
+  - 作用：定义具体任务输入、评估标准和支撑证据
+  - 关键字段：`case_name`、`task_signature`、`input`、`rubric`、`evidence`
 
 - `entities`
   - 生效环节：实体型记忆落盘与更新阶段
@@ -220,17 +212,17 @@ operation_mode: "upsert"
   - 作用：定义事件摘要、目标、时间范围等结构化事件记忆
   - 关键字段：`event_name`、`goal`、`summary`、`ranges`
 
+- `experiences`
+  - 生效环节：经验型记忆落盘与更新阶段
+  - 影响能力：从任务结果中沉淀可复用指导
+  - 作用：记录持久的执行经验及其替代的旧记忆
+  - 关键字段：`experience_name`、`content`、`supersedes`
+
 - `identity`
   - 生效环节：agent identity 记忆落盘阶段
   - 影响能力：agent 身份设定的长期一致性
   - 作用：定义 agent 的名字、形象、风格、自我介绍等身份字段
-  - 关键字段：`name`、`creature`、`vibe`、`emoji`、`avatar`
-
-- `patterns`
-  - 生效环节：模式型记忆落盘与更新阶段
-  - 影响能力：可复用流程和方法的长期积累
-  - 作用：定义“在什么情况下按什么流程处理”的模式记忆
-  - 关键字段：`pattern_name`、`pattern_type`、`content`
+  - 关键字段：`name`、`creature`、`vibe`、`emoji`、`avatar`、`introduction`
 
 - `preferences`
   - 生效环节：偏好型记忆落盘与更新阶段
@@ -261,6 +253,12 @@ operation_mode: "upsert"
   - 影响能力：工具使用经验、最佳参数、失败模式沉淀
   - 作用：定义工具调用统计和工具使用经验的存储结构
   - 关键字段：`tool_name`、`static_desc`、`call_count`、`success_time`、`when_to_use`、`optimal_params`
+
+- `trajectories`
+  - 生效环节：agent 轨迹型记忆落盘阶段（`stage: agent`，仅追加）
+  - 影响能力：agent 任务轨迹中可复用的操作契约沉淀——多步决策、工具调用、执行链路
+  - 作用：定义"任务轨迹中提炼出哪些可复用的操作/契约"这一类轨迹型记忆
+  - 关键字段：`trajectory_name`、`outcome`、`retrieval_anchor`、`content`
 
 ### Parsing
 
@@ -325,12 +323,6 @@ operation_mode: "upsert"
 ### Semantic
 
 这一类 prompt 主要用于文件级和目录级摘要生成，是语义索引构建的重要部分。
-
-- `semantic.code_ast_summary`
-  - 生效环节：大型代码文件 AST 骨架总结阶段
-  - 影响能力：代码文件摘要、代码检索和结构理解效果
-  - 作用：基于 AST 骨架而不是完整源码生成代码摘要
-  - 关键输入：`file_name`、`skeleton`、`output_language`
 
 - `semantic.code_summary`
   - 生效环节：代码文件摘要阶段
@@ -473,7 +465,7 @@ OpenViking 支持两种主要的自定义方式：
 ```text
 custom-prompts/
 ├── compression/
-│   └── memory_extraction.yaml
+│   └── ov_wm_v2.yaml
 ├── retrieval/
 │   └── intent_analysis.yaml
 └── semantic/
@@ -498,9 +490,9 @@ export OPENVIKING_PROMPT_TEMPLATES_DIR=/path/to/custom-prompts
 
 影响面示例：
 
-- 修改 `compression.memory_extraction`
-  - 主要影响记忆抽取阶段
-  - 最终影响长期记忆质量和后续 recall 结果
+- 修改 `compression.ov_wm_v2`
+  - 主要影响首次 working memory 生成
+  - 最终影响 session archive 质量和后续 recall 效果
 - 修改 `retrieval.intent_analysis`
   - 主要影响检索前 query plan
   - 最终影响搜索方向和召回效果

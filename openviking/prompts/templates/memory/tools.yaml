@@ -12,16 +12,16 @@ description: |
   - Trivial tool calls without learning value
   - Duplicate patterns already captured
   - Tool calls with no meaningful outcome
-directory: "viking://agent/{{ agent_space }}/memories/tools"
+directory: "viking://user/{{ user_space }}/memories/tools"
 filename_template: "{{ tool_name }}.md"
-enabled: true
+enabled: false
 content_template: |
   Tool: {{ tool_name }}
 
   Static Description:
   "{{ static_desc|default('N/A') }}"
 
-  - Success rate: {{ ((success_time|default(0) / (call_count|default(1) if call_count|default(0) > 0 else 1)) * 100)|round|int }}% ({{ success_time|default(0) }}/{{ call_count|default(0) }})
+  - Success rate: {{ (((success_time|default(0, true)) / ((call_count|default(0, true)) if (call_count|default(0, true)) > 0 else 1)) * 100)|round|int }}% ({{ success_time|default(0, true) }}/{{ call_count|default(0, true) }})
   - When to use: {{ when_to_use|default('N/A') }}
   - Optimal params: {{ optimal_params|default('N/A') }}
   - Common failures: {{ common_failures|default('N/A') }}

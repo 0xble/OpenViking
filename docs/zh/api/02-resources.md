@@ -1,895 +1,743 @@
 # 资源管理
 
-资源是智能体可以引用的外部知识。本指南介绍如何添加、管理和检索资源。
+资源是智能体可以引用的外部知识。本模块提供资源的添加、导入/导出、临时文件上传等功能。
 
-## 支持的格式
+## 核心概念
 
-| 格式 | 扩展名 | 处理方式 |
-|------|--------|----------|
-| PDF | `.pdf` | 文本和图像提取 |
-| Markdown | `.md` | 原生支持 |
-| HTML | `.html`, `.htm` | 清洗后文本提取 |
-| 纯文本 | `.txt` | 直接导入 |
-| JSON/YAML | `.json`, `.yaml`, `.yml` | 结构化解析 |
-| 代码 | `.py`, `.js`, `.ts`, `.go`, `.java` 等 | 语法感知解析 |
-| 图像 | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp` | VLM 描述 |
-| 视频 | `.mp4`, `.mov`, `.avi` | 帧提取 + VLM |
-| 音频 | `.mp3`, `.wav`, `.m4a` | 语音转录 |
-| 文档 | `.docx` | 文本提取 |
-| 飞书/Lark | URL（`*.feishu.cn`、`*.larksuite.com`） | 云端文档解析（`lark-oapi`） |
+### 资源类型
 
-## 处理流程
+OpenViking 支持多种资源类型，按照功能分类如下：
+
+文档类
+| 类型 | 扩展名 | 说明 |
+|------|--------|------|
+| PDF | `.pdf` | 支持本地解析和 MinerU API 转换 |
+| Markdown | `.md`, `.markdown`, `.mdown`, `.mkd` | 原生支持，会提取结构并分段存储 |
+| HTML | `.html`, `.htm` | 清理导航/广告后提取内容，转换为 Markdown |
+| Word | `.doc`, `.docx`, `.docm`, `.odt`, `.rtf` | 基于 anydoc 提取文本、标题、表格和嵌入图片并转换为 Markdown |
+| 纯文本 | `.txt`, `.text` | 直接导入处理 |
+| EPUB | `.epub` | 基于 anydoc 将电子书内容和嵌入图片转换为 Markdown |
+
+表格类
+| 类型 | 扩展名 | 说明 |
+|------|--------|------|
+| Excel | `.xlsx`, `.xls`, `.xlsm`, `.xlsb`, `.ods`, `.csv` | 基于 anydoc 按工作表转换为 Markdown 表格 |
+| PowerPoint | `.pptx`, `.ppt`, `.pptm`, `.pps`, `.ppsx`, `.ppsm`, `.pot`, `.odp` | 基于 anydoc 按幻灯片提取内容和嵌入图片并转换为 Markdown |
+
+代码类
+| 类型 | 资源名 | 说明 |
+|------|--------|------|
+| 代码文件 | `*.py`, `*.js`, ... | 支持常见编程语言（Python, JavaScript, Go, Rust, Java 等） |
+| Git 协议代码仓库 | `git://...` | Git URL, 本地目录, `.zip` 包，遵循 `.gitignore` 并自动过滤 `.git`, `node_modules` 等目录 |
+| Git 代码托管平台 | `https://github.com/{org}/{repo}` | GitHub, GitLab, Bitbucket 等代码托管平台的 URL |
+| Git 代码托管平台上的 raw 文件 | `https://github.com/{org}/{repo}/raw/{branch}/{path}` | GitHub, GitLab, Bitbucket 等代码托管平台的 raw 文件下载 URL |
+
+媒体类
+| 类型 | 资源名 | 说明 |
+|------|--------|------|
+| 图片 | `*.jpg`, `*.jpeg`, `*.png`, `*.gif` ... | 多种图片格式，通过 VLM 生成描述（实验特性） |
+| 视频 | `*.mp4`, `*.avi`, `*.mov` ... | 提取关键帧后使用 VLM 分析（规划） |
+| 音频 | `*.mp3`, `*.wav`, `*.m4a` ... | 进行语音转录处理（规划） |
+
+云文档类
+| 类型 | 说明 |
+|------|------|
+| 飞书/Lark | URL 方式，支持 doc/docx, wiki, sheets, bitable。默认使用 FEISHU_APP_ID 和 FEISHU_APP_SECRET 应用凭证；用户 token 导入可传 `args.feishu_access_token`，用户 token watch 还需传 `args.feishu_refresh_token`，并可选传入 `args.feishu_app_id` / `args.feishu_app_secret` |
+
+网页类（递归网页爬虫）
+| 类型 | 资源名 | 说明 |
+|------|--------|------|
+| 单页 / 递归抓取 | `https://host/path` | 默认仅抓入口页；设置 `args.depth > 0` 后，沿同域链接 BFS 递归展开，`args.max_pages` 只限制最多收集的页面数。每页用 trafilatura 抽成 Markdown。可选 `args`：`depth`、`max_pages`、`include_paths`、`exclude_paths`、`allow_external_links`、`skip_download_links`。页面中发现的下载链接默认跳过（`skip_download_links=true`），避免导入 `llms.txt` 等 sidecar 文件造成重复；设为 `false` 时会下载同域文件链接，并计入 `max_pages`。`include_paths`/`exclude_paths` 按**路径前缀**匹配（例如 `/docs/` 仅匹配以 `/docs/` 开头的路径，不会误命中 `/blog/docs-tips`）。|
+
+> 路由说明：`https://host/sitemap.xml`、`https://host/feed.xml`、`*.atom` 等 sitemap-looking URL 和显式 `args.site=true` 让出给下表的整站导入；`https://github.com/{org}/{repo}` 等 Git 托管平台 URL 让出给上文的代码导入。
+
+网站类（sitemap / RSS / Atom 整站导入）
+| 类型 | 资源名 | 说明 |
+|------|--------|------|
+| 站点地图 Sitemap | `https://host/sitemap.xml`、`https://host/sitemap-index.xml` | 解析 sitemap，将站点所有页面抓取为**一棵资源树**（每页一个子节点），支持嵌套 `<sitemapindex>` 递归。整站只生成一个资源，落在 `viking://resources/<host>`。 |
+| RSS / Atom 订阅源 | `https://host/rss.xml`、`https://host/atom.xml`、`https://host/feed` | 解析 RSS 2.0 / Atom，逐条把文章正文抓成树节点（feed 内含全文则直接使用，省一次抓取）。 |
+| 整站自动发现 | `https://host` + `args.site=true` | 对裸域名/普通页面强制整站导入：自动通过 robots.txt、HTML `<link rel="alternate">` autodiscovery、常见路径发现 sitemap/RSS，再整站抓取。 |
+
+抓取**有界、非递归**（不会超出所列页面继续爬），受 `parsers.webfeed` 配置约束（`max_pages`、`max_concurrency`、`politeness_delay`、`same_host_only`、`respect_robots`、`max_depth`），并遵守 robots.txt。对 sitemap/feed URL 设置 `watch_interval` 即可让**整站**周期刷新：每次运行自动纳入新增页面、移除已删除页面。添加单个首页（未带 `args.site`）时，返回信息可能附带一行"整站导入"提示——**只提示，绝不自动爬全站**。
+
+### 资源处理流程
+
+资源添加经过以下处理阶段：
 
 ```
-Input -> Parser -> TreeBuilder -> AGFS -> SemanticQueue -> Vector Index
+源输入 → 解析 → 资源树构建 → 持久化 → 语义处理
+  ↓        ↓         ↓          ↓          ↓
+URL/文件  Parser  TreeBuilder  AGFS    Summarizer/Vector
 ```
 
-1. **Parser**：根据文件类型提取内容
-2. **TreeBuilder**：创建目录结构
-3. **AGFS**：将文件存储到虚拟文件系统
-4. **SemanticQueue**：异步生成 L0/L1
-5. **Vector Index**：建立语义搜索索引
+#### 阶段 1：源解析 (Parse)
+- 使用 `UnifiedResourceProcessor` 根据资源类型解析内容
+- 支持多种格式：文档（PDF/Markdown/Word）、表格（Excel/PPT）、代码、媒体文件等
+- 解析结果写入临时 VikingFS 目录
+- 媒体文件通过 VLM（视觉语言模型）生成描述
+
+#### 阶段 2：资源树构建 (TreeBuilder)
+- `TreeBuilder.finalize_from_temp()` 扫描临时目录结构
+- 构建资源树节点，处理 URI 冲突（自动重命名）
+- 建立目录与资源的关联关系
+
+#### 阶段 3：持久化存储 (Persist)
+- 检查目标 URI 是否已存在
+- 新资源：移动临时文件到正式 AGFS 位置
+- 已存在资源：保留临时树用于后续差异比较
+- 获取生命周期锁防止并发修改
+- 清理临时目录
+
+#### 阶段 4：语义处理 (Semantic Processing)
+- **摘要生成**：`Summarizer` 生成 L0（摘要）和 L1（概述）
+- **向量索引**：将内容向量化用于语义搜索
+- 通过 `SemanticQueue` 异步处理，可通过 `wait=True` 等待完成
+
+#### 非等待 Git 仓库导入
+- 对 Git 仓库来源使用 `wait=false` 时，OpenViking 会先校验仓库、解析目标 URI、预占最终 `root_uri`，然后在 clone/parse/finalize 完成前返回。
+- 立即响应包含 `status`、`root_uri` 和 `task_id`；抓取、解析、finalize 以及队列等待会在持久化后台任务中继续执行。
+- 可通过 `GET /api/v1/tasks/{task_id}` 查询任务状态。Git 资源导入任务的阶段包括 `queued`、`fetching`、`parsing`、`finalizing`、`processing_queue`。
+- 其他资源来源使用 `wait=false` 时，会在响应前完成抓取/解析/finalize；返回的 `task_id` 只用于跟踪 semantic 和 embedding 队列完成情况。
+
+### 资源的增量更新
+
+资源增量更新通过**监控任务 (Watch Task)** 机制实现：
+
+#### 监控任务创建
+- 调用 `add_resource` 时，为 URL、sitemap、RSS 等可重新读取的来源设置 `watch_interval > 0`（单位：分钟），即可创建监控任务
+- `temp_file_id` 引用的上传内容只会作为一次性快照处理，不能创建监控任务；本地来源变化后请重新添加
+- 可指定 `to` 参数确定目标 URI；未指定时，系统会使用本次导入返回的 `root_uri` 作为监控目标
+- 把监控对象设为 sitemap/RSS/Atom URL，即可让**整站**保持同步：每次刷新重新读取 feed 并重建资源树，新发布的页面自动入库、已删除的页面自动移除
+- `WatchManager` 负责任务持久化存储
+- 支持多租户权限控制（ROOT/ADMIN/USER 权限分级）
+
+#### 任务调度执行
+- `WatchScheduler` 每 60 秒检查到期任务
+- 默认并发控制，避免重复执行
+- 到期任务自动重新调用 `add_resource` 处理
+- 更新任务的最后执行时间和下次执行时间
+
+#### 任务管理操作
+- **创建**：`watch_interval > 0` 时创建新任务或重新激活已停用任务
+- **更新**：对同一目标 URI 重新设置参数
+- **取消**：对同一目标 URI 设置 `watch_interval <= 0` 时停用任务
+- **查询**：通过任务 ID 或目标 URI 查询任务状态
 
 ## API 参考
 
-### add_resource()
+### add_resource
 
-向知识库添加资源。
+向知识库添加资源，支持本地文件/目录、URL 等多种来源。通过 `temp_file_id` 引用的上传内容是一次性快照，因此不能与 `watch_interval > 0` 组合使用。
+
+#### 1. API 实现介绍
+
+此接口是资源管理的核心入口，支持多种来源的资源添加，并可选择等待语义处理完成。SDK 可直接处理本地文件/目录、URL 等来源；直接 HTTP 调用只通过 `path` 接受远程 URL，或通过 `temp_file_id` 引用先上传的本地文件。
+
+**处理流程**：
+1. 识别并校验资源来源（URL 或上传的临时文件）
+2. 解析目标 URI
+3. 调用对应格式 Parser；`args.parse_mode` 控制转换后的 Markdown 正文是否允许拆分
+4. 构建目录树并写入 AGFS
+5. 按 `processing_mode` 执行入库后的处理：`semantic_and_vectors` 生成语义产物和向量；`vectors_only` 跳过语义理解，只提交文件向量化
+6. `wait=true` 时等待语义处理/向量化完成；`wait=false` 时返回 `task_id` 用于队列跟踪
+7. 如果 `reason` 非空，将其追加到固定的资源 reason session 并 commit，复用常规记忆抽取链路，让合适的用户记忆引用该资源 URI
+8. 如指定 `--watch-interval`，设置定时更新任务
+
+**代码入口**：
+- `sdk/python/openviking_sdk/client.py:AsyncHTTPClient.add_resource` - Python SDK 入口
+- `openviking/server/routers/resources.py:add_resource` - HTTP 路由
+- `openviking/service/resource_service.py` - 核心服务实现
+- `crates/ov_cli/src/handlers.rs:handle_add_resource` - CLI 处理
+
+#### 2. 接口和参数说明
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| path | str | 是 | - | SDK/CLI 可传本地路径、目录路径或 URL；裸 HTTP 仅支持远端 URL |
-| temp_file_id | str | 否 | None | `POST /api/v1/resources/temp_upload` 返回的上传 ID，用于裸 HTTP 导入本地文件 |
-| to | str | 否 | None | 精确目标 Viking URI（必须在 `resources` 作用域内） |
-| parent | str | 否 | None | 资源将被放入的父级 URI，不能与 `to` 同时使用 |
-| reason | str | 否 | "" | 添加该资源的原因（可提升搜索相关性） |
-| instruction | str | 否 | "" | 特殊处理指令 |
-| wait | bool | 否 | False | 等待语义处理完成 |
-| timeout | float | 否 | None | 超时时间（秒），仅在 wait=True 时生效 |
-| watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 开启/更新定时任务；<=0 关闭（停用）定时任务。仅在指定 `to` 时生效 |
+| path | string | 否 | - | 远程资源 URL（HTTP/HTTPS/Git）。与 `temp_file_id` 二选一 |
+| temp_file_id | string | 否 | - | 临时上传文件 ID。与 `path` 二选一 |
+| to | string | 否 | - | 本次导入的最终保存位置。目标已存在时会覆盖该目标；与 `parent` 互斥 |
+| parent | string | 否 | - | 父级 Viking URI（资源放入此目录下）。与 `to` 互斥 |
+| create_parent | bool | 否 | False | 如果父目录不存在，自动创建父目录（服务端标志） |
+| reason | string | 否 | "" | 添加资源的原因；非空时会随资源 URI 进入常规 session 记忆抽取链路，并在生成的记忆中记录资源引用 |
+| instruction | string | 否 | "" | 语义提取的处理指令（实验特性） |
+| wait | bool | 否 | False | 是否等待语义处理和向量化完成才返回 |
+| timeout | float | 否 | None | 超时时间（秒），仅 `wait=true` 时生效 |
+| strict | bool | 否 | False | 是否使用严格模式 |
+| ignore_dirs | string | 否 | None | 要忽略的目录名（逗号分隔） |
+| include | string | 否 | None | 包含的文件模式（glob） |
+| exclude | string | 否 | None | 排除的文件模式（glob） |
+| directly_upload_media | bool | 否 | True | 是否直接上传媒体文件 |
+| preserve_structure | bool | 否 | None | 是否保留目录结构 |
+| args | object | 否 | `{}` | 传给特定 parser/accessor 的导入参数。原生 HTTPS Git 导入和 Watch 可通过 `args.auth_config={"username":"oauth2","token":"..."}` 在 TLS 上传递 HTTP Basic 凭据；`username` 默认为 `oauth2`。Git 的 `branch` 或 `commit` 仍放在 `args` 顶层。通过 HTTP(S) URL 导入私有 TOS 对象时，二选一传入非空字符串：`args.tos_signature`（映射为 `X-Tos-Signature`）或 `args.tos_access`（映射为 `X-Tos-Access`）。TOS 凭证只用于当前 HEAD/GET 抓取；资源会先保存为快照，凭证不会写入资源元数据或队列任务。`args.parse_mode` 支持 `default`（保持现有拆分行为）和 `no_split`（正常解析并将每个源文档正文保存为一个 Markdown 文件）。例如 `args.site=true/false` 强制/禁用整站（sitemap/RSS）导入，`args.max_pages` 等可覆盖 `webfeed` 配置；递归网页爬虫支持 `args.depth`、`args.max_pages`、`args.include_paths`、`args.exclude_paths`、`args.allow_external_links`、`args.skip_download_links`；飞书用户 token 导入传 `args.feishu_access_token`。`path`、`to`、`watch_interval`、`include`、`exclude` 等 `add_resource` 核心字段不能放入 `args` |
+| watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 为 URL/sitemap/RSS 等可重新读取的来源创建任务；通过 `temp_file_id` 上传的内容是一次性快照，变化后需重新添加。≤0 取消任务；显式 `to` 优先，否则绑定本次导入的 `root_uri` |
+| processing_mode | string | 否 | `semantic_and_vectors` | 入库后的处理模式。`semantic_and_vectors` 是默认流程：生成语义产物（`.abstract.md`、`.overview.md`）并生成向量。`vectors_only` 跳过语义理解/VLM 总结，只对当前资源文件生成向量 |
+| tags | string[] | 否 | None | 导入时写入向量检索记录的显式检索标签，格式必须是 `k=v`，例如 `["team=search", "env=test"]`。搜索接口可用同名 `tags` 参数过滤召回 |
+| tag_mode | string | 否 | `"replace"` | `tags` 的写入模式，可选 `replace` 或 `append`。导入新资源时会随本次生成的每条向量记录写入；不会在完成后额外调用 `set_tags`，响应也不返回 `tags_result` |
+| telemetry | TelemetryRequest | 否 | False | 是否返回遥测数据 |
 
-`POST /api/v1/resources` 的 JSON 字段名是 `to`；CLI 对应参数是 `--to`。
+**补充说明**：
+- `to` 和 `parent` 不能同时使用。`to` 是最终保存位置：目标不存在就创建，目标已存在就覆盖该目标；如果目标是目录，目录里本次导入没有生成的旧文件或子目录会被删除。`parent` 是保存目录，适合向已有目录追加新资源；父目录不存在时使用 `create_parent=true` 或 CLI 的 `--parent-auto-create`。当导入后的 `root_uri` 与 `to` 相同时，语义与向量处理会复用未变化内容，只处理变化部分。
+- 创建新资源要求目标父目录可写；显式更新已有 `to` 要求该目标可写。权限校验在任务入队前完成。自动命名按实际 URI 占用判断，即使同名资源不可读也会选择 `_1`、`_2` 等后缀，而不会尝试覆盖。
+- `wait=false` 返回的 `status=accepted` 表示任务已通过预检查并入队，不表示资源处理已经完成；最终状态以对应 `task_id` 为准。
+- 如果同时省略 `to` 和 `parent`，服务端会先尝试使用当前用户的 `add_targets.resource_uri` 覆盖配置，再使用 `server.user_config_defaults.add_targets.resource_uri`。两者都没有配置时，保持旧的目标解析行为。
+- 资源目标可以使用公共 `viking://resources/...`、家目录别名 `viking://~/resources/...`、显式用户 `viking://user/{user_id}/resources/...`，或 peer 级 `viking://user/{user_id}/peers/{peer_id}/resources/...`。家目录别名会按请求身份展开为 canonical 路径；无 uid 的写法 `viking://user/resources/...` 会被拒绝，并提示改用 `viking://~/resources/...`。
+- `user_id` 和 `peer_id` 路径片段必须是安全的单段标识，例如 `alice` 或 `web-visitor-alice`。包含路径分隔符、`.`、`..`、`:` 或 `+` 的值会被拒绝。
+- `path` 和 `temp_file_id` 不能同时指定，上传本地文件需要先通过 [temp_upload](#temp_upload) 上传获取 `temp_file_id`，在 SDK 和 CLI 中已经封装好。
+- `tags` 会在资源解析后、向量记录写入时同步写入底层向量库。`add_resource(tags=...)` 不返回 `tags_result`；需要验证时，可在 `/api/v1/search/find` 或 `/api/v1/search/search` 中传相同 `tags` 过滤召回。
+- 只有 Git 仓库来源在 `wait=false` 时使用完整后台导入；OpenViking 会先完成仓库 preflight 和目标规划，再返回 `task_id`。
+- 原生 HTTPS Git 的 `args.auth_config` 在 `watch_interval <= 0` 时只用于本次请求；当 `watch_interval > 0` 时，OpenViking 会把与仓库 URL 绑定的 username/token 保存到 Watch 私有鉴权状态，并只在后续 Git 拉取时恢复使用。凭据不会进入普通持久队列，也不会出现在 Watch API/MCP/CLI 返回中。Git PAT 没有通用刷新流程，过期或撤销后需要重建 Watch 来更换 token。为兼容已有用法，系统仍接受 `https://user:token@host/repo.git` 形式的 URL 内嵌凭据并原样传递；由于该 URL 同时也是资源来源标识，它可能被记录到进程参数、日志、队列、资源元数据和 Watch 状态中。新接入建议使用 `args.auth_config`。`args.auth_config` 的明文 HTTP 鉴权和带鉴权重定向仍会被拒绝。
+- token 会放在 HTTPS 请求体中传输。生产环境应保持诊断请求体 dump 关闭；显式启用该功能可能记录秘密。
+- `reason` 触发的记忆生成复用 `session.commit` 的抽取链路，只使用 `reason`、资源 URI、可用的资源名称和目录摘要，不会读取或展开完整资源正文；系统会写入 `entities`、`events`、`preferences` 等已有记忆类型，不创建独立的资源记忆目录。
+- 删除资源时，系统会在删除前扫描本次上下文对应的 self 或 peer 记忆中的 `resource_refs`，清理对应资源 URI 和由该 `reason` 引入的内容，并重新刷新相关记忆的语义索引。
+- 其他来源在 `wait=false` 时会在响应前完成来源解析、目标解析和 AGFS 写入，仅 semantic 与 embedding 队列继续异步处理。
+- `processing_mode=vectors_only` 不调用 VLM 语义理解阶段，也不会生成或刷新 `.abstract.md` / `.overview.md`。对已存在目标，它会保留旧的语义产物和旧的语义向量；仍会更新资源树，在 `build_index=true` 时向量化当前非隐藏文件，并清理由本次刷新删除的文件 detail 向量。
+- `processing_mode` 只属于 `add_resource`。管理员维护已有数据时，`reindex` API/CLI 仍使用 `mode`（`vectors_only`、`semantic_and_vectors`、`prune_orphans`）。
+- `watch_interval > 0` 时，如果指定了 `to`，监控任务绑定该目标；如果未指定 `to`，监控任务绑定本次导入返回的 `root_uri`。如果无法得到稳定 `root_uri`，请求会报错并要求显式传 `to`。
+- 飞书/Lark 应用 token 导入不传 `args.feishu_access_token`。OpenViking 保持原有应用凭证流程，由 SDK 使用 `app_id` 和 `app_secret` 自动获取 app/tenant token。该模式支持一次性导入和 `watch_interval > 0`。
+- 飞书/Lark 一次性用户 token 导入通过 `args={"feishu_access_token": "u-..."}` 传入，且 `watch_interval <= 0`。OpenViking 只在本次导入使用该用户 token，不保存。
+- 飞书/Lark 用户 token watch 通过 `args={"feishu_access_token": "u-...", "feishu_refresh_token": "r-..."}` 传入，且 `watch_interval > 0`。还可同时传入 `feishu_app_id` 和 `feishu_app_secret`；OpenViking 会将其保存在 watch task 私有状态中，并用于刷新该 watch 的用户 token。
+- 请求未传应用凭证时，用户 token watch 回退使用 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`，或 `ov.conf` 中的 `feishu.app_id` 和 `feishu.app_secret`。飞书 refresh token 绑定签发它的应用，因此实际使用的应用凭证必须与传入的用户 token 匹配。
+- Watch task 的 token 状态和请求传入的应用凭证保存在内部控制文件 `viking://resources/.watch_tasks.json` 中，不会出现在 watch API/MCP/CLI 返回里。若启用了 VikingFS 文件加密，该控制文件会静态加密；否则服务端控制文件中会包含这些明文私有状态。
+- 本地目录输入会遵循 `.gitignore`（根目录和子目录，标准 Git 语义）；`ignore_dirs`、`include`、`exclude` 会在此基础上进一步过滤。
+- 目录导入仅在至少一个入选文件成功时采用 best-effort：失败文件写入 `meta.failed_files`，成功文件正常提交。嵌套 ZIP 的叶子失败使用 `bundle.zip/path/to/file` 形式的归档限定路径，并保留远端任务 ID。如果没有任何文件成功，或筛选后没有可处理文件，任务会失败且不会保留空资源目录。
+- `args.parse_mode=no_split` 仍调用正常的格式 Parser。PDF、Word、PowerPoint、HTML 等受支持文档会转换为 Markdown，但跳过按标题、段落和长度拆分。目录导入会对每个受支持文档分别应用该规则，并继续遵循 `.gitignore`、筛选参数和 `preserve_structure`。该模式下，配置为走 Understanding 的目录文件会回退到对应的原生 Parser；没有原生解析能力的文件会写入 `meta.failed_files`，但不会阻止其他入选文件成功导入。
+- 对单文件输入使用 `no_split` 时，如果解析结果恰好只有一个可见文件且未指定 `to`，该文件会直接放到解析出的父目录下（例如 `guide.md` 写入 `viking://resources/guide.md`），不会创建同名上层目录，也不会生成目录级 `.abstract.md` / `.overview.md`。如果解析结果还包含图片等其他可见文件，则保留上层目录。显式指定的 `to` 始终作为最终 URI 原样保留。
+- `no_split` 只改变 Markdown 正文的存储布局，不改变语义处理、文件向量化和内部 embedding 分块。Markdown 相对链接会按同一个 no-split 输出布局解析，不会再指向仅拆分模式存在的路径。该模式下不会为目录文件调用 Understanding。
+- 如果要直接创建或更新纯文本内容，请使用 [content/write](03-filesystem.md#write)，不要使用 `add_resource`。资源导入和内容写入后都会自动刷新语义与 embedding。
 
-**本地文件和目录如何处理**
-
-- Python SDK 和 CLI 可以直接接收本地文件和目录路径。处于 HTTP 模式时，它们会先自动上传，再调用服务端 API。
-- 裸 HTTP 调用可以按两类理解：
-  - 远端资源：直接传 `path`，例如 `https://example.com/doc.pdf`
-  - 本地文件：先调用 `POST /api/v1/resources/temp_upload`，再把返回的 `temp_file_id` 传给目标 API
-  - 本地目录：先自行打成 `.zip`，上传该压缩包，再把返回的 `temp_file_id` 传给目标 API
-- `POST /api/v1/resources` 不接受 `./guide.md`、`/tmp/guide.md`、`/tmp/my-dir/` 这类宿主机本地路径。
-
-**增量更新（Incremental Update）**
-
-当你为同一个资源 URI 反复调用 `add_resource()` 时，系统会走“增量更新”而不是每次全量重建：
-
-- **触发条件**：请求里显式指定 `to`，且该 `to` 在知识库中已存在。
-- **总体思路**：每次导入都会先把新内容解析/构建成一棵“临时资源树”，随后在异步语义处理阶段，将临时树与 `to` 对应的现有资源树进行对比，只对发生变化的部分做重算与同步。
-- **语义阶段的增量**：
-  - 对**未变化的文件**：复用已有 L0（摘要）与向量索引记录，跳过向量化。
-  - 对**发生变化的文件**：重新生成摘要/向量索引。
-  - 对**目录级 L0/L1（abstract/overview）**：若目录下子项及其变更状态不变，则复用已有结果并跳过向量化；否则重算并更新。
-- **落盘与索引同步**：语义 DAG 结束后会对临时树与 `to` 做一次 top-down diff，同步三类变更：新增（添加新文件/目录）、删除（移除消失项）、更新（覆盖变化项）。同步过程中会同时联动更新向量库中的记录：删除项会删除对应向量记录；移动/覆盖会同步更新向量记录的 URI 映射，从而完成“文件树与向量索引的一致性增量更新”。
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-result = client.add_resource(
-    "./documents/guide.md",
-    reason="User guide documentation"
-)
-print(f"Added: {result['root_uri']}")
-
-client.wait_processed()
-```
+#### 3. 使用示例
 
 **HTTP API**
 
 ```
 POST /api/v1/resources
+Content-Type: application/json
 ```
 
 ```bash
+# 从 URL 添加资源
 curl -X POST http://localhost:1933/api/v1/resources \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
     "path": "https://example.com/guide.md",
-    "reason": "User guide documentation"
+    "reason": "User guide documentation",
+    "wait": true
   }'
+
+# 导入并定时同步 HTTPS 私有 Git 仓库
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://git.example.com/team/private-repo.git",
+    "to": "viking://resources/private-repo",
+    "watch_interval": 60,
+    "args": {
+      "branch": "main",
+      "auth_config": {
+        "username": "oauth2",
+        "token": "replace-with-your-token"
+      }
+    }
+  }'
+
+# 添加资源但只生成向量，不走 VLM 语义理解
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.com/guide.md",
+    "to": "viking://resources/guide",
+    "processing_mode": "vectors_only",
+    "wait": true
+  }'
+
+# 递归抓取网页：从入口页沿同域链接展开，depth 控制层数，max_pages 限制页数
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://docs.openviking.ai/zh/getting-started/01-introduction",
+    "wait": true,
+    "timeout": 60,
+    "args": { "depth": 1, "max_pages": 10 }
+  }'
+
+# 从本地文件添加（需先使用 temp_upload 上传）
+TEMP_FILE_ID=$(
+  curl -s -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F "file=@./documents/guide.md" \
+  | jq -r '.result.temp_file_id'
+)
+
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"to\": \"viking://resources/guide.md\",
+    \"reason\": \"User guide\"
+  }"
+
+# 添加到当前用户私有资源根
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"parent\": \"viking://~/resources/docs\",
+    \"create_parent\": true
+  }"
+
+# 导入时设置检索标签；标签随本次生成的向量记录写入，可用于 search/find 过滤
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"to\": \"viking://resources/tagged-guide.md\",
+    \"wait\": true,
+    \"tags\": [\"team=search\", \"env=test\"],
+    \"tag_mode\": \"replace\"
+  }"
+
+# 使用一次性用户 access token 添加飞书文档
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/docx/doc_token",
+    "args": {
+      "feishu_access_token": "u-..."
+    }
+  }'
+
+# 使用用户 token 自动刷新添加飞书文档
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "https://example.feishu.cn/docx/doc_token",
+    "to": "viking://resources/feishu/doc",
+    "watch_interval": 1440,
+    "args": {
+      "feishu_access_token": "u-...",
+      "feishu_refresh_token": "r-...",
+      "feishu_app_id": "cli_...",
+      "feishu_app_secret": "..."
+    }
+  }'
+```
+
+**Python SDK**
+
+```python
+from openviking_sdk import SyncHTTPClient
+
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client.initialize()
+
+## 添加本地文件
+result = client.add_resource(
+    path="./documents/guide.md",
+    options={"reason": "User guide documentation"},
+)
+print(f"Added: {result['root_uri']}")
+
+## 正常解析并转换为 Markdown，但每个文档正文不拆分
+result = client.add_resource(
+    path="./documents",
+    options={"args": {"parse_mode": "no_split"}},
+)
+
+## 从 URL 添加到指定位置
+result = client.add_resource(
+    path="https://example.com/api-docs.md",
+    to="viking://resources/external/api-docs.md",
+    options={"reason": "External API docs"},
+)
+
+## 递归抓取网页（同域 BFS，depth 层数、max_pages 页数上限）
+result = client.add_resource(
+    path="https://docs.openviking.ai/zh/getting-started/01-introduction",
+    wait=True,
+    timeout=180,
+    options={
+        "args": {"depth": 1, "max_pages": 10},
+    },
+)
+
+## 递归抓取并按路径前缀过滤，同时下载页面中的文件链接
+result = client.add_resource(
+    path="https://docs.openviking.ai/",
+    options={
+        "args": {
+            "depth": 2,
+            "max_pages": 50,
+            "include_paths": ["/zh/"],
+            "exclude_paths": ["/changelog"],
+            "skip_download_links": False,
+        },
+    },
+)
+
+## 添加到当前用户私有资源根
+result = client.add_resource(
+    path="./documents/guide.md",
+    parent="viking://~/resources/docs",
+    options={
+        "create_parent": True,
+    },
+)
+
+## 等待处理完成
+client.wait_processed()
+
+## 开启定时更新
+client.add_resource(
+    path="./documents/guide.md",
+    to="viking://resources/guide.md",
+    options={
+        "watch_interval": 60,  # 每60分钟更新一次
+    },
+)
+
+# 使用一次性用户 access token 添加飞书文档
+client.add_resource(
+    path="https://example.feishu.cn/docx/doc_token",
+    options={"args": {"feishu_access_token": "u-..."}},
+)
+
+# 使用用户 token 自动刷新添加飞书文档
+client.add_resource(
+    path="https://example.feishu.cn/docx/doc_token",
+    to="viking://resources/feishu/doc",
+    options={
+        "watch_interval": 1440,
+        "args": {
+            "feishu_access_token": "u-...",
+            "feishu_refresh_token": "r-...",
+            "feishu_app_id": "cli_...",
+            "feishu_app_secret": "...",
+        },
+    },
+)
+```
+
+**TypeScript SDK**
+
+```typescript
+const task = await client.addResource("https://example.com/docs", {
+  to: "viking://resources/docs/",
+  wait: true,
+  args: { parse_mode: "no_split" },
+});
+console.log(task);
+```
+
+**Go SDK**
+
+```go
+result, err := client.AddResource(ctx, "./documents/guide.md", &openviking.AddResourceOptions{
+    Reason: "User guide documentation",
+    Wait:   true,
+    Args:   map[string]any{"parse_mode": "no_split"},
+})
+if err != nil {
+    return err
+}
+fmt.Println(result["root_uri"])
 ```
 
 **CLI**
 
 ```bash
-openviking add-resource ./documents/guide.md --reason "User guide documentation"
+# 添加本地文件
+ov add-resource ./documents/guide.md --reason "User guide"
+
+# 正常解析，每个源文档只生成一个 Markdown 正文
+ov add-resource ./documents --args parse_mode:no_split
+
+# 从 URL 添加
+ov add-resource https://example.com/guide.md --to viking://resources/guide.md
+
+# 递归抓取网页：默认只抓入口页，depth>0 才沿同域链接展开
+ov add-resource "https://docs.openviking.ai/zh/getting-started/01-introduction" \
+  --args="depth:1,max_pages:10"
+
+# 递归抓取并按路径前缀过滤（只抓 /zh/，排除 changelog）
+ov add-resource "https://docs.openviking.ai/" \
+  --args='{"depth":2,"max_pages":50,"include_paths":["/zh/"],"exclude_paths":["/changelog"]}'
+
+# 默认跳过页面里的下载链接；如需一并下载 PDF/TXT/MD 等，显式关闭跳过
+ov add-resource "https://example.com/docs" \
+  --args="depth:1,max_pages:20,skip_download_links:false"
+
+# 等待处理完成
+ov add-resource ./documents/guide.md --wait
+
+# 开启定时更新（每60分钟检测一次）
+ov add-resource https://github.com/example/repo.git --to viking://resources/my_repo --watch-interval 60
+
+# 开启定时更新并自动绑定本次导入生成的 URI
+ov add-resource https://github.com/example/repo.git --watch-interval 60
+
+# 取消定时更新
+ov add-resource https://github.com/example/repo.git --to viking://resources/my_repo --watch-interval 0
+
+# 使用一次性用户 access token 添加飞书文档
+ov add-resource https://example.feishu.cn/docx/doc_token --args feishu_access_token:u-...
+
+# 使用用户 token 自动刷新添加飞书文档
+ov add-resource https://example.feishu.cn/docx/doc_token \
+  --to viking://resources/feishu/doc \
+  --watch-interval 1440 \
+  --args feishu_access_token:u-... \
+  --args feishu_refresh_token:r-... \
+  --args feishu_app_id:cli_... \
+  --args feishu_app_secret:...
+
+# 添加到指定父目录（父目录必须存在）
+ov add-resource ./documents/guide.md --parent viking://resources/docs
+
+# 添加到当前用户私有资源根
+ov add-resource ./documents/guide.md --parent viking://~/resources/docs
+
+# 添加到指定 peer 的私有资源根
+ov add-resource ./documents/guide.md \
+  --parent viking://user/alice/peers/web-visitor-alice/resources/docs
+
+# 添加到指定父目录（父目录不存在时自动创建）
+ov add-resource ./documents/guide.md -p viking://resources/docs/2026/05/07
+# 或使用完整参数名
+ov add-resource ./documents/guide.md --parent-auto-create viking://resources/docs/2026/05/07
+
+# 使用路径变量配合自动创建父目录
+ov add-resource ./documents/guide.md -p viking://resources/docs/{calendar:today}
 ```
 
-**响应**
+#### 4. 响应示例
+
+**HTTP API 响应 (JSON, `wait=true`)**
 
 ```json
 {
   "status": "ok",
   "result": {
     "status": "success",
-    "root_uri": "viking://resources/documents/guide.md",
+    "root_uri": "viking://resources/guide.md",
+    "temp_uri": "viking://temp/username/04291108_b62dc7/guide.md",
     "source_path": "./documents/guide.md",
-    "errors": []
-  },
-  "time": 0.1
-}
-```
-
-**示例：从 URL 添加**
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-result = client.add_resource(
-    "https://example.com/api-docs.md",
-    to="viking://resources/external/",
-    reason="External API documentation"
-)
-client.wait_processed()
-```
-
-**HTTP API**
-
-```bash
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "path": "https://example.com/api-docs.md",
-    "to": "viking://resources/external/",
-    "reason": "External API documentation",
-    "wait": true
-  }'
-```
-
-**CLI**
-
-```bash
-openviking add-resource https://example.com/api-docs.md --to viking://resources/external/ --reason "External API documentation"
-```
-
-**示例：用裸 HTTP 添加本地文件**
-
-如果你直接调用 HTTP API，本地文件要先上传，再使用 `temp_file_id`。
-
-```bash
-# 第一步：上传本地文件
-TEMP_FILE_ID=$(
-  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F 'file=@./documents/guide.md' \
-  | jq -r '.result.temp_file_id'
-)
-
-# 第二步：用 temp_file_id 添加资源
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d "{
-    \"temp_file_id\": \"$TEMP_FILE_ID\",
-    \"reason\": \"User guide documentation\",
-    \"wait\": true
-  }"
-```
-
-**示例：用裸 HTTP 添加本地目录**
-
-如果你直接调用 HTTP API，本地目录需要先自行打成 zip。CLI 和 SDK 会自动完成这一步。
-
-```bash
-# 第一步：先把本地目录打成 zip
-cd ./documents
-zip -r /tmp/guide.zip ./guide
-
-# 第二步：上传 zip 文件
-TEMP_FILE_ID=$(
-  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F 'file=@/tmp/guide.zip' \
-  | jq -r '.result.temp_file_id'
-)
-
-# 第三步：用上传后的目录压缩包添加资源
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d "{
-    \"temp_file_id\": \"$TEMP_FILE_ID\",
-    \"reason\": \"Import local directory\",
-    \"wait\": true
-  }"
-```
-
-**示例：添加飞书/Lark 云端文档**
-
-[飞书](https://www.feishu.cn)及其国际版 [Lark](https://www.larksuite.com) 是国内科技公司广泛使用的协作平台。OpenViking 可以通过 URL 直接导入飞书云端文档。
-
-支持的文档类型：
-
-| 类型 | URL 格式 |
-|------|----------|
-| 文档 | `https://*.feishu.cn/docx/{id}` |
-| 知识库 | `https://*.feishu.cn/wiki/{token}` |
-| 电子表格 | `https://*.feishu.cn/sheets/{token}` |
-| 多维表格 | `https://*.feishu.cn/base/{token}` |
-
-> **前置配置**：安装可选依赖 `pip install 'openviking[bot-feishu]'`
->
-> 通过 `ov.conf` 配置凭据（详见[配置文档](../../zh/guides/01-configuration.md#feishu)），或设置环境变量：
-> ```bash
-> export FEISHU_APP_ID="cli_xxx"
-> export FEISHU_APP_SECRET="xxx"
-> ```
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-# 导入飞书文档
-result = client.add_resource(
-    "https://example.feishu.cn/docx/doxcnABC123",
-    reason="项目设计文档"
-)
-client.wait_processed()
-
-# 导入知识库页面（自动解析为底层文档类型）
-client.add_resource("https://example.feishu.cn/wiki/wikiXYZ")
-
-# 导入电子表格
-client.add_resource("https://example.feishu.cn/sheets/shtcn456")
-```
-
-**CLI**
-
-```bash
-# 导入飞书文档
-openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --reason "项目设计文档"
-
-# 导入知识库页面
-openviking add-resource "https://example.feishu.cn/wiki/wikiXYZ"
-
-# 增量更新到已有 URI
-openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --to viking://resources/design-doc
-```
-
-**示例：等待处理完成**
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-# 方式 1：内联等待
-result = client.add_resource("./documents/guide.md", wait=True)
-print(f"Queue status: {result['queue_status']}")
-
-# 方式 2：单独等待（适用于批量处理）
-client.add_resource("./file1.md")
-client.add_resource("./file2.md")
-client.add_resource("./file3.md")
-
-status = client.wait_processed()
-print(f"All processed: {status}")
-```
-
-**HTTP API**
-
-```bash
-# 内联等待
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{"path": "https://example.com/guide.md", "wait": true}'
-
-# 批量添加后单独等待
-curl -X POST http://localhost:1933/api/v1/system/wait \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{}'
-```
-
-**CLI**
-
-```bash
-openviking add-resource ./documents/guide.md --wait
-```
-
-**示例：开启定时更新（watch_interval）**
-
-`watch_interval` 的单位为分钟，用于对指定目标 URI 定期触发更新处理：
-
-- `watch_interval > 0`：创建（或重新激活并更新）该 `to` 的定时任务
-- `watch_interval <= 0`：关闭（停用）该 `to` 的定时任务
-- 只有在指定 `to` / CLI `--to` 时才会创建定时任务
-
-如果同一个 `to` 已存在激活中的定时任务，再次以 `watch_interval > 0` 提交会返回冲突错误；需要先将 `watch_interval` 设为 `0`（取消/停用）后再重新设置新的间隔。
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-client.add_resource(
-    "./documents/guide.md",
-    to="viking://resources/documents/guide.md",
-    watch_interval=60,
-)
-```
-
-**HTTP API**
-
-```bash
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "path": "https://example.com/guide.md",
-    "to": "viking://resources/documents/guide.md",
-    "watch_interval": 60
-  }'
-```
-
-**CLI**
-
-```bash
-openviking add-resource ./documents/guide.md --to viking://resources/documents/guide.md --watch-interval 60
-
-# 取消监控
-openviking add-resource ./documents/guide.md --to viking://resources/documents/guide.md --watch-interval 0
-```
-
----
-
-### export_ovpack()
-
-将资源树导出为 `.ovpack` 文件。
-
-**SDK / CLI 参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| uri | str | 是 | - | 要导出的 Viking URI |
-| to | str | 是 | - | 目标文件路径 |
-
-**裸 HTTP 请求体**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| uri | str | 是 | - | 要导出的 Viking URI |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-path = client.export_ovpack(
-    "viking://resources/my-project/",
-    "./exports/my-project.ovpack"
-)
-print(f"Exported to: {path}")
-```
-
-**HTTP API**
-
-```
-POST /api/v1/pack/export
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/pack/export \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "uri": "viking://resources/my-project/"
-  }'
-```
-
-**CLI**
-
-```bash
-openviking export viking://resources/my-project/ ./exports/my-project.ovpack
-```
-
-**响应**
-
-该 HTTP 接口会直接以下载流的形式返回 `.ovpack` 文件（`Content-Type: application/zip`），不会返回 JSON 包装体。
-
----
-
-### import_ovpack()
-
-导入 `.ovpack` 文件。
-
-**SDK / CLI 参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| file_path | str | 是 | - | 本地 `.ovpack` 文件路径 |
-| parent | str | 是 | - | 目标父级 URI |
-| force | bool | 否 | False | 覆盖已有资源 |
-| vectorize | bool | 否 | True | 导入后触发向量化 |
-
-**裸 HTTP 请求体**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| temp_file_id | str | 是 | - | `POST /api/v1/resources/temp_upload` 返回的上传 ID |
-| parent | str | 是 | - | 目标父级 URI |
-| force | bool | 否 | False | 覆盖已有资源 |
-| vectorize | bool | 否 | True | 导入后触发向量化 |
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-uri = client.import_ovpack(
-    "./exports/my-project.ovpack",
-    "viking://resources/imported/",
-    force=True,
-    vectorize=True
-)
-print(f"Imported to: {uri}")
-
-client.wait_processed()
-```
-
-**HTTP API**
-
-```
-POST /api/v1/pack/import
-```
-
-```bash
-# 第一步：上传本地 ovpack 文件
-TEMP_FILE_ID=$(
-  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
-    -H "X-API-Key: your-key" \
-    -F 'file=@./exports/my-project.ovpack' \
-  | jq -r '.result.temp_file_id'
-)
-
-# 第二步：使用 temp_file_id 导入
-curl -X POST http://localhost:1933/api/v1/pack/import \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d "{
-    \"temp_file_id\": \"$TEMP_FILE_ID\",
-    \"parent\": \"viking://resources/imported/\",
-    \"force\": true,
-    \"vectorize\": true
-  }"
-```
-
-**CLI**
-
-```bash
-openviking import ./exports/my-project.ovpack viking://resources/imported/ --force
-```
-
-**响应**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "uri": "viking://resources/imported/my-project/"
-  },
-  "time": 0.1
-}
-```
-
----
-
-## 管理资源
-
-### 列出资源
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-# 列出所有资源
-entries = client.ls("viking://resources/")
-
-# 列出详细信息
-for entry in entries:
-    type_str = "dir" if entry['isDir'] else "file"
-    print(f"{entry['name']} - {type_str}")
-
-# 简单路径列表
-paths = client.ls("viking://resources/", simple=True)
-# Returns: ["project-a/", "project-b/", "shared/"]
-
-# 递归列出
-all_entries = client.ls("viking://resources/", recursive=True)
-```
-
-**HTTP API**
-
-```
-GET /api/v1/fs/ls?uri={uri}&simple={bool}&recursive={bool}
-```
-
-```bash
-# 列出所有资源
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/" \
-  -H "X-API-Key: your-key"
-
-# 简单路径列表
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&simple=true" \
-  -H "X-API-Key: your-key"
-
-# 递归列出
-curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursive=true" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-# 列出所有资源
-openviking ls viking://resources/
-
-# 简单路径列表
-openviking ls viking://resources/ --simple
-
-# 递归列出
-openviking ls viking://resources/ --recursive
-```
-
-**响应**
-
-```json
-{
-  "status": "ok",
-  "result": [
-    {
-      "name": "project-a",
-      "size": 4096,
-      "isDir": true,
-      "uri": "viking://resources/project-a/"
+    "meta": {},
+    "errors": [],
+    "queue_status": {
+      "pending": 5,
+      "processing": 2,
+      "completed": 10
     }
-  ],
-  "time": 0.1
+  },
+  "telemetry": {
+    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
 }
 ```
 
----
-
-### 读取资源内容
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-# L0：摘要
-abstract = client.abstract("viking://resources/docs/")
-
-# L1：概览
-overview = client.overview("viking://resources/docs/")
-
-# L2：完整内容
-content = client.read("viking://resources/docs/api.md")
-```
-
-**HTTP API**
-
-```bash
-# L0：摘要
-curl -X GET "http://localhost:1933/api/v1/content/abstract?uri=viking://resources/docs/" \
-  -H "X-API-Key: your-key"
-
-# L1：概览
-curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://resources/docs/" \
-  -H "X-API-Key: your-key"
-
-# L2：完整内容
-curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/docs/api.md" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-# L0：摘要
-openviking abstract viking://resources/docs/
-
-# L1：概览
-openviking overview viking://resources/docs/
-
-# L2：完整内容
-openviking read viking://resources/docs/api.md
-```
-
-**响应**
-
-```json
-{
-  "status": "ok",
-  "result": "Documentation for the project API, covering authentication, endpoints...",
-  "time": 0.1
-}
-```
-
----
-
-### 移动资源
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-client.mv(
-    "viking://resources/old-project/",
-    "viking://resources/new-project/"
-)
-```
-
-**HTTP API**
-
-```
-POST /api/v1/fs/mv
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/fs/mv \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "from_uri": "viking://resources/old-project/",
-    "to_uri": "viking://resources/new-project/"
-  }'
-```
-
-**CLI**
-
-```bash
-openviking mv viking://resources/old-project/ viking://resources/new-project/
-```
-
-**响应**
+**HTTP API 响应 (JSON, 非 Git `wait=false`)**
 
 ```json
 {
   "status": "ok",
   "result": {
-    "from": "viking://resources/old-project/",
-    "to": "viking://resources/new-project/"
-  },
-  "time": 0.1
+    "status": "accepted",
+    "root_uri": "viking://resources/guide",
+    "task_id": "uuid-xxx"
+  }
 }
 ```
 
----
+使用返回的 `task_id` 轮询 `/api/v1/tasks/{task_id}` 可查看队列完成情况。对于 `wait=false` 的 Git 仓库来源，同一个端点会跟踪完整后台导入，任务完成后的 `result` 会包含完整导入结果，包括 `queue_status`。
 
-### 删除资源
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-# 删除单个文件
-client.rm("viking://resources/docs/old.md")
-
-# 递归删除目录
-client.rm("viking://resources/old-project/", recursive=True)
-```
-
-**HTTP API**
+**CLI 响应 (默认表格格式)**
 
 ```
-DELETE /api/v1/fs?uri={uri}&recursive={bool}
+Note: Resource is being processed in the background.
+Use 'ov wait' to wait for completion, or 'ov observer queue' to check status.
+status       accepted
+root_uri     viking://resources/01-overview
+task_id      uuid-xxx
 ```
 
-```bash
-# 删除单个文件
-curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/docs/old.md" \
-  -H "X-API-Key: your-key"
+**CLI 响应 (JSON 格式，使用 -o json)**
 
-# 递归删除目录
-curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-project/&recursive=true" \
-  -H "X-API-Key: your-key"
+```json
+{
+  "status": "accepted",
+  "root_uri": "viking://resources/01-overview",
+  "task_id": "uuid-xxx"
+}
 ```
 
-**CLI**
+**字段说明**
 
-```bash
-# 删除单个文件
-openviking rm viking://resources/docs/old.md
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `status` | string | 处理状态：`accepted` 表示已入队，`success` 表示成功，`error` 表示失败 |
+| `root_uri` | string | 资源在 OpenViking 中的最终 URI |
+| `task_id` | string | （可选，仅当 `wait=false` 时）可轮询 `/api/v1/tasks/{task_id}` 的任务 ID。非 Git 导入用于队列跟踪；Git 仓库导入用于完整后台导入跟踪。 |
+| `temp_uri` | string | 导入过程中生成的临时 URI |
+| `source_path` | string | 原始源文件路径或 URL |
+| `meta` | object | 资源解析过程中的元数据（如文件类型、大小等） |
+| `errors` | array | 处理过程中的错误列表 |
+| `warnings` | array | （可选）处理过程中的警告列表（仅在 `strict=False` 时可能出现） |
+| `queue_status` | object | （可选，仅当 `wait=true` 时）队列处理状态，包含 `pending`、`processing`、`completed` 计数 |
+| `memory_linking` | object | （可选，仅当 `reason` 触发记忆生成时）本次资源 URI 与用户记忆的关联结果 |
 
-# 递归删除目录
-openviking rm viking://resources/old-project/ --recursive
-```
+**完成后的资源添加任务结果**
 
-**响应**
+对于 `wait=false` 的 Git 仓库来源，后台任务的 `task_type="add_resource"`，`resource_id` 等于返回的 `root_uri`。运行中的任务记录可能包含 `stage`。轮询 `/api/v1/tasks/{task_id}` 直到任务完成。完成后，任务内层的 `result` 会包含最终队列汇总和 `context_count`：
 
 ```json
 {
   "status": "ok",
   "result": {
-    "uri": "viking://resources/docs/old.md"
-  },
-  "time": 0.1
+    "task_id": "uuid-xxx",
+    "task_type": "add_resource",
+    "status": "completed",
+    "resource_id": "viking://resources/guide",
+    "result": {
+      "status": "success",
+      "root_uri": "viking://resources/guide",
+      "queue_status": {
+        "Embedding": {
+          "processed": 11,
+          "requeue_count": 0,
+          "error_count": 0,
+          "errors": []
+        }
+      },
+      "context_count": 11
+    }
+  }
 }
 ```
 
+`context_count` 是本次上传任务成功生成并完成索引的上下文数量。每条上下文对应的嵌入记录成功写入后，计数增加一次。该值不是 `root_uri` 下已有上下文的总数。如果服务器在任务持久化最终指标前重启，该字段会被省略，以避免返回不完整的计数。
+
 ---
 
-### 创建链接
+<a id="watch-management监控任务管理"></a>
 
-**Python SDK (Embedded / HTTP)**
+<a id="add_skill"></a>
 
-```python
-# 链接相关资源
-client.link(
-    "viking://resources/docs/auth/",
-    "viking://resources/docs/security/",
-    reason="Security best practices for authentication"
-)
+### temp_upload
 
-# 多个链接
-client.link(
-    "viking://resources/docs/api/",
-    [
-        "viking://resources/docs/auth/",
-        "viking://resources/docs/errors/"
-    ],
-    reason="Related documentation"
-)
-```
+上传临时文件，用于后续通过 [add_resource](#add_resource) 或 [add_skill](#add_skill) 导入本地文件。
+
+#### 1. API 实现介绍
+
+此接口用于把本地文件上传到服务端托管的临时存储中，返回 `temp_file_id` 供后续 API 使用。这是一个辅助接口，通常不直接调用，而是通过 SDK 或 CLI 自动使用。
+
+**处理流程**：
+1. 接收上传的文件
+2. 根据 `upload_mode` 选择临时上传后端
+3. 保存文件并记录原始文件名
+4. 返回临时文件 ID
+
+**代码入口**：
+- `openviking/server/routers/resources.py:temp_upload` - HTTP 路由
+- `openviking/service/resource_service.py` - 服务实现
+
+#### 2. 接口和参数说明
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| file | UploadFile | 是 | - | 上传的文件（multipart/form-data） |
+| telemetry | bool | 否 | False | 是否返回遥测数据 |
+| upload_mode | string | 否 | `"local"` | 临时上传模式。`local` 保持现有单机行为；`shared` 将文件上传到共享临时存储，适用于分布式部署。 |
+
+说明：
+
+- 默认值是 `local`，所以现有客户端在不改动的情况下仍保持原有行为。
+- 只有在你明确需要分布式共享临时上传时，才应显式使用 `upload_mode=shared`。
+- `shared` 模式下返回的 `temp_file_id` 形如 `shared_<upload_id>`；同一 account 在文件保留期间可以重复消费。
+- 新的 shared 上传会创建内部目录 `viking://upload/<created_at_ms>-<uuid>/`，目录内包含 `content` 和 `meta`。目录名中的 13 位 Unix 毫秒时间戳即上传创建时间；`meta` 最后写入，代表上传已完整完成。这些对象不属于普通文件系统浏览空间。
+- shared 上传会保留 `server.temp_upload.ttl_seconds` 指定的时长（默认 12 小时）。每次新的 shared 上传会对内部上传根目录执行一次列举，从每个一级上传目录名解析创建时间戳，并递归删除过期目录，不依赖文件系统修改时间。
+
+#### 3. 使用示例
 
 **HTTP API**
 
 ```
-POST /api/v1/relations/link
+POST /api/v1/resources/temp_upload
+Content-Type: multipart/form-data
 ```
 
 ```bash
-# 单个链接
-curl -X POST http://localhost:1933/api/v1/relations/link \
-  -H "Content-Type: application/json" \
+curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
   -H "X-API-Key: your-key" \
-  -d '{
-    "from_uri": "viking://resources/docs/auth/",
-    "to_uris": "viking://resources/docs/security/",
-    "reason": "Security best practices for authentication"
-  }'
-
-# 多个链接
-curl -X POST http://localhost:1933/api/v1/relations/link \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "from_uri": "viking://resources/docs/api/",
-    "to_uris": ["viking://resources/docs/auth/", "viking://resources/docs/errors/"],
-    "reason": "Related documentation"
-  }'
+  -F "file=@./documents/guide.md"
 ```
+
+分布式 / shared 上传：
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
+  -H "X-API-Key: your-key" \
+  -F "file=@./documents/guide.md" \
+  -F "upload_mode=shared"
+```
+
+**Python SDK**
+
+Python SDK 中的 `add_resource`、`add_skill` 等接口会自动处理本地文件上传，无需手动调用此接口。在 Python HTTP client 模式下，如果要启用分布式 shared 临时上传，可以在 `ovcli.conf` 中设置 `upload.mode = "shared"`。
+
+**Go SDK**
+
+`client.AddResource`、`client.AddSkill`、`client.ImportOVPack` 和
+`client.RestoreOVPack` 会为本地文件自动调用 `temp_upload`。如需 shared 临时上传，设置
+`openviking.Config{UploadMode: "shared"}`。
 
 **CLI**
 
-```bash
-openviking link viking://resources/docs/auth/ viking://resources/docs/security/ --reason "Security best practices"
-```
+CLI 命令也会自动处理本地文件上传，无需手动调用此接口。
 
-**响应**
+**响应示例**
 
 ```json
 {
   "status": "ok",
   "result": {
-    "from": "viking://resources/docs/auth/",
-    "to": "viking://resources/docs/security/"
+    "temp_file_id": "upload_abc123def456.md"
   },
-  "time": 0.1
+  "telemetry": {
+    "operation_id": "550e8400-e29b-41d4-a716-446655440000"
+  }
 }
 ```
 
----
-
-### 获取关联
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-relations = client.relations("viking://resources/docs/auth/")
-for rel in relations:
-    print(f"{rel['uri']}: {rel['reason']}")
-```
-
-**HTTP API**
-
-```
-GET /api/v1/relations?uri={uri}
-```
-
-```bash
-curl -X GET "http://localhost:1933/api/v1/relations?uri=viking://resources/docs/auth/" \
-  -H "X-API-Key: your-key"
-```
-
-**CLI**
-
-```bash
-openviking relations viking://resources/docs/auth/
-```
-
-**响应**
-
-```json
-{
-  "status": "ok",
-  "result": [
-    {"uri": "viking://resources/docs/security/", "reason": "Security best practices"},
-    {"uri": "viking://resources/docs/errors/", "reason": "Error handling"}
-  ],
-  "time": 0.1
-}
-```
-
----
-
-### 删除链接
-
-**Python SDK (Embedded / HTTP)**
-
-```python
-client.unlink(
-    "viking://resources/docs/auth/",
-    "viking://resources/docs/security/"
-)
-```
-
-**HTTP API**
-
-```
-DELETE /api/v1/relations/link
-```
-
-```bash
-curl -X DELETE http://localhost:1933/api/v1/relations/link \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "from_uri": "viking://resources/docs/auth/",
-    "to_uri": "viking://resources/docs/security/"
-  }'
-```
-
-**CLI**
-
-```bash
-openviking unlink viking://resources/docs/auth/ viking://resources/docs/security/
-```
-
-**响应**
+shared 模式的响应示例：
 
 ```json
 {
   "status": "ok",
   "result": {
-    "from": "viking://resources/docs/auth/",
-    "to": "viking://resources/docs/security/"
-  },
-  "time": 0.1
+    "temp_file_id": "shared_7f3c1b8d4f2e4b1bb0f6e8b2d9a4c123"
+  }
 }
 ```
 
 ---
-
-## 最佳实践
-
-### 按项目组织
-
-```
-viking://resources/
-+-- project-a/
-|   +-- docs/
-|   +-- specs/
-|   +-- references/
-+-- project-b/
-|   +-- ...
-+-- shared/
-    +-- common-docs/
-```
 
 ## 相关文档
 
-- [检索](06-retrieval.md) - 搜索资源
-- [文件系统](03-filesystem.md) - 文件系统操作
-- [上下文类型](../concepts/02-context-types.md) - 资源概念
+- [文件系统](03-filesystem.md) - 文件和目录操作
+- [技能](04-skills.md) - 技能管理 API
+- [检索](06-retrieval.md) - 搜索和上下文获取
+- [ovpack 指南](../guides/09-ovpack.md) - ovpack 导入导出详细说明
+- [OpenViking Assets](../guides/18-openviking-assets.md) - 声明式资源集合协议和运行指南

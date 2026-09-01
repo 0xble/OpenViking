@@ -8,7 +8,6 @@ OpenViking uses a dual-layer storage architecture that separates content storage
 ┌─────────────────────────────────────────┐
 │          VikingFS (URI Abstraction)      │
 │    URI Mapping · Hierarchical Access     │
-│           · Relation Management          │
 └────────────────┬────────────────────────┘
         ┌────────┴────────┐
         │                 │
@@ -23,7 +22,7 @@ OpenViking uses a dual-layer storage architecture that separates content storage
 
 | Layer | Responsibility | Content |
 |-------|----------------|---------|
-| **AGFS** | Content storage | L0/L1/L2 full content, multimedia files, relations |
+| **AGFS** | Content storage | L0/L1/L2 full content, multimedia files |
 | **Vector Index** | Index storage | URIs, vectors, metadata (no file content) |
 
 ### Design Benefits
@@ -41,9 +40,9 @@ VikingFS is the unified URI abstraction layer that hides underlying storage deta
 ### URI Mapping
 
 ```
-viking://resources/docs/auth  →  /local/resources/docs/auth
-viking://user/memories        →  /local/user/memories
-viking://agent/skills         →  /local/agent/skills
+viking://resources/docs/auth  →  /local/{account_id}/resources/docs/auth
+viking://~/memories        →  /local/{account_id}/user/{user_id}/memories
+viking://~/skills          →  /local/{account_id}/user/{user_id}/skills
 ```
 
 ### Core API
@@ -57,28 +56,22 @@ viking://agent/skills         →  /local/agent/skills
 | `mv(old, new)` | Move/rename (syncs vector URI update) |
 | `abstract(uri)` | Read L0 abstract |
 | `overview(uri)` | Read L1 overview |
-| `relations(uri)` | Get relation list |
 | `find(query, uri)` | Semantic search |
-
-### Relation Management
-
-VikingFS manages resource relations through `.relations.json`:
-
-```python
-# Create relation
-viking_fs.link(
-    from_uri="viking://resources/docs/auth",
-    uris=["viking://resources/docs/security"],
-    reason="Related security docs"
-)
-
-# Get relations
-relations = viking_fs.relations("viking://resources/docs/auth")
-```
 
 ## AGFS Backend Storage
 
 AGFS provides POSIX-style file operations with multiple backend support.
+
+### Single-Backend and Multi-Write Modes
+
+By default, AGFS uses a single backend for content storage. Once `storage.agfs.backups` is configured, OpenViking enters multi-write mode:
+
+- Top-level `storage.agfs.backend` is the primary backend and remains the authoritative write target.
+- `storage.agfs.backups.items[]` defines backup backends for replicas, migration, or read acceleration.
+- The Python SDK, HTTP API, and CLI filesystem interfaces stay unchanged.
+- Multi-write uses `.redirect.json` and `.sync_log.json` internally to track redirect mappings and sync progress. These files are not visible to users.
+
+For the conceptual model, see [Multi-Write Storage](./14-multi-write-storage.md). For examples, see the [Multi-Write Storage Guide](../guides/13-multi-write-storage.md).
 
 ### Backend Types
 
@@ -96,7 +89,6 @@ Each context directory follows a unified structure:
 viking://resources/docs/auth/
 ├── .abstract.md          # L0 abstract
 ├── .overview.md          # L1 overview
-├── .relations.json       # Relations table
 └── *.md                  # L2 detailed content
 ```
 
@@ -165,4 +157,5 @@ viking_fs.mv(
 - [Architecture Overview](./01-architecture.md) - System architecture
 - [Context Layers](./03-context-layers.md) - L0/L1/L2 model
 - [Viking URI](./04-viking-uri.md) - URI specification
+- [Multi-Write Storage](./14-multi-write-storage.md) - Primary/backup roles, routing, and consistency
 - [Retrieval Mechanism](./07-retrieval.md) - Retrieval process details

@@ -25,20 +25,21 @@ Query → Intent Analysis → Hierarchical Retrieval → Rerank → Results
 ```python
 # find(): Simple query
 results = await client.find(
-    "OAuth authentication",
-    target_uri="viking://resources/"
+    query="OAuth authentication",
+    target_uri="viking://resources/",
 )
 
 # search(): Complex task (needs session context)
+session_info = await client.create_session()
 results = await client.search(
-    "Help me create an RFC document",
-    session_info=session
+    query="Help me create an RFC document",
+    session_id=session_info["session_id"],
 )
 ```
 
 ## Intent Analysis
 
-IntentAnalyzer uses LLM to analyze query intent and generate 0-5 TypedQueries.
+IntentAnalyzer uses LLM to analyze query intent and generate 0-5 TypedQueries. The model used for this stage is separately configurable via the [`query_planner`](../guides/01-configuration.md#query_planner) config, falling back to `vlm` when unset.
 
 ### Input
 
@@ -92,9 +93,9 @@ Step 5: Convert to MatchedContext
 
 | context_type | Root Directories |
 |--------------|------------------|
-| MEMORY | `viking://user/memories`, `viking://agent/memories` |
+| MEMORY | `viking://~/memories` |
 | RESOURCE | `viking://resources` |
-| SKILL | `viking://agent/skills` |
+| SKILL | `viking://~/skills` |
 
 ### Recursive Search Algorithm
 
@@ -107,7 +108,7 @@ while dir_queue:
 
     for r in results:
         # Score propagation
-        final_score = 0.5 * embedding_score + 0.5 * parent_score
+        final_score = score_propagation_alpha * embedding_score + (1 - score_propagation_alpha) * parent_score
 
         if final_score > threshold:
             collected.append(r)
@@ -124,10 +125,9 @@ while dir_queue:
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| `SCORE_PROPAGATION_ALPHA` | 0.5 | 50% embedding + 50% parent |
+| `retrieval.score_propagation_alpha` | 1.0 | Child-score weight in the propagation blend; `1.0` uses only the child's own score and ignores the parent score |
 | `MAX_CONVERGENCE_ROUNDS` | 3 | Convergence detection rounds |
-| `GLOBAL_SEARCH_TOPK` | 3 | Global search candidates |
-| `MAX_RELATIONS` | 5 | Max relations per resource |
+| `GLOBAL_SEARCH_TOPK` | 10 | Global search candidates |
 
 ## Rerank Strategy
 
@@ -171,7 +171,6 @@ class MatchedContext:
     is_leaf: bool           # Whether file
     abstract: str           # L0 abstract
     score: float            # Final score
-    relations: List[RelatedContext]  # Related contexts
 ```
 
 ### FindResult

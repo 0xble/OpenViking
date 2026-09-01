@@ -109,6 +109,12 @@ class ChatChannel(BaseChannel):
                 if len(content) > 150:
                     content = content[:150] + "..."
                 console.print(f"  [dim]└─ Result: {content}[/dim]")
+            elif msg.event_type in (
+                OutboundEventType.RESPONSE_COMPLETED,
+                OutboundEventType.FEEDBACK_SUBMITTED,
+                OutboundEventType.RESPONSE_OUTCOME_EVALUATED,
+            ):
+                return
 
     async def _run_interactive(self) -> None:
         """Run in interactive mode."""
@@ -150,6 +156,13 @@ class ChatChannel(BaseChannel):
                 self._last_response = None
 
                 sender_id = self.sender or "user"
+                metadata = {}
+                memory_peers = getattr(self.config, "memory_peer", None)
+                if memory_peers:
+                    metadata["memory_peers"] = memory_peers
+                memory_users = getattr(self.config, "memory_user", None)
+                if memory_users:
+                    metadata["memory_users"] = memory_users
                 msg = InboundMessage(
                     session_key=SessionKey(
                         type="cli",
@@ -158,6 +171,7 @@ class ChatChannel(BaseChannel):
                     ),
                     sender_id=sender_id,
                     content=user_input,
+                    metadata=metadata,
                 )
                 await self.bus.publish_inbound(msg)
 
