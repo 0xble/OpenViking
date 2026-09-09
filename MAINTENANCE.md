@@ -22,8 +22,13 @@ remote `origin`, source remote `upstream`. Accepted observation on 2026-09-09:
 
 The complete active provenance is the 189 exact stable subjects below (full SHA);
 `chore(fork)`/`sync` entries are reconciliation provenance, and revert subjects
-record deliberate retirement of only their named change. No upstream issue or
-upstream PR is recorded for this private fork range after checked 2026-09-09.
+record deliberate retirement of only their named change. `3e9ff0cb8849bdfe32315ee269dcbb103a6f34bf`
+is source-associated with merged `volcengine/OpenViking#1592`
+(`https://github.com/volcengine/OpenViking/pull/1592`, merged 2026-05-08): it ports
+the upstream reindex API and retains fork-side consolidator/maintenance-router wiring.
+Treat that as an association, not upstream-equivalence or retirement evidence; verify
+the released source plus the OV-002/OV-005 surfaces before retiring the retained wiring.
+Other fork-range items have no recorded upstream issue/PR after checked 2026-09-09.
 Every active group is verified by its listed test surface plus `bin/check` and
 `bin/ci`; rollback is a source-level revert of the group commits after checking
 dependencies; retire only when a released upstream implementation passes the same
