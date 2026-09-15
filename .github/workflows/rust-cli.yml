@@ -17,6 +17,10 @@ on:
       - 'Cargo.toml'
       - '.github/workflows/rust-cli.yml'
 
+concurrency:
+  group: ci-cost-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
